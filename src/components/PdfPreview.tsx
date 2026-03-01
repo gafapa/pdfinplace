@@ -1,0 +1,208 @@
+import { useEffect, useRef, useState } from 'react';
+import * as pdfjsLib from 'pdfjs-dist';
+import type {
+    Annotation,
+    DrawingAnnotationData,
+    ShapeAnnotationData,
+    TextAnnotationData,
+    ImageAnnotationData
+} from '../types/annotations';
+import { useI18n } from '../i18n';
+
+// Ensure worker is loaded
+if (!pdfjsLib.GlobalWorkerOptions.workerSrc) {
+    pdfjsLib.GlobalWorkerOptions.workerSrc = `https://unpkg.com/pdfjs-dist@${pdfjsLib.version}/build/pdf.worker.min.mjs`;
+}
+
+interface PdfPreviewProps {
+    file?: File;
+    pdfDocument?: pdfjsLib.PDFDocumentProxy;
+    pageIndex?: number;
+    width?: number; // Treat as maxWidth if height is also provided
+    height?: number; // Optional maxHeight
+    rotation?: number;
+    className?: string;
+    annotations?: Annotation[];
+}
+
+export const PdfPreview = ({ file, pdfDocument, pageIndex = 1, width = 200, height, rotation = 0, className = "", annotations = [] }: PdfPreviewProps) => {
+    const { t } = useI18n();
+    const canvasRef = useRef<HTMLCanvasElement>(null);
+    const [loading, setLoading] = useState(true);
+    const [error, setError] = useState(false);
+
+    useEffect(() => {
+        let isMounted = true;
+        let loadedPdf: pdfjsLib.PDFDocumentProxy | null = null;
+        let renderTask: pdfjsLib.RenderTask | null = null;
+
+        const renderPreview = async () => {
+            try {
+                setLoading(true);
+                setError(false);
+
+                if (pdfDocument) {
+                    loadedPdf = pdfDocument;
+                } else if (file) {
+                    const arrayBuffer = await file.arrayBuffer();
+                    const loadingTask = pdfjsLib.getDocument({ data: arrayBuffer });
+                    loadedPdf = await loadingTask.promise;
+                } else {
+                    return;
+                }
+
+                if (!isMounted || !loadedPdf) return;
+
+                const page = await loadedPdf.getPage(pageIndex || 1);
+
+                if (!isMounted) return;
+
+                // Native rotation (page.rotate) + user rotation (rotation prop)
+                const totalRotation = (page.rotate + rotation) % 360;
+                const viewport = page.getViewport({ scale: 1, rotation: totalRotation });
+
+                // Calculate scale to fit within width/height bounds
+                let scale = width / viewport.width;
+                if (height) {
+                    const heightScale = height / viewport.height;
+                    scale = Math.min(scale, heightScale);
+                }
+
+                const scaledViewport = page.getViewport({ scale, rotation: totalRotation });
+
+                const canvas = canvasRef.current;
+                if (canvas) {
+                    const context = canvas.getContext('2d');
+                    if (canvas && context) {
+                        canvas.height = scaledViewport.height;
+                        canvas.width = scaledViewport.width;
+
+                        const renderContext = {
+                            canvas,
+                            canvasContext: context,
+                            viewport: scaledViewport,
+                        };
+                        renderTask = page.render(renderContext);
+                        await renderTask.promise;
+
+                        // Draw annotations on top if provided
+                        if (annotations && annotations.length > 0) {
+                            const editorBaseWidth = totalRotation % 180 === 0 ? 800 : 1000;
+                            const annotationScale = canvas.width / editorBaseWidth;
+
+                            annotations.forEach(ann => {
+                                context.save();
+                                context.scale(annotationScale, annotationScale);
+                                
+                                if (ann.type === 'drawing') {
+                                    const data = ann.data as DrawingAnnotationData;
+                                    context.strokeStyle = data.strokeColor;
+                                    context.lineWidth = data.strokeWidth;
+                                    context.lineCap = 'round';
+                                    context.lineJoin = 'round';
+                                    context.beginPath();
+                                    data.points.forEach((point, i: number) => {
+                                        if (i === 0) context.moveTo(point.x, point.y);
+                                        else context.lineTo(point.x, point.y);
+                                    });
+                                    context.stroke();
+                                } else if (ann.type === 'shape') {
+                                    const data = ann.data as ShapeAnnotationData;
+                                    context.strokeStyle = data.strokeColor;
+                                    context.lineWidth = data.strokeWidth;
+                                    if (data.fillColor) {
+                                        context.fillStyle = data.fillColor;
+                                    }
+
+                                    if (data.shapeType === 'rectangle') {
+                                        context.strokeRect(ann.x, ann.y, ann.width, ann.height);
+                                    } else if (data.shapeType === 'circle') {
+                                        context.beginPath();
+                                        context.ellipse(ann.x + ann.width / 2, ann.y + ann.height / 2, Math.abs(ann.width / 2), Math.abs(ann.height / 2), 0, 0, 2 * Math.PI);
+                                        context.stroke();
+                                    } else if (data.shapeType === 'line') {
+                                        context.beginPath();
+                                        const x1 = ann.x + (data.x1 ?? 0) * ann.width;
+                                        const y1 = ann.y + (data.y1 ?? 0) * ann.height;
+                                        const x2 = ann.x + (data.x2 ?? 1) * ann.width;
+                                        const y2 = ann.y + (data.y2 ?? 1) * ann.height;
+                                        context.moveTo(x1, y1);
+                                        context.lineTo(x2, y2);
+                                        context.stroke();
+                                    }
+                                } else if (ann.type === 'text') {
+                                    const data = ann.data as TextAnnotationData;
+                                    context.fillStyle = data.color;
+                                    context.font = `${data.italic ? 'italic ' : ''}${data.bold ? 'bold ' : ''}${data.fontSize}px ${data.fontFamily}`;
+                                    context.textBaseline = 'top';
+                                    const lines = data.text.split(/\r?\n/);
+                                    const normalizedLines = lines.length > 0 ? lines : [''];
+                                    const lineHeight = data.fontSize * 1.25;
+                                    normalizedLines.forEach((line, index) => {
+                                        context.fillText(line, ann.x, ann.y + (index * lineHeight));
+                                    });
+                                } else if (ann.type === 'image') {
+                                    const data = ann.data as ImageAnnotationData;
+                                    const img = new Image();
+                                    img.src = data.dataUrl;
+                                    if (img.complete) {
+                                        context.drawImage(img, ann.x, ann.y, ann.width, ann.height);
+                                    } else {
+                                        img.onload = () => {
+                                            context.save();
+                                            context.scale(annotationScale, annotationScale);
+                                            context.drawImage(img, ann.x, ann.y, ann.width, ann.height);
+                                            context.restore();
+                                        };
+                                    }
+                                }
+
+                                context.restore();
+                            });
+                        }
+                    }
+                }
+            } catch (err: unknown) {
+                if (!(err instanceof Error) || err.name !== 'RenderingCancelledException') {
+                    console.error("Error previewing PDF:", err);
+                    if (isMounted) setError(true);
+                }
+            } finally {
+                if (isMounted) setLoading(false);
+            }
+        };
+
+        renderPreview();
+
+        return () => {
+            isMounted = false;
+            if (renderTask) {
+                renderTask.cancel();
+            }
+        };
+    }, [file, pdfDocument, pageIndex, width, height, rotation, annotations]);
+
+    return (
+        <div className={`relative bg-white shadow-sm overflow-hidden flex items-center justify-center ${className}`} style={{ width, height: height || 'auto' }}>
+            {loading && (
+                <div className="absolute inset-0 flex items-center justify-center bg-gray-50">
+                    <div className="w-6 h-6 border-2 border-blue-500 border-t-transparent rounded-full animate-spin"></div>
+                </div>
+            )}
+            {error && (
+                <div className="absolute inset-0 flex items-center justify-center text-red-500 text-xs text-center p-2 bg-gray-50">
+                    {t('preview.error')}
+                </div>
+            )}
+            <canvas
+                ref={canvasRef}
+                className={`block ${loading || error ? 'opacity-0' : 'opacity-100'} transition-opacity`}
+                style={{
+                    maxWidth: '100%',
+                    maxHeight: '100%',
+                    objectFit: 'contain'
+                }}
+            />
+        </div>
+    );
+};
