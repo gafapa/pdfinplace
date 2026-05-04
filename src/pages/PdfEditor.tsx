@@ -1,12 +1,13 @@
-import { Suspense, lazy, useCallback, useRef, useState } from 'react';
+import { Suspense, lazy, useCallback, useEffect, useMemo, useRef, useState, type MouseEvent as ReactMouseEvent } from 'react';
 import { usePdfEditor, type EditorFile, type EditorPage, type PageSize } from '../hooks/usePdfEditor';
 import { PdfPreview } from '../components/PdfPreview';
 import { DndContext, closestCenter, KeyboardSensor, PointerSensor, useSensor, useSensors, DragOverlay } from '@dnd-kit/core';
 import { SortableContext, sortableKeyboardCoordinates, rectSortingStrategy, useSortable } from '@dnd-kit/sortable';
 import { CSS } from '@dnd-kit/utilities';
-import { Upload, RotateCw, Trash2, Download, Plus, ZoomIn, ZoomOut, Undo, Redo, FileText, Lock, LockOpen, FolderOpen, Check, X } from 'lucide-react';
+import { Upload, RotateCw, Trash2, Download, Plus, ZoomIn, ZoomOut, Undo, Redo, FileText, Lock, LockOpen, FolderOpen, Check, X, Copy, SplitSquareVertical, CheckSquare2, Square, ChevronLeft, ChevronRight, SlidersHorizontal } from 'lucide-react';
 import type { DragEndEvent, DragStartEvent } from '@dnd-kit/core';
-import { useI18n, type Locale } from '../i18n';
+import { useI18n } from '../i18n';
+import { AVAILABLE_LOCALES, type Locale } from '../i18n/locales';
 
 const LazyPageEditorModal = lazy(() =>
     import('../components/PageEditorModal').then((module) => ({ default: module.PageEditorModal }))
@@ -29,38 +30,21 @@ const getDocumentColor = (fileId: string, fileIds: string[]): string => {
     return DOCUMENT_COLORS[index % DOCUMENT_COLORS.length];
 };
 
-const LanguageIcon = ({ locale }: { locale: Locale }) => {
-    if (locale === 'es') {
-        return (
-            <svg viewBox="0 0 24 24" className="w-4 h-4 rounded-sm" aria-hidden="true">
-                <rect width="24" height="24" fill="#C60B1E" />
-                <rect y="6" width="24" height="12" fill="#FFC400" />
-            </svg>
-        );
+const getInitialScale = () => {
+    if (typeof window === 'undefined') {
+        return 1;
+    }
+    const savedScale = Number(localStorage.getItem('pageforge.editor.scale') ?? '1');
+    return Number.isFinite(savedScale) && savedScale >= 0.5 && savedScale <= 2 ? savedScale : 1;
+};
+
+const getInitialExportPanelOpen = () => {
+    if (typeof window === 'undefined') {
+        return false;
     }
 
-    if (locale === 'en') {
-        return (
-            <svg viewBox="0 0 24 24" className="w-4 h-4 rounded-sm" aria-hidden="true">
-                <rect width="24" height="24" fill="#012169" />
-                <polygon points="0,0 3,0 24,15 24,18 21,18 0,3" fill="#FFFFFF" />
-                <polygon points="24,0 21,0 0,15 0,18 3,18 24,3" fill="#FFFFFF" />
-                <polygon points="0,0 1.6,0 24,16 24,18 22.4,18 0,2" fill="#C8102E" />
-                <polygon points="24,0 22.4,0 0,16 0,18 1.6,18 24,2" fill="#C8102E" />
-                <rect x="10" width="4" height="24" fill="#FFFFFF" />
-                <rect y="10" width="24" height="4" fill="#FFFFFF" />
-                <rect x="11" width="2" height="24" fill="#C8102E" />
-                <rect y="11" width="24" height="2" fill="#C8102E" />
-            </svg>
-        );
-    }
-
-    return (
-        <svg viewBox="0 0 24 24" className="w-4 h-4 rounded-sm" aria-hidden="true">
-            <rect width="24" height="24" fill="#FFFFFF" />
-            <polygon points="0,2 6,0 24,22 18,24" fill="#0099DD" />
-        </svg>
-    );
+    const savedValue = localStorage.getItem('pageforge.editor.export-panel-open');
+    return savedValue === null ? false : savedValue === 'true';
 };
 
 interface SortablePageProps {
@@ -69,12 +53,18 @@ interface SortablePageProps {
     file?: EditorFile;
     onRotate: (pageId: string) => void;
     onDelete: (pageId: string) => void;
-    onSelect: (pageId: string) => void;
+    onClickPage: (pageId: string, event: ReactMouseEvent<HTMLDivElement>) => void;
+    onOpenEditor: (pageId: string) => void;
     scale: number;
     newPageIndex: number;
     documentColor: string;
     rotateLabel: string;
     deleteLabel: string;
+    isSelected: boolean;
+    selectionOrder: number | null;
+    onToggleSelection: (pageId: string, shouldSelect: boolean) => void;
+    selectLabel: string;
+    deselectLabel: string;
 }
 
 // Sortable Item Component
@@ -84,12 +74,18 @@ const SortablePage = ({
     file,
     onRotate,
     onDelete,
-    onSelect,
+    onClickPage,
+    onOpenEditor,
     scale,
     newPageIndex,
     documentColor,
     rotateLabel,
-    deleteLabel
+    deleteLabel,
+    isSelected,
+    selectionOrder,
+    onToggleSelection,
+    selectLabel,
+    deselectLabel
 }: SortablePageProps) => {
     const {
         attributes,
@@ -110,11 +106,15 @@ const SortablePage = ({
     return (
         <div ref={setNodeRef} style={style} className="relative group">
             <div
-                className="bg-white rounded shadow-sm hover:shadow-md transition-shadow overflow-hidden cursor-pointer"
-                style={{ border: `3px solid ${documentColor}` }}
+                className={`bg-white rounded shadow-sm hover:shadow-md transition-shadow overflow-hidden cursor-pointer ${isSelected ? 'ring-4 ring-blue-200 shadow-md' : ''}`}
+                style={{ border: `3px solid ${isSelected ? '#2563EB' : documentColor}` }}
                 {...attributes}
                 {...listeners}
-                onDoubleClick={(e) => { e.stopPropagation(); onSelect(id); }}
+                onClick={(event) => onClickPage(id, event)}
+                onDoubleClick={(event) => {
+                    event.stopPropagation();
+                    onOpenEditor(id);
+                }}
             >
                 <div>
                     <PdfPreview
@@ -127,6 +127,26 @@ const SortablePage = ({
                         annotations={page.annotations}
                     />
                 </div>
+            </div>
+
+            <div className="absolute top-1 left-1 flex items-center gap-1">
+                <button
+                    type="button"
+                    onClick={(event) => {
+                        event.stopPropagation();
+                        onToggleSelection(id, !isSelected);
+                    }}
+                    className={`flex h-6 min-w-6 items-center justify-center rounded-full border px-1 text-[11px] font-semibold shadow-sm transition-colors ${isSelected ? 'border-blue-600 bg-blue-600 text-white hover:bg-blue-700' : 'border-gray-200 bg-white text-gray-500 hover:border-blue-300 hover:text-blue-600'}`}
+                    title={isSelected ? deselectLabel : selectLabel}
+                    aria-label={isSelected ? deselectLabel : selectLabel}
+                >
+                    {isSelected ? <Check className="h-3.5 w-3.5" /> : <Square className="h-3.5 w-3.5" />}
+                </button>
+                {selectionOrder ? (
+                    <div className="flex h-6 min-w-6 items-center justify-center rounded-full bg-blue-50 px-1 text-[11px] font-semibold text-blue-700 shadow-sm">
+                        {selectionOrder}
+                    </div>
+                ) : null}
             </div>
 
             {/* Overlay Actions */}
@@ -167,13 +187,22 @@ export const PdfEditor = () => {
         files,
         pages,
         isProcessing,
+        isSessionReady,
+        hasSavedSession,
         pageSize,
         setPageSize,
+        printOverlayOptions,
+        setPrintOverlayOptions,
         addFiles,
         movePage,
         rotatePage,
+        rotatePages,
         deletePage,
+        deletePages,
+        duplicatePages,
         exportPdf,
+        exportPageRange,
+        splitPdf,
         exportProtectedPdf,
         unlockPdfFile,
         clearAll,
@@ -184,8 +213,13 @@ export const PdfEditor = () => {
         updatePageAnnotations
     } = usePdfEditor();
     const [activeId, setActiveId] = useState<string | null>(null);
-    const [scale, setScale] = useState(1);
-    const [selectedPageId, setSelectedPageId] = useState<string | null>(null);
+    const [scale, setScale] = useState(getInitialScale);
+    const [selectedPageIds, setSelectedPageIds] = useState<string[]>([]);
+    const [lastSelectedPageId, setLastSelectedPageId] = useState<string | null>(null);
+    const [editingPageId, setEditingPageId] = useState<string | null>(null);
+    const [rangeStart, setRangeStart] = useState('1');
+    const [rangeEnd, setRangeEnd] = useState('1');
+    const [isExportPanelOpen, setIsExportPanelOpen] = useState(getInitialExportPanelOpen);
     const [isProtectDialogOpen, setIsProtectDialogOpen] = useState(false);
     const [isUnlockDialogOpen, setIsUnlockDialogOpen] = useState(false);
     const [protectPassword, setProtectPassword] = useState('');
@@ -194,10 +228,28 @@ export const PdfEditor = () => {
     const [unlockFile, setUnlockFile] = useState<File | null>(null);
     const addFilesInputRef = useRef<HTMLInputElement>(null);
     const unlockFileInputRef = useRef<HTMLInputElement>(null);
+    const selectedPageIdsValid = useMemo(
+        () => selectedPageIds.filter(pageId => pages.some(page => page.id === pageId)),
+        [selectedPageIds, pages]
+    );
+    const selectedPageIdSet = useMemo(() => new Set(selectedPageIdsValid), [selectedPageIdsValid]);
 
     const toolbarButtonClass = "inline-flex h-8 w-8 items-center justify-center rounded-md border border-gray-200 bg-white hover:bg-gray-50 text-gray-700 text-xs font-medium transition-colors whitespace-nowrap disabled:opacity-40 disabled:cursor-not-allowed";
     const toolbarIconButtonClass = toolbarButtonClass;
     const canExport = pages.length > 0 && !isProcessing;
+    const hasSelectedPages = selectedPageIdsValid.length > 0 && !isProcessing;
+
+    useEffect(() => {
+        localStorage.setItem('pageforge.editor.scale', scale.toString());
+    }, [scale]);
+
+    useEffect(() => {
+        localStorage.setItem('pageforge.editor.page-size', pageSize);
+    }, [pageSize]);
+
+    useEffect(() => {
+        localStorage.setItem('pageforge.editor.export-panel-open', String(isExportPanelOpen));
+    }, [isExportPanelOpen]);
 
     const handleFilesPicked = useCallback((filesList: FileList | null) => {
         if (!filesList) {
@@ -225,6 +277,149 @@ export const PdfEditor = () => {
         exportPdf,
         t
     ]);
+
+    const handleExportSelection = useCallback(() => {
+        if (selectedPageIdsValid.length === 0 || isProcessing) {
+            return;
+        }
+
+        exportPdf({
+            failed: t('editor.exportFailed'),
+            downloadPrefix: t('editor.downloadPrefix'),
+            originalName: t('editor.originalSizeName'),
+        }, selectedPageIdsValid);
+    }, [selectedPageIdsValid, isProcessing, exportPdf, t]);
+
+    const handleExportRange = useCallback(() => {
+        const start = Number(rangeStart);
+        const end = Number(rangeEnd);
+
+        if (!Number.isFinite(start) || !Number.isFinite(end) || start < 1 || end < 1) {
+            alert(t('editor.invalidRange'));
+            return;
+        }
+
+        exportPageRange(start, end, {
+            failed: t('editor.exportFailed'),
+            downloadPrefix: t('editor.downloadPrefix'),
+            originalName: t('editor.originalSizeName'),
+        });
+    }, [rangeStart, rangeEnd, exportPageRange, t]);
+
+    const handleSplitSingle = useCallback(() => {
+        splitPdf('single', {
+            failed: t('editor.exportFailed'),
+            downloadPrefix: t('editor.downloadPrefix'),
+            originalName: t('editor.originalSizeName'),
+            splitDownloadPrefix: t('editor.splitDownloadPrefix'),
+            oddSuffix: t('editor.splitOddFile'),
+            evenSuffix: t('editor.splitEvenFile'),
+            pageSuffix: t('editor.splitPageFile'),
+        });
+    }, [splitPdf, t]);
+
+    const handleSplitOddEven = useCallback(() => {
+        splitPdf('odd-even', {
+            failed: t('editor.exportFailed'),
+            downloadPrefix: t('editor.downloadPrefix'),
+            originalName: t('editor.originalSizeName'),
+            splitDownloadPrefix: t('editor.splitDownloadPrefix'),
+            oddSuffix: t('editor.splitOddFile'),
+            evenSuffix: t('editor.splitEvenFile'),
+            pageSuffix: t('editor.splitPageFile'),
+        });
+    }, [splitPdf, t]);
+
+    const clearSelection = useCallback(() => {
+        setSelectedPageIds([]);
+        setLastSelectedPageId(null);
+    }, []);
+
+    const selectAllPages = useCallback(() => {
+        setSelectedPageIds(pages.map(page => page.id));
+        setLastSelectedPageId(pages.length > 0 ? pages[pages.length - 1].id : null);
+    }, [pages]);
+
+    const handleBatchRotate = useCallback(() => {
+        if (selectedPageIdsValid.length === 0 || isProcessing) {
+            return;
+        }
+        rotatePages(selectedPageIdsValid);
+    }, [selectedPageIdsValid, isProcessing, rotatePages]);
+
+    const handleBatchDelete = useCallback(() => {
+        if (selectedPageIdsValid.length === 0 || isProcessing) {
+            return;
+        }
+        deletePages(selectedPageIdsValid);
+        clearSelection();
+    }, [selectedPageIdsValid, isProcessing, deletePages, clearSelection]);
+
+    const handleBatchDuplicate = useCallback(() => {
+        if (selectedPageIdsValid.length === 0 || isProcessing) {
+            return;
+        }
+        duplicatePages(selectedPageIdsValid);
+    }, [selectedPageIdsValid, isProcessing, duplicatePages]);
+
+    const handlePageClick = useCallback((pageId: string, event: ReactMouseEvent<HTMLDivElement>) => {
+        const pageIndex = pages.findIndex(page => page.id === pageId);
+        if (pageIndex === -1) {
+            return;
+        }
+
+        if (event.shiftKey && lastSelectedPageId) {
+            const lastIndex = pages.findIndex(page => page.id === lastSelectedPageId);
+            if (lastIndex !== -1) {
+                const startIndex = Math.min(lastIndex, pageIndex);
+                const endIndex = Math.max(lastIndex, pageIndex);
+                const rangeIds = pages.slice(startIndex, endIndex + 1).map(page => page.id);
+                setSelectedPageIds(prev => Array.from(new Set([...prev, ...rangeIds])));
+                return;
+            }
+        }
+
+        if (event.metaKey || event.ctrlKey) {
+            setSelectedPageIds(prev => (
+                prev.includes(pageId)
+                    ? prev.filter(id => id !== pageId)
+                    : [...prev, pageId]
+            ));
+            setLastSelectedPageId(pageId);
+            return;
+        }
+
+        setSelectedPageIds([pageId]);
+        setLastSelectedPageId(pageId);
+    }, [pages, lastSelectedPageId]);
+
+    const handleToggleSelection = useCallback((pageId: string, shouldSelect: boolean) => {
+        setSelectedPageIds(prev => {
+            const alreadySelected = prev.includes(pageId);
+
+            if (shouldSelect) {
+                if (alreadySelected) {
+                    return prev;
+                }
+                return [...prev, pageId];
+            }
+
+            if (!alreadySelected) {
+                return prev;
+            }
+
+            return prev.filter(id => id !== pageId);
+        });
+        setLastSelectedPageId(prev => (shouldSelect ? pageId : prev === pageId ? null : prev));
+    }, []);
+
+    const handleOpenEditor = useCallback((pageId: string) => {
+        setEditingPageId(pageId);
+        if (!selectedPageIdSet.has(pageId)) {
+            setSelectedPageIds([pageId]);
+            setLastSelectedPageId(pageId);
+        }
+    }, [selectedPageIdSet]);
 
     const closeProtectDialog = useCallback(() => {
         setIsProtectDialogOpen(false);
@@ -367,21 +562,34 @@ export const PdfEditor = () => {
                         <div className="bg-red-600 p-1.5 rounded text-white">
                             <FileText className="w-5 h-5" />
                         </div>
-                        <span className="text-base sm:text-lg font-bold tracking-tight text-gray-900">{t('app.title')}</span>
+                        <div className="flex flex-col">
+                            <span className="text-base sm:text-lg font-bold tracking-tight text-gray-900">{t('app.title')}</span>
+                            <span className="text-[11px] text-gray-500">
+                                {!isSessionReady
+                                    ? t('editor.restoringSession')
+                                    : hasSavedSession
+                                        ? t('editor.sessionSaved')
+                                        : t('editor.sessionEmpty')}
+                            </span>
+                        </div>
                     </div>
-                    <div className="flex items-center gap-1 shrink-0" title={t('common.language')}>
-                        {(['es', 'gl', 'en'] as Locale[]).map((lang) => (
-                            <button
-                                key={lang}
-                                type="button"
-                                onClick={() => setLocale(lang)}
-                                className={`${toolbarIconButtonClass} ${locale === lang ? 'ring-1 ring-gray-400' : ''}`}
-                                title={t(`language.${lang}`)}
-                                aria-label={t(`language.${lang}`)}
-                            >
-                                <LanguageIcon locale={lang} />
-                            </button>
-                        ))}
+                    <div className="flex items-center gap-2 shrink-0" title={t('common.language')}>
+                        <label htmlFor="language-select" className="text-xs font-medium text-gray-600 sr-only">
+                            {t('common.language')}
+                        </label>
+                        <select
+                            id="language-select"
+                            value={locale}
+                            onChange={(e) => setLocale(e.target.value as Locale)}
+                            className="h-8 min-w-[132px] rounded-md border border-gray-200 bg-white px-2.5 text-xs font-medium text-gray-700 hover:bg-gray-50 focus:border-gray-300 focus:ring-1 focus:ring-gray-300"
+                            aria-label={t('common.language')}
+                        >
+                            {AVAILABLE_LOCALES.map((lang) => (
+                                <option key={lang} value={lang}>
+                                    {t(`language.${lang}`)}
+                                </option>
+                            ))}
+                        </select>
                     </div>
                 </div>
                 <div className="grid grid-cols-2 sm:grid-cols-[1fr_auto_1fr] items-center gap-2 pt-2">
@@ -464,10 +672,244 @@ export const PdfEditor = () => {
                         </button>
                     </div>
                 </div>
+                {pages.length > 0 ? (
+                    <div className="flex flex-col gap-2 border-t border-gray-100 pt-2">
+                        <div className="flex flex-wrap items-center justify-center gap-2">
+                            <button
+                                type="button"
+                                onClick={selectAllPages}
+                                disabled={pages.length === 0}
+                                className="inline-flex h-8 items-center gap-1 rounded-md border border-gray-200 bg-white px-2.5 text-xs font-medium text-gray-700 hover:bg-gray-50 disabled:opacity-40"
+                            >
+                                <CheckSquare2 className="h-3.5 w-3.5" />
+                                {t('editor.selectAll')}
+                            </button>
+                            <button
+                                type="button"
+                                onClick={clearSelection}
+                                disabled={selectedPageIdsValid.length === 0}
+                                className="inline-flex h-8 items-center gap-1 rounded-md border border-gray-200 bg-white px-2.5 text-xs font-medium text-gray-700 hover:bg-gray-50 disabled:opacity-40"
+                            >
+                                <X className="h-3.5 w-3.5" />
+                                {t('editor.clearSelection')}
+                            </button>
+                            <button
+                                type="button"
+                                onClick={handleBatchRotate}
+                                disabled={!hasSelectedPages}
+                                className="inline-flex h-8 items-center gap-1 rounded-md border border-gray-200 bg-white px-2.5 text-xs font-medium text-gray-700 hover:bg-gray-50 disabled:opacity-40"
+                            >
+                                <RotateCw className="h-3.5 w-3.5" />
+                                {t('editor.rotateSelected')}
+                            </button>
+                            <button
+                                type="button"
+                                onClick={handleBatchDuplicate}
+                                disabled={!hasSelectedPages}
+                                className="inline-flex h-8 items-center gap-1 rounded-md border border-gray-200 bg-white px-2.5 text-xs font-medium text-gray-700 hover:bg-gray-50 disabled:opacity-40"
+                            >
+                                <Copy className="h-3.5 w-3.5" />
+                                {t('editor.duplicateSelected')}
+                            </button>
+                            <button
+                                type="button"
+                                onClick={handleBatchDelete}
+                                disabled={!hasSelectedPages}
+                                className="inline-flex h-8 items-center gap-1 rounded-md border border-red-200 bg-white px-2.5 text-xs font-medium text-red-600 hover:bg-red-50 disabled:opacity-40"
+                            >
+                                <Trash2 className="h-3.5 w-3.5" />
+                                {t('editor.deleteSelected')}
+                            </button>
+                            <button
+                                type="button"
+                                onClick={handleExportSelection}
+                                disabled={!hasSelectedPages}
+                                className="inline-flex h-8 items-center gap-1 rounded-md border border-gray-200 bg-white px-2.5 text-xs font-medium text-gray-700 hover:bg-gray-50 disabled:opacity-40"
+                            >
+                                <Download className="h-3.5 w-3.5" />
+                                {t('editor.exportSelected')}
+                            </button>
+                        </div>
+                    </div>
+                ) : null}
             </div>
 
+            {pages.length > 0 ? (
+                <div className="pointer-events-none absolute left-0 top-[7rem] bottom-3 z-20 flex items-start">
+                    <div className="pointer-events-auto flex h-full items-end">
+                        <div
+                            className={`h-full overflow-hidden rounded-r-2xl border-y border-r border-gray-200 bg-white/95 shadow-xl backdrop-blur transition-all duration-300 ${
+                                isExportPanelOpen
+                                    ? 'w-[min(20rem,calc(100vw-4rem))] translate-x-0 opacity-100'
+                                    : 'w-0 -translate-x-4 opacity-0'
+                            }`}
+                        >
+                            <div className="flex h-full min-h-0 flex-col">
+                                <div className="border-b border-gray-200 bg-gradient-to-r from-red-50 via-white to-white px-4 py-3">
+                                    <div className="flex items-center gap-2">
+                                        <div className="rounded-xl bg-red-600 p-2 text-white shadow-sm">
+                                            <SlidersHorizontal className="h-4 w-4" />
+                                        </div>
+                                        <div>
+                                            <div className="text-sm font-semibold text-gray-900">{t('editor.exportPanel')}</div>
+                                            <div className="text-[11px] text-gray-500">{t('editor.exportPanelHint')}</div>
+                                        </div>
+                                    </div>
+                                </div>
+                                <div className="flex-1 min-h-0 space-y-4 overflow-y-auto px-4 py-4 custom-scrollbar">
+                                    <section className="space-y-2 rounded-2xl border border-gray-200 bg-gray-50/80 p-3">
+                                        <div className="text-[11px] font-semibold uppercase tracking-[0.14em] text-gray-500">
+                                            {t('editor.exportRange')}
+                                        </div>
+                                        <div className="grid grid-cols-2 gap-2">
+                                            <input
+                                                type="number"
+                                                min={1}
+                                                max={pages.length}
+                                                value={rangeStart}
+                                                onChange={(event) => setRangeStart(event.target.value)}
+                                                className="h-9 rounded-xl border border-gray-200 bg-white px-3 text-sm text-gray-700"
+                                                aria-label={t('editor.rangeStart')}
+                                            />
+                                            <input
+                                                type="number"
+                                                min={1}
+                                                max={pages.length}
+                                                value={rangeEnd}
+                                                onChange={(event) => setRangeEnd(event.target.value)}
+                                                className="h-9 rounded-xl border border-gray-200 bg-white px-3 text-sm text-gray-700"
+                                                aria-label={t('editor.rangeEnd')}
+                                            />
+                                        </div>
+                                        <button
+                                            type="button"
+                                            onClick={handleExportRange}
+                                            disabled={!canExport}
+                                            className="inline-flex h-9 w-full items-center justify-center gap-2 rounded-xl border border-gray-200 bg-white px-3 text-sm font-medium text-gray-700 hover:bg-gray-100 disabled:opacity-40"
+                                        >
+                                            <Download className="h-4 w-4" />
+                                            {t('editor.exportRange')}
+                                        </button>
+                                    </section>
+
+                                    <section className="space-y-2 rounded-2xl border border-gray-200 bg-gray-50/80 p-3">
+                                        <div className="text-[11px] font-semibold uppercase tracking-[0.14em] text-gray-500">
+                                            {t('editor.splitTools')}
+                                        </div>
+                                        <div className="grid gap-2">
+                                            <button
+                                                type="button"
+                                                onClick={handleSplitSingle}
+                                                disabled={!canExport}
+                                                className="inline-flex h-9 w-full items-center justify-center gap-2 rounded-xl border border-gray-200 bg-white px-3 text-sm font-medium text-gray-700 hover:bg-gray-100 disabled:opacity-40"
+                                            >
+                                                <SplitSquareVertical className="h-4 w-4" />
+                                                {t('editor.splitSingle')}
+                                            </button>
+                                            <button
+                                                type="button"
+                                                onClick={handleSplitOddEven}
+                                                disabled={!canExport}
+                                                className="inline-flex h-9 w-full items-center justify-center gap-2 rounded-xl border border-gray-200 bg-white px-3 text-sm font-medium text-gray-700 hover:bg-gray-100 disabled:opacity-40"
+                                            >
+                                                <SplitSquareVertical className="h-4 w-4" />
+                                                {t('editor.splitOddEven')}
+                                            </button>
+                                        </div>
+                                    </section>
+
+                                    <section className="space-y-3 rounded-2xl border border-gray-200 bg-gray-50/80 p-3">
+                                        <div className="text-[11px] font-semibold uppercase tracking-[0.14em] text-gray-500">
+                                            {t('editor.overlaySettings')}
+                                        </div>
+                                        <label className="space-y-1">
+                                            <span className="text-xs font-medium text-gray-600">{t('editor.watermark')}</span>
+                                            <input
+                                                type="text"
+                                                value={printOverlayOptions.watermarkText}
+                                                onChange={(event) => setPrintOverlayOptions(prev => ({ ...prev, watermarkText: event.target.value }))}
+                                                placeholder={t('editor.watermarkPlaceholder')}
+                                                className="h-9 w-full rounded-xl border border-gray-200 bg-white px-3 text-sm text-gray-700"
+                                            />
+                                        </label>
+                                        <label className="space-y-1">
+                                            <span className="text-xs font-medium text-gray-600">{t('editor.header')}</span>
+                                            <input
+                                                type="text"
+                                                value={printOverlayOptions.headerText}
+                                                onChange={(event) => setPrintOverlayOptions(prev => ({ ...prev, headerText: event.target.value }))}
+                                                placeholder={t('editor.headerPlaceholder')}
+                                                className="h-9 w-full rounded-xl border border-gray-200 bg-white px-3 text-sm text-gray-700"
+                                            />
+                                        </label>
+                                        <label className="space-y-1">
+                                            <span className="text-xs font-medium text-gray-600">{t('editor.footer')}</span>
+                                            <input
+                                                type="text"
+                                                value={printOverlayOptions.footerText}
+                                                onChange={(event) => setPrintOverlayOptions(prev => ({ ...prev, footerText: event.target.value }))}
+                                                placeholder={t('editor.footerPlaceholder')}
+                                                className="h-9 w-full rounded-xl border border-gray-200 bg-white px-3 text-sm text-gray-700"
+                                            />
+                                        </label>
+                                        <label className="flex items-center gap-3 rounded-xl border border-gray-200 bg-white px-3 py-2 text-sm font-medium text-gray-700">
+                                            <input
+                                                type="checkbox"
+                                                checked={printOverlayOptions.includePageNumbers}
+                                                onChange={(event) => setPrintOverlayOptions(prev => ({ ...prev, includePageNumbers: event.target.checked }))}
+                                                className="h-4 w-4 rounded border-gray-300"
+                                            />
+                                            {t('editor.pageNumbers')}
+                                        </label>
+                                        <div className="space-y-2 rounded-xl border border-gray-200 bg-white px-3 py-2">
+                                            <div className="flex items-center justify-between gap-3">
+                                                <span className="text-xs font-medium text-gray-600">{t('editor.crop')}</span>
+                                                <span className="text-xs text-gray-500">{printOverlayOptions.cropPercent}%</span>
+                                            </div>
+                                            <input
+                                                type="range"
+                                                min={0}
+                                                max={20}
+                                                step={1}
+                                                value={printOverlayOptions.cropPercent}
+                                                onChange={(event) => setPrintOverlayOptions(prev => ({ ...prev, cropPercent: Number(event.target.value) }))}
+                                                className="w-full"
+                                            />
+                                        </div>
+                                        <div className="space-y-2 rounded-xl border border-gray-200 bg-white px-3 py-2">
+                                            <div className="flex items-center justify-between gap-3">
+                                                <span className="text-xs font-medium text-gray-600">{t('editor.margin')}</span>
+                                                <span className="text-xs text-gray-500">{printOverlayOptions.marginPercent}%</span>
+                                            </div>
+                                            <input
+                                                type="range"
+                                                min={0}
+                                                max={20}
+                                                step={1}
+                                                value={printOverlayOptions.marginPercent}
+                                                onChange={(event) => setPrintOverlayOptions(prev => ({ ...prev, marginPercent: Number(event.target.value) }))}
+                                                className="w-full"
+                                            />
+                                        </div>
+                                    </section>
+                                </div>
+                            </div>
+                        </div>
+                        <button
+                            type="button"
+                            onClick={() => setIsExportPanelOpen((prev) => !prev)}
+                            className="mb-4 inline-flex h-12 w-10 items-center justify-center rounded-r-2xl border border-l-0 border-gray-200 bg-white/95 text-gray-700 shadow-lg backdrop-blur transition hover:bg-gray-50"
+                            title={isExportPanelOpen ? t('editor.closeExportPanel') : t('editor.openExportPanel')}
+                            aria-label={isExportPanelOpen ? t('editor.closeExportPanel') : t('editor.openExportPanel')}
+                        >
+                            {isExportPanelOpen ? <ChevronLeft className="h-4 w-4" /> : <ChevronRight className="h-4 w-4" />}
+                        </button>
+                    </div>
+                </div>
+            ) : null}
+
             {/* Main Content */}
-            <div className="flex-1 bg-white overflow-y-auto p-3 sm:p-5 lg:p-8 custom-scrollbar">
+            <div className={`flex-1 bg-white overflow-y-auto p-3 sm:p-5 lg:p-8 custom-scrollbar ${pages.length > 0 && isExportPanelOpen ? 'lg:pl-[22rem]' : ''}`}>
                 {pages.length === 0 ? (
                     <div className="h-full flex flex-col items-center justify-center text-gray-400 border-2 border-dashed border-gray-300 rounded-xl m-1 sm:m-4 p-4">
                         <Upload className="w-12 h-12 sm:w-16 sm:h-16 mb-4 text-gray-300" />
@@ -516,12 +958,18 @@ export const PdfEditor = () => {
                                             file={files[page.fileId]}
                                             onRotate={rotatePage}
                                             onDelete={deletePage}
-                                            onSelect={setSelectedPageId}
+                                            onClickPage={handlePageClick}
+                                            onOpenEditor={handleOpenEditor}
                                             scale={scale}
                                             newPageIndex={index + 1}
                                             documentColor={getDocumentColor(page.fileId, fileIds)}
                                             rotateLabel={t('editor.rotate')}
                                             deleteLabel={t('editor.deletePage')}
+                                            isSelected={selectedPageIdSet.has(page.id)}
+                                            selectionOrder={selectedPageIdsValid.indexOf(page.id) >= 0 ? selectedPageIdsValid.indexOf(page.id) + 1 : null}
+                                            onToggleSelection={handleToggleSelection}
+                                            selectLabel={t('editor.selectPage')}
+                                            deselectLabel={t('editor.deselectPage')}
                                         />
                                     ));
                                 })()}
@@ -574,13 +1022,12 @@ export const PdfEditor = () => {
                     </button>
                 </div>
             </div>
-            <div className="pointer-events-none absolute bottom-2 sm:bottom-3 right-2 sm:right-3 z-20 rounded-md border border-gray-200 bg-white/95 px-2 py-1 text-xs font-medium text-gray-600 shadow-sm backdrop-blur">
-                {t('common.pagesCount', { count: pages.length })}
+            <div className="pointer-events-none absolute bottom-2 sm:bottom-3 right-2 sm:right-3 z-20 rounded-md border border-blue-200 bg-white/95 px-2.5 py-1 text-xs font-semibold text-blue-700 shadow-sm backdrop-blur">
+                {selectedPageIdsValid.length}/{pages.length}
             </div>
-
             {/* Page Editor Modal */}
             {(() => {
-                const selectedPage = selectedPageId ? pages.find(p => p.id === selectedPageId) : null;
+                const selectedPage = editingPageId ? pages.find(p => p.id === editingPageId) : null;
                 if (!selectedPage) return null;
                 return (
                     <Suspense
@@ -591,10 +1038,11 @@ export const PdfEditor = () => {
                         }
                     >
                         <LazyPageEditorModal
-                            isOpen={!!selectedPageId}
-                            onClose={() => setSelectedPageId(null)}
+                            key={selectedPage.id}
+                            isOpen={!!editingPageId}
+                            onClose={() => setEditingPageId(null)}
                             onSave={(annotations) => {
-                                updatePageAnnotations(selectedPageId!, annotations);
+                                updatePageAnnotations(selectedPage.id, annotations);
                             }}
                             pdfDocument={files[selectedPage.fileId]?.pdfDoc}
                             pageIndex={selectedPage.pageIndex}

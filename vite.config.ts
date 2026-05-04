@@ -10,6 +10,9 @@ export default defineConfig({
     tailwindcss(),
   ],
   build: {
+    // The heaviest PDF/security modules are lazy-only and intentionally excluded
+    // from startup preloads, so we align the warning threshold with that reality.
+    chunkSizeWarningLimit: 1400,
     modulePreload: {
       resolveDependencies: (_filename, deps) =>
         deps.filter((dep) => {
@@ -31,8 +34,12 @@ export default defineConfig({
             return 'secure-pdf'
           }
 
-          if (id.includes('node_modules/pdf-lib') || id.includes('node_modules/pdfjs-dist')) {
-            return 'pdf'
+          if (id.includes('node_modules/pdf-lib')) {
+            return 'pdf-lib'
+          }
+
+          if (id.includes('node_modules/pdfjs-dist')) {
+            return 'pdfjs'
           }
 
           if (

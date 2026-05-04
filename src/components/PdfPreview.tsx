@@ -7,27 +7,11 @@ import type {
     ImageAnnotationData
 } from '../types/annotations';
 import { useI18n } from '../i18n';
+import { loadPdfJs } from '../utils/pdfjs';
 
 type PdfJsModule = typeof import('pdfjs-dist');
 type PdfDocumentProxy = import('pdfjs-dist').PDFDocumentProxy;
 type PdfRenderTask = import('pdfjs-dist').RenderTask;
-
-let pdfJsPromise: Promise<PdfJsModule> | null = null;
-
-const loadPdfJs = async (): Promise<PdfJsModule> => {
-    if (!pdfJsPromise) {
-        pdfJsPromise = import('pdfjs-dist').then((module) => {
-            if (!module.GlobalWorkerOptions.workerSrc) {
-                module.GlobalWorkerOptions.workerSrc = new URL(
-                    'pdfjs-dist/build/pdf.worker.min.mjs',
-                    import.meta.url
-                ).toString();
-            }
-            return module;
-        });
-    }
-    return pdfJsPromise;
-};
 
 interface PdfPreviewProps {
     file?: File;
@@ -158,7 +142,7 @@ export const PdfPreview = ({ file, pdfDocument, pageIndex = 1, width = 200, heig
                                     normalizedLines.forEach((line, index) => {
                                         context.fillText(line, ann.x, ann.y + (index * lineHeight));
                                     });
-                                } else if (ann.type === 'image') {
+                                } else if (ann.type === 'image' || ann.type === 'signature') {
                                     const data = ann.data as ImageAnnotationData;
                                     const img = new Image();
                                     img.src = data.dataUrl;

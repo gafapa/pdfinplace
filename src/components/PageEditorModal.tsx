@@ -12,7 +12,9 @@ import {
     Check,
     X,
     Trash2,
-    MousePointer2
+    MousePointer2,
+    ChevronLeft,
+    ChevronRight
 } from 'lucide-react';
 import type { PDFDocumentProxy } from 'pdfjs-dist';
 import type { Annotation, TextAnnotationData, DrawingAnnotationData, ShapeAnnotationData, ImageAnnotationData } from '../types/annotations';
@@ -35,6 +37,26 @@ interface PageEditorModalProps {
     pageRotation: number;
     initialAnnotations: Annotation[];
 }
+
+interface SavedAsset {
+    id: string;
+    name: string;
+    kind: 'signature' | 'stamp';
+    dataUrl: string;
+    width: number;
+    height: number;
+}
+
+const SAVED_ASSETS_STORAGE_KEY = 'pageforge.saved-assets';
+
+const getInitialAssetsPanelOpen = () => {
+    if (typeof window === 'undefined') {
+        return false;
+    }
+
+    const savedValue = localStorage.getItem('pageforge.assets-panel-open');
+    return savedValue === null ? false : savedValue === 'true';
+};
 
 export const PageEditorModal = ({
     isOpen,
@@ -65,6 +87,22 @@ export const PageEditorModal = ({
     const [imageRenderTick, setImageRenderTick] = useState(0);
     const [nativeRotation, setNativeRotation] = useState(0);
     const [editorScale, setEditorScale] = useState(1);
+    const [savedAssets, setSavedAssets] = useState<SavedAsset[]>(() => {
+        try {
+            const rawAssets = localStorage.getItem(SAVED_ASSETS_STORAGE_KEY);
+            if (!rawAssets) {
+                return [];
+            }
+
+            const parsedAssets = JSON.parse(rawAssets) as SavedAsset[];
+            return Array.isArray(parsedAssets) ? parsedAssets : [];
+        } catch (error) {
+            console.error('Failed to restore saved assets:', error);
+            return [];
+        }
+    });
+    const [uploadTarget, setUploadTarget] = useState<'canvas' | 'signature' | 'stamp'>('canvas');
+    const [isAssetsPanelOpen, setIsAssetsPanelOpen] = useState(getInitialAssetsPanelOpen);
 
     const canvasRef = useRef<HTMLCanvasElement>(null);
     const overlayRef = useRef<HTMLDivElement>(null);
@@ -82,6 +120,18 @@ export const PageEditorModal = ({
     useEffect(() => {
         editingTextIdRef.current = editingTextId;
     }, [editingTextId]);
+
+    useEffect(() => {
+        try {
+            localStorage.setItem(SAVED_ASSETS_STORAGE_KEY, JSON.stringify(savedAssets));
+        } catch (error) {
+            console.error('Failed to persist saved assets:', error);
+        }
+    }, [savedAssets]);
+
+    useEffect(() => {
+        localStorage.setItem('pageforge.assets-panel-open', String(isAssetsPanelOpen));
+    }, [isAssetsPanelOpen]);
 
     const getTextLayout = useCallback((data: TextAnnotationData) => {
         const lines = data.text.split(/\r?\n/);
@@ -231,6 +281,71 @@ export const PageEditorModal = ({
         }
     }, [getFinalizedAnnotations]);
 
+    const createImageLikeAnnotation = useCallback((
+        dataUrl: string,
+        imageWidth: number,
+        imageHeight: number,
+        type: 'image' | 'signature' = 'image',
+    ): Annotation => {
+        const maxWidth = canvasWidth * 0.8;
+        const maxHeight = canvasHeight * 0.8;
+        const fitScale = Math.min(maxWidth / imageWidth, maxHeight / imageHeight, 1);
+        const fittedWidth = Math.max(40, imageWidth * fitScale);
+        const fittedHeight = Math.max(40, imageHeight * fitScale);
+
+        return {
+            id: createId(),
+            type,
+            x: Math.max(0, (canvasWidth - fittedWidth) / 2),
+            y: Math.max(0, (canvasHeight - fittedHeight) / 2),
+            width: fittedWidth,
+            height: fittedHeight,
+            rotation: 0,
+            data: { dataUrl, originalWidth: imageWidth, originalHeight: imageHeight }
+        };
+    }, [canvasWidth, canvasHeight]);
+
+    const addSavedAsset = useCallback((asset: SavedAsset) => {
+        setSavedAssets(prev => [asset, ...prev.filter(item => item.id !== asset.id)]);
+    }, []);
+
+    const insertSavedAsset = useCallback((asset: SavedAsset) => {
+        const newAnnotation = createImageLikeAnnotation(
+            asset.dataUrl,
+            asset.width,
+            asset.height,
+            asset.kind === 'signature' ? 'signature' : 'image',
+        );
+        setAnnotations(prev => [...prev, newAnnotation]);
+        setSelectedAnnotationId(newAnnotation.id);
+        setActiveTool('select');
+    }, [createImageLikeAnnotation]);
+
+    const saveSelectedAsset = useCallback((kind: 'signature' | 'stamp') => {
+        if (!selectedAnnotationId) {
+            return;
+        }
+
+        const selectedAnnotation = annotations.find(annotation => annotation.id === selectedAnnotationId);
+        if (!selectedAnnotation || (selectedAnnotation.type !== 'image' && selectedAnnotation.type !== 'signature')) {
+            return;
+        }
+
+        const data = selectedAnnotation.data as ImageAnnotationData;
+        addSavedAsset({
+            id: createId(),
+            name: `${kind}-${savedAssets.length + 1}`,
+            kind,
+            dataUrl: data.dataUrl,
+            width: data.originalWidth,
+            height: data.originalHeight,
+        });
+    }, [selectedAnnotationId, annotations, addSavedAsset, savedAssets.length]);
+
+    const removeSavedAsset = useCallback((assetId: string) => {
+        setSavedAssets(prev => prev.filter(asset => asset.id !== assetId));
+    }, []);
+
     // Keyboard listener for Delete
     useEffect(() => {
         const handleKeyDown = (e: KeyboardEvent) => {
@@ -328,7 +443,7 @@ export const PageEditorModal = ({
                 lines.forEach((line, index) => {
                     ctx.fillText(line, ann.x, ann.y + (index * lineHeight));
                 });
-            } else if (ann.type === 'image') {
+            } else if (ann.type === 'image' || ann.type === 'signature') {
                 const data = ann.data as ImageAnnotationData;
                 const img = new Image();
                 img.src = data.dataUrl;
@@ -608,30 +723,26 @@ export const PageEditorModal = ({
             }
             const img = new Image();
             img.onload = () => {
-                // Fit uploaded images into the visible page area while preserving aspect ratio.
-                const maxWidth = canvasWidth * 0.8;
-                const maxHeight = canvasHeight * 0.8;
-                const fitScale = Math.min(maxWidth / img.width, maxHeight / img.height, 1);
-                const fittedWidth = Math.max(40, img.width * fitScale);
-                const fittedHeight = Math.max(40, img.height * fitScale);
-
-                const newAnnotation: Annotation = {
-                    id: createId(),
-                    type: 'image',
-                    x: Math.max(0, (canvasWidth - fittedWidth) / 2),
-                    y: Math.max(0, (canvasHeight - fittedHeight) / 2),
-                    width: fittedWidth,
-                    height: fittedHeight,
-                    rotation: 0,
-                    data: { dataUrl: result, originalWidth: img.width, originalHeight: img.height }
-                };
-                setAnnotations(prev => [...prev, newAnnotation]);
-                setSelectedAnnotationId(newAnnotation.id);
-                setActiveTool('select');
+                if (uploadTarget === 'canvas') {
+                    const newAnnotation = createImageLikeAnnotation(result, img.width, img.height);
+                    setAnnotations(prev => [...prev, newAnnotation]);
+                    setSelectedAnnotationId(newAnnotation.id);
+                    setActiveTool('select');
+                } else {
+                    addSavedAsset({
+                        id: createId(),
+                        name: `${uploadTarget}-${savedAssets.length + 1}`,
+                        kind: uploadTarget,
+                        dataUrl: result,
+                        width: img.width,
+                        height: img.height,
+                    });
+                }
             };
             img.src = result;
         };
         reader.readAsDataURL(file);
+        setUploadTarget('canvas');
         e.target.value = '';
     };
 
@@ -724,7 +835,14 @@ export const PageEditorModal = ({
                     {toolItems.map(tool => (
                         <button
                             key={tool.id}
-                            onClick={() => tool.id === 'image' ? fileInputRef.current?.click() : setActiveTool(tool.id as Tool)}
+                            onClick={() => {
+                                if (tool.id === 'image') {
+                                    setUploadTarget('canvas');
+                                    fileInputRef.current?.click();
+                                    return;
+                                }
+                                setActiveTool(tool.id as Tool);
+                            }}
                             className={`h-9 w-9 inline-flex items-center justify-center rounded-md border border-gray-200 transition-all shrink-0 ${activeTool === tool.id ? 'bg-blue-600 text-white shadow-inner border-blue-600' : 'bg-white text-gray-700 hover:bg-gray-50'}`}
                             title={tool.label}
                             aria-label={tool.label}
@@ -811,7 +929,122 @@ export const PageEditorModal = ({
                 </div>
             </div>
 
-            <div ref={editorViewportRef} className="flex-1 overflow-auto custom-scrollbar bg-white p-2 pr-14 sm:p-4 sm:pr-16 lg:p-8 lg:pr-20">
+            <div className="pointer-events-none absolute left-0 top-16 bottom-3 z-[70] flex items-start">
+                <div className="pointer-events-auto flex h-full items-end">
+                    <div
+                        className={`h-full overflow-hidden rounded-r-2xl border-y border-r border-gray-200 bg-white/95 shadow-xl backdrop-blur transition-all duration-300 ${
+                            isAssetsPanelOpen
+                                ? 'w-[min(18rem,calc(100vw-4rem))] translate-x-0 opacity-100'
+                                : 'w-0 -translate-x-4 opacity-0'
+                        }`}
+                    >
+                        <div className="flex h-full min-h-0 flex-col">
+                            <div className="border-b border-gray-200 bg-gradient-to-r from-blue-50 via-white to-white px-4 py-3">
+                                <div className="text-sm font-semibold text-gray-900">{t('modal.savedAssets')}</div>
+                                <div className="text-[11px] text-gray-500">{t('modal.savedAssetsHint')}</div>
+                            </div>
+                            <div className="flex-1 min-h-0 space-y-4 overflow-y-auto px-4 py-4 custom-scrollbar">
+                                <section className="space-y-2 rounded-2xl border border-gray-200 bg-gray-50/80 p-3">
+                                    <div className="text-[11px] font-semibold uppercase tracking-[0.14em] text-gray-500">
+                                        {t('modal.libraryUpload')}
+                                    </div>
+                                    <div className="grid gap-2">
+                                        <button
+                                            type="button"
+                                            onClick={() => {
+                                                setUploadTarget('signature');
+                                                fileInputRef.current?.click();
+                                            }}
+                                            className="inline-flex h-9 w-full items-center justify-center rounded-xl border border-gray-200 bg-white px-3 text-sm font-medium text-gray-700 hover:bg-gray-100"
+                                        >
+                                            {t('modal.uploadSignature')}
+                                        </button>
+                                        <button
+                                            type="button"
+                                            onClick={() => {
+                                                setUploadTarget('stamp');
+                                                fileInputRef.current?.click();
+                                            }}
+                                            className="inline-flex h-9 w-full items-center justify-center rounded-xl border border-gray-200 bg-white px-3 text-sm font-medium text-gray-700 hover:bg-gray-100"
+                                        >
+                                            {t('modal.uploadStamp')}
+                                        </button>
+                                    </div>
+                                </section>
+
+                                <section className="space-y-2 rounded-2xl border border-gray-200 bg-gray-50/80 p-3">
+                                    <div className="text-[11px] font-semibold uppercase tracking-[0.14em] text-gray-500">
+                                        {t('modal.saveSelection')}
+                                    </div>
+                                    <div className="grid gap-2">
+                                        <button
+                                            type="button"
+                                            onClick={() => saveSelectedAsset('signature')}
+                                            disabled={!selectedAnnotationId}
+                                            className="inline-flex h-9 w-full items-center justify-center rounded-xl border border-gray-200 bg-white px-3 text-sm font-medium text-gray-700 hover:bg-gray-100 disabled:opacity-40"
+                                        >
+                                            {t('modal.saveAsSignature')}
+                                        </button>
+                                        <button
+                                            type="button"
+                                            onClick={() => saveSelectedAsset('stamp')}
+                                            disabled={!selectedAnnotationId}
+                                            className="inline-flex h-9 w-full items-center justify-center rounded-xl border border-gray-200 bg-white px-3 text-sm font-medium text-gray-700 hover:bg-gray-100 disabled:opacity-40"
+                                        >
+                                            {t('modal.saveAsStamp')}
+                                        </button>
+                                    </div>
+                                </section>
+
+                                <section className="space-y-2 rounded-2xl border border-gray-200 bg-gray-50/80 p-3">
+                                    <div className="text-[11px] font-semibold uppercase tracking-[0.14em] text-gray-500">
+                                        {t('modal.savedItems')}
+                                    </div>
+                                    <div className="space-y-2">
+                                        {savedAssets.length === 0 ? (
+                                            <p className="text-[11px] text-gray-500">{t('modal.noSavedAssets')}</p>
+                                        ) : savedAssets.map(asset => (
+                                            <div key={asset.id} className="rounded-xl border border-gray-200 bg-white p-2">
+                                                <button
+                                                    type="button"
+                                                    onClick={() => insertSavedAsset(asset)}
+                                                    className="block w-full overflow-hidden rounded-lg bg-gray-50"
+                                                    title={t('modal.insertAsset')}
+                                                >
+                                                    <img src={asset.dataUrl} alt={asset.name} className="h-20 w-full object-contain" />
+                                                </button>
+                                                <div className="mt-2 flex items-center justify-between gap-2">
+                                                    <span className="truncate text-xs font-medium text-gray-700">{asset.name}</span>
+                                                    <button
+                                                        type="button"
+                                                        onClick={() => removeSavedAsset(asset.id)}
+                                                        className="rounded-lg p-1 text-gray-500 hover:bg-red-50 hover:text-red-600"
+                                                        title={t('common.delete')}
+                                                        aria-label={t('common.delete')}
+                                                    >
+                                                        <Trash2 className="h-3.5 w-3.5" />
+                                                    </button>
+                                                </div>
+                                            </div>
+                                        ))}
+                                    </div>
+                                </section>
+                            </div>
+                        </div>
+                    </div>
+                    <button
+                        type="button"
+                        onClick={() => setIsAssetsPanelOpen((prev) => !prev)}
+                        className="mb-4 inline-flex h-12 w-10 items-center justify-center rounded-r-2xl border border-l-0 border-gray-200 bg-white/95 text-gray-700 shadow-lg backdrop-blur transition hover:bg-gray-50"
+                        title={isAssetsPanelOpen ? t('modal.closeAssetsPanel') : t('modal.openAssetsPanel')}
+                        aria-label={isAssetsPanelOpen ? t('modal.closeAssetsPanel') : t('modal.openAssetsPanel')}
+                    >
+                        {isAssetsPanelOpen ? <ChevronLeft className="h-4 w-4" /> : <ChevronRight className="h-4 w-4" />}
+                    </button>
+                </div>
+            </div>
+
+            <div ref={editorViewportRef} className={`flex-1 overflow-auto custom-scrollbar bg-white p-2 pr-14 sm:p-4 sm:pr-16 lg:p-8 lg:pr-20 ${isAssetsPanelOpen ? 'lg:pl-[20rem]' : ''}`}>
                 <div className="mx-auto flex w-full justify-center">
                     <div
                         className="relative"

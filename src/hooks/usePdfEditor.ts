@@ -1,4 +1,4 @@
-import { useState, useCallback } from 'react';
+import { useState, useCallback, useEffect } from 'react';
 import { arrayMove } from '@dnd-kit/sortable';
 import type {
     Annotation,
@@ -9,33 +9,18 @@ import type {
 } from '../types/annotations';
 import type { PDFPage } from 'pdf-lib';
 import { createId } from '../utils/createId';
+import { clearPersistedSession, loadPersistedSession, savePersistedSession } from '../utils/persistedSession';
+import { loadPdfJs } from '../utils/pdfjs';
 
 type PdfLibModule = typeof import('pdf-lib');
-type PdfJsModule = typeof import('pdfjs-dist');
 
 let pdfLibPromise: Promise<PdfLibModule> | null = null;
-let pdfJsPromise: Promise<PdfJsModule> | null = null;
 
 const loadPdfLib = async (): Promise<PdfLibModule> => {
     if (!pdfLibPromise) {
         pdfLibPromise = import('pdf-lib');
     }
     return pdfLibPromise;
-};
-
-const loadPdfJs = async (): Promise<PdfJsModule> => {
-    if (!pdfJsPromise) {
-        pdfJsPromise = import('pdfjs-dist').then((module) => {
-            if (!module.GlobalWorkerOptions.workerSrc) {
-                module.GlobalWorkerOptions.workerSrc = new URL(
-                    'pdfjs-dist/build/pdf.worker.min.mjs',
-                    import.meta.url
-                ).toString();
-            }
-            return module;
-        });
-    }
-    return pdfJsPromise;
 };
 
 export interface EditorPage {
@@ -58,6 +43,30 @@ interface ExportLabels {
     failed: string;
     downloadPrefix: string;
     originalName: string;
+}
+
+interface SplitPdfLabels extends ExportLabels {
+    splitDownloadPrefix: string;
+    oddSuffix: string;
+    evenSuffix: string;
+    pageSuffix: string;
+}
+
+export interface ExportHistoryEntry {
+    id: string;
+    filename: string;
+    exportedAt: number;
+    pageCount: number;
+    mode: 'all' | 'selection' | 'range' | 'split-single' | 'split-odd-even' | 'protected' | 'unlocked';
+}
+
+export interface PrintOverlayOptions {
+    watermarkText: string;
+    includePageNumbers: boolean;
+    headerText: string;
+    footerText: string;
+    cropPercent: number;
+    marginPercent: number;
 }
 
 interface ProtectPdfLabels {
@@ -99,6 +108,97 @@ const downloadPdfBytes = (pdfBytes: Uint8Array<ArrayBufferLike>, filename: strin
     link.click();
     document.body.removeChild(link);
     URL.revokeObjectURL(url);
+};
+
+const EXPORT_HISTORY_STORAGE_KEY = 'pageforge.export-history';
+const MAX_EXPORT_HISTORY = 10;
+const OVERLAY_OPTIONS_STORAGE_KEY = 'pageforge.overlay-options';
+
+const loadExportHistory = (): ExportHistoryEntry[] => {
+    if (typeof window === 'undefined') {
+        return [];
+    }
+
+    try {
+        const rawHistory = localStorage.getItem(EXPORT_HISTORY_STORAGE_KEY);
+        if (!rawHistory) {
+            return [];
+        }
+
+        const parsedHistory = JSON.parse(rawHistory) as ExportHistoryEntry[];
+        return Array.isArray(parsedHistory) ? parsedHistory : [];
+    } catch (error) {
+        console.error('Failed to read export history:', error);
+        return [];
+    }
+};
+
+const loadOverlayOptions = (): PrintOverlayOptions => {
+    if (typeof window === 'undefined') {
+        return {
+            watermarkText: '',
+            includePageNumbers: false,
+            headerText: '',
+            footerText: '',
+            cropPercent: 0,
+            marginPercent: 0,
+        };
+    }
+
+    try {
+        const rawOptions = localStorage.getItem(OVERLAY_OPTIONS_STORAGE_KEY);
+        if (!rawOptions) {
+            return {
+                watermarkText: '',
+                includePageNumbers: false,
+                headerText: '',
+                footerText: '',
+                cropPercent: 0,
+                marginPercent: 0,
+            };
+        }
+
+        const parsedOptions = JSON.parse(rawOptions) as Partial<PrintOverlayOptions>;
+        return {
+            watermarkText: typeof parsedOptions.watermarkText === 'string' ? parsedOptions.watermarkText : '',
+            includePageNumbers: Boolean(parsedOptions.includePageNumbers),
+            headerText: typeof parsedOptions.headerText === 'string' ? parsedOptions.headerText : '',
+            footerText: typeof parsedOptions.footerText === 'string' ? parsedOptions.footerText : '',
+            cropPercent: typeof parsedOptions.cropPercent === 'number' ? Math.max(0, Math.min(parsedOptions.cropPercent, 20)) : 0,
+            marginPercent: typeof parsedOptions.marginPercent === 'number' ? Math.max(0, Math.min(parsedOptions.marginPercent, 20)) : 0,
+        };
+    } catch (error) {
+        console.error('Failed to read overlay options:', error);
+        return {
+            watermarkText: '',
+            includePageNumbers: false,
+            headerText: '',
+            footerText: '',
+            cropPercent: 0,
+            marginPercent: 0,
+        };
+    }
+};
+
+const getContentBox = (
+    pageWidth: number,
+    pageHeight: number,
+    marginPercent: number,
+) => {
+    const marginX = (pageWidth * marginPercent) / 100;
+    const marginY = (pageHeight * marginPercent) / 100;
+
+    return {
+        x: marginX,
+        y: marginY,
+        width: Math.max(1, pageWidth - (marginX * 2)),
+        height: Math.max(1, pageHeight - (marginY * 2)),
+    };
+};
+
+const getCropZoom = (cropPercent: number) => {
+    const visibleRatio = Math.max(0.2, 1 - ((cropPercent * 2) / 100));
+    return 1 / visibleRatio;
 };
 
 const isLikelyInvalidPasswordError = (error: unknown): boolean => {
@@ -190,6 +290,22 @@ const escapeHtml = (text: string): string =>
         .replace(/"/g, '&quot;')
         .replace(/'/g, '&#39;');
 
+const isImageLikeAnnotation = (annotation: Annotation): annotation is Annotation & {
+    type: 'image' | 'signature';
+    data: ImageAnnotationData | { dataUrl: string };
+} => annotation.type === 'image' || annotation.type === 'signature';
+
+const getInitialPageSize = (): PageSize => {
+    if (typeof window === 'undefined') {
+        return 'Original';
+    }
+
+    const savedPageSize = localStorage.getItem('pageforge.editor.page-size');
+    return savedPageSize === 'A4' || savedPageSize === 'A3' || savedPageSize === 'Letter' || savedPageSize === 'Legal'
+        ? savedPageSize
+        : 'Original';
+};
+
 export const usePdfEditor = () => {
     const [files, setFiles] = useState<Record<string, EditorFile>>({});
     // Use history for pages
@@ -205,7 +321,125 @@ export const usePdfEditor = () => {
     } = useHistory<EditorPage[]>([]);
 
     const [isProcessing, setIsProcessing] = useState(false);
-    const [pageSize, setPageSize] = useState<PageSize>('Original');
+    const [pageSize, setPageSize] = useState<PageSize>(getInitialPageSize);
+    const [isSessionReady, setIsSessionReady] = useState(false);
+    const [hasSavedSession, setHasSavedSession] = useState(false);
+    const [exportHistory, setExportHistory] = useState<ExportHistoryEntry[]>(loadExportHistory);
+    const [printOverlayOptions, setPrintOverlayOptions] = useState<PrintOverlayOptions>(loadOverlayOptions);
+
+    const recordExport = useCallback((filename: string, pageCount: number, mode: ExportHistoryEntry['mode']) => {
+        setExportHistory(prev => {
+            const nextHistory = [
+                {
+                    id: createId(),
+                    filename,
+                    exportedAt: Date.now(),
+                    pageCount,
+                    mode,
+                },
+                ...prev,
+            ].slice(0, MAX_EXPORT_HISTORY);
+
+            localStorage.setItem(EXPORT_HISTORY_STORAGE_KEY, JSON.stringify(nextHistory));
+            return nextHistory;
+        });
+    }, []);
+
+    useEffect(() => {
+        let isCancelled = false;
+
+        const restoreSession = async () => {
+            try {
+                const persistedSession = await loadPersistedSession();
+                if (isCancelled || !persistedSession) {
+                    if (!isCancelled) {
+                        setIsSessionReady(true);
+                        setHasSavedSession(Boolean(persistedSession));
+                    }
+                    return;
+                }
+
+                const restoredFiles = await Promise.all(
+                    persistedSession.files.map(async (persistedFile) => {
+                        const file = new File([persistedFile.buffer], persistedFile.name, {
+                            type: persistedFile.type,
+                            lastModified: persistedFile.lastModified,
+                        });
+                        const pdfJs = await loadPdfJs();
+                        const pdfDoc = await pdfJs.getDocument({ data: persistedFile.buffer }).promise;
+
+                        return [persistedFile.id, {
+                            id: persistedFile.id,
+                            file,
+                            pageCount: persistedFile.pageCount,
+                            pdfDoc,
+                        } satisfies EditorFile] as const;
+                    })
+                );
+
+                setFiles(Object.fromEntries(restoredFiles));
+                setPagesHistory([persistedSession.pages]);
+                setPagesCurrentIndex(0);
+                setPageSize(persistedSession.pageSize);
+                setHasSavedSession(true);
+            } catch (error) {
+                console.error('Failed to restore session:', error);
+            } finally {
+                if (!isCancelled) {
+                    setIsSessionReady(true);
+                }
+            }
+        };
+
+        void restoreSession();
+
+        return () => {
+            isCancelled = true;
+        };
+    }, [setPagesCurrentIndex, setPagesHistory]);
+
+    useEffect(() => {
+        if (!isSessionReady) {
+            return;
+        }
+
+        const persistSession = async () => {
+            if (pages.length === 0 || Object.keys(files).length === 0) {
+                await clearPersistedSession();
+                setHasSavedSession(false);
+                return;
+            }
+
+            try {
+                const persistedFiles = await Promise.all(
+                    Object.values(files).map(async (fileData) => ({
+                        id: fileData.id,
+                        name: fileData.file.name,
+                        type: fileData.file.type,
+                        lastModified: fileData.file.lastModified,
+                        pageCount: fileData.pageCount,
+                        buffer: await fileData.file.arrayBuffer(),
+                    }))
+                );
+
+                await savePersistedSession({
+                    files: persistedFiles,
+                    pages,
+                    pageSize,
+                    savedAt: Date.now(),
+                });
+                setHasSavedSession(true);
+            } catch (error) {
+                console.error('Failed to persist session:', error);
+            }
+        };
+
+        void persistSession();
+    }, [files, pages, pageSize, isSessionReady]);
+
+    useEffect(() => {
+        localStorage.setItem(OVERLAY_OPTIONS_STORAGE_KEY, JSON.stringify(printOverlayOptions));
+    }, [printOverlayOptions]);
 
     const addFiles = useCallback(async (newFiles: File[]) => {
         const newFilesMap: Record<string, EditorFile> = {};
@@ -764,106 +998,17 @@ export const usePdfEditor = () => {
         // Reset history completely
         setPagesHistory([[]]);
         setPagesCurrentIndex(0);
+        void clearPersistedSession();
+        setHasSavedSession(false);
     }, [setPagesHistory, setPagesCurrentIndex]);
 
-    const exportPdf = useCallback(async (labels?: ExportLabels) => {
-        if (pages.length === 0) return;
-        setIsProcessing(true);
-
-        try {
-            const pdfLib = await loadPdfLib();
-            const newPdf = await pdfLib.PDFDocument.create();
-
-            for (const page of pages) {
-                const fileData = files[page.fileId];
-                if (!fileData) continue;
-
-                const fileBuffer = await fileData.file.arrayBuffer();
-                const srcPdf = await pdfLib.PDFDocument.load(fileBuffer);
-
-                if (pageSize === 'Original') {
-                    const [copiedPage] = await newPdf.copyPages(srcPdf, [page.pageIndex - 1]);
-                    const existingRotation = copiedPage.getRotation()?.angle ?? 0;
-                    const newRotation = (existingRotation + page.rotation) % 360;
-                    copiedPage.setRotation(pdfLib.degrees(newRotation));
-                    newPdf.addPage(copiedPage);
-
-                    if (page.annotations.length > 0) {
-                        const { width, height } = copiedPage.getSize();
-                        await applyAnnotationsToPage(copiedPage, page.annotations, height, width, newRotation);
-                    }
-                } else {
-                    const targetDims = PAGE_SIZES[pageSize];
-                    if (!targetDims) throw new Error("Invalid page size");
-
-                    const embeddedPage = await newPdf.embedPage(srcPdf.getPages()[page.pageIndex - 1]);
-                    const srcPage = srcPdf.getPage(page.pageIndex - 1);
-                    const srcRotation = srcPage.getRotation().angle;
-                    const totalRotation = (srcRotation + page.rotation) % 360;
-
-                    const { width: srcWidth, height: srcHeight } = embeddedPage;
-                    const isRotatedSides = totalRotation === 90 || totalRotation === 270;
-                    const effectiveWidth = isRotatedSides ? srcHeight : srcWidth;
-                    const effectiveHeight = isRotatedSides ? srcWidth : srcHeight;
-
-                    let [targetWidth, targetHeight] = targetDims;
-                    if (effectiveWidth > effectiveHeight) {
-                        [targetWidth, targetHeight] = [targetHeight, targetWidth];
-                    }
-
-                    const newPage = newPdf.addPage([targetWidth, targetHeight]);
-                    const scale = Math.min(targetWidth / effectiveWidth, targetHeight / effectiveHeight);
-                    const destWidth = effectiveWidth * scale;
-                    const destHeight = effectiveHeight * scale;
-                    const x = (targetWidth - destWidth) / 2;
-                    const y = (targetHeight - destHeight) / 2;
-
-                    const dims = { w: srcWidth * scale, h: srcHeight * scale };
-                    let drawX = x;
-                    let drawY = y;
-
-                    if (totalRotation === 90) {
-                        drawX += dims.h;
-                    } else if (totalRotation === 180) {
-                        drawX += dims.w;
-                        drawY += dims.h;
-                    } else if (totalRotation === 270) {
-                        drawY += dims.w;
-                    }
-
-                    newPage.drawPage(embeddedPage, {
-                        x: drawX,
-                        y: drawY,
-                        width: dims.w,
-                        height: dims.h,
-                        rotate: pdfLib.degrees(totalRotation)
-                    });
-
-                    if (page.annotations.length > 0) {
-                        await applyAnnotationsToPage(newPage, page.annotations, targetHeight, targetWidth, totalRotation);
-                    }
-                }
-            }
-
-            const pdfBytes = await newPdf.save();
-            const prefix = labels?.downloadPrefix ?? 'edited_document';
-            const originalName = labels?.originalName ?? 'original';
-            downloadPdfBytes(pdfBytes, `${prefix}_${pageSize === 'Original' ? originalName : pageSize}.pdf`);
-        } catch (error) {
-            console.error("Error exporting PDF:", error);
-            alert(labels?.failed ?? "Failed to export PDF.");
-        } finally {
-            setIsProcessing(false);
-        }
-    }, [pages, files, pageSize]);
-
-    async function applyAnnotationsToPage(
+    const applyAnnotationsToPage = useCallback(async (
         pdfPage: PDFPage,
         annotations: Annotation[],
         pageHeight: number,
         pageWidth: number,
         rotation: number
-    ) {
+    ) => {
         const pdfLib = await loadPdfLib();
         const fontHelvetica = await pdfPage.doc.embedFont(pdfLib.StandardFonts.Helvetica);
         const fontHelveticaBold = await pdfPage.doc.embedFont(pdfLib.StandardFonts.HelveticaBold);
@@ -878,34 +1023,57 @@ export const usePdfEditor = () => {
 
         const isLandscape = rotation % 180 !== 0;
 
+        const marginPercent = Math.max(0, Math.min(printOverlayOptions.marginPercent, 20));
+        const cropPercent = Math.max(0, Math.min(printOverlayOptions.cropPercent, 20));
+        const cropZoom = getCropZoom(cropPercent);
+        const contentBox = getContentBox(pageWidth, pageHeight, marginPercent);
+
         // Scale factors: Visual -> PDF Page
         let scaleX = 1;
         let scaleY = 1;
 
         if (isLandscape) {
-            scaleX = pageHeight / VISUAL_WIDTH_LANDSCAPE;
-            scaleY = pageWidth / VISUAL_HEIGHT_LANDSCAPE;
+            scaleX = (contentBox.height / VISUAL_WIDTH_LANDSCAPE) * cropZoom;
+            scaleY = (contentBox.width / VISUAL_HEIGHT_LANDSCAPE) * cropZoom;
         } else {
-            scaleX = pageWidth / VISUAL_WIDTH_PORTRAIT;
-            scaleY = pageHeight / VISUAL_HEIGHT_PORTRAIT;
+            scaleX = (contentBox.width / VISUAL_WIDTH_PORTRAIT) * cropZoom;
+            scaleY = (contentBox.height / VISUAL_HEIGHT_PORTRAIT) * cropZoom;
         }
+
+        const visualWidth = isLandscape ? VISUAL_WIDTH_LANDSCAPE : VISUAL_WIDTH_PORTRAIT;
+        const visualHeight = isLandscape ? VISUAL_HEIGHT_LANDSCAPE : VISUAL_HEIGHT_PORTRAIT;
+        const cropInsetX = (visualWidth * cropPercent) / 100;
+        const cropInsetY = (visualHeight * cropPercent) / 100;
 
         const transformCoords = (x: number, y: number) => {
             if (rotation === 0) {
-                return { x: x * scaleX, y: pageHeight - (y * scaleY) };
+                return {
+                    x: contentBox.x + ((x - cropInsetX) * scaleX),
+                    y: contentBox.y + contentBox.height - ((y - cropInsetY) * scaleY)
+                };
             }
             if (rotation === 90) {
-                // Visual x (0..1000) -> PDF y (0..H)
-                // Visual y (0..800) -> PDF x (0..W)
-                return { x: y * scaleY, y: x * scaleX };
+                return {
+                    x: contentBox.x + ((y - cropInsetY) * scaleY),
+                    y: contentBox.y + ((x - cropInsetX) * scaleX)
+                };
             }
             if (rotation === 180) {
-                return { x: pageWidth - (x * scaleX), y: y * scaleY };
+                return {
+                    x: contentBox.x + contentBox.width - ((x - cropInsetX) * scaleX),
+                    y: contentBox.y + ((y - cropInsetY) * scaleY)
+                };
             }
             if (rotation === 270) {
-                return { x: pageWidth - (y * scaleY), y: pageHeight - (x * scaleX) };
+                return {
+                    x: contentBox.x + contentBox.width - ((y - cropInsetY) * scaleY),
+                    y: contentBox.y + contentBox.height - ((x - cropInsetX) * scaleX)
+                };
             }
-            return { x: x * scaleX, y: pageHeight - (y * scaleY) };
+            return {
+                x: contentBox.x + ((x - cropInsetX) * scaleX),
+                y: contentBox.y + contentBox.height - ((y - cropInsetY) * scaleY)
+            };
         };
 
         const getRotationAdjustment = () => {
@@ -1004,12 +1172,12 @@ export const usePdfEditor = () => {
                             thickness, color,
                         });
                     }
-                } else if (ann.type === 'image') {
-                    const data = ann.data as ImageAnnotationData;
+                } else if (isImageLikeAnnotation(ann)) {
+                    const dataUrl = ann.data.dataUrl;
                     let image;
                     try {
-                        const imageBytes = await fetch(data.dataUrl).then(res => res.arrayBuffer());
-                        if (data.dataUrl.includes('image/png')) {
+                        const imageBytes = await fetch(dataUrl).then(res => res.arrayBuffer());
+                        if (dataUrl.includes('image/png')) {
                             image = await pdfPage.doc.embedPng(imageBytes);
                         } else {
                             image = await pdfPage.doc.embedJpg(imageBytes);
@@ -1030,13 +1198,79 @@ export const usePdfEditor = () => {
                 console.error("Error drawing annotation:", err);
             }
         }
-    }
+    }, [printOverlayOptions]);
 
-    const buildCurrentPdfBytes = useCallback(async () => {
+    const applyPrintOverlays = useCallback(async (
+        pdfPage: PDFPage,
+        pageNumber: number,
+        totalPages: number,
+    ) => {
+        const pdfLib = await loadPdfLib();
+        const { width, height } = pdfPage.getSize();
+        const overlayFont = await pdfPage.doc.embedFont(pdfLib.StandardFonts.Helvetica);
+        const normalizedWatermark = printOverlayOptions.watermarkText.trim();
+        const normalizedHeader = printOverlayOptions.headerText.trim();
+        const normalizedFooter = printOverlayOptions.footerText.trim();
+
+        if (normalizedWatermark) {
+            const watermarkSize = Math.max(36, Math.min(width, height) * 0.08);
+            const watermarkWidth = overlayFont.widthOfTextAtSize(normalizedWatermark, watermarkSize);
+
+            pdfPage.drawText(normalizedWatermark, {
+                x: (width - watermarkWidth) / 2,
+                y: height / 2,
+                size: watermarkSize,
+                font: overlayFont,
+                color: pdfLib.rgb(0.72, 0.72, 0.72),
+                opacity: 0.22,
+                rotate: pdfLib.degrees(35),
+            });
+        }
+
+        if (printOverlayOptions.includePageNumbers) {
+            const label = `${pageNumber} / ${totalPages}`;
+            const labelSize = Math.max(9, Math.min(width, height) * 0.018);
+            const labelWidth = overlayFont.widthOfTextAtSize(label, labelSize);
+
+            pdfPage.drawText(label, {
+                x: width - labelWidth - 24,
+                y: 18,
+                size: labelSize,
+                font: overlayFont,
+                color: pdfLib.rgb(0.35, 0.35, 0.35),
+            });
+        }
+
+        if (normalizedHeader) {
+            const headerSize = Math.max(10, Math.min(width, height) * 0.018);
+            pdfPage.drawText(normalizedHeader, {
+                x: 24,
+                y: height - headerSize - 18,
+                size: headerSize,
+                font: overlayFont,
+                color: pdfLib.rgb(0.35, 0.35, 0.35),
+            });
+        }
+
+        if (normalizedFooter) {
+            const footerSize = Math.max(10, Math.min(width, height) * 0.018);
+            pdfPage.drawText(normalizedFooter, {
+                x: 24,
+                y: 18,
+                size: footerSize,
+                font: overlayFont,
+                color: pdfLib.rgb(0.35, 0.35, 0.35),
+            });
+        }
+    }, [printOverlayOptions]);
+
+    const buildPdfBytes = useCallback(async (sourcePages: EditorPage[]) => {
         const pdfLib = await loadPdfLib();
         const newPdf = await pdfLib.PDFDocument.create();
+        const marginPercent = Math.max(0, Math.min(printOverlayOptions.marginPercent, 20));
+        const cropZoom = getCropZoom(Math.max(0, Math.min(printOverlayOptions.cropPercent, 20)));
 
-        for (const page of pages) {
+        for (const [pagePosition, page] of sourcePages.entries()) {
             const fileData = files[page.fileId];
             if (!fileData) {
                 continue;
@@ -1044,51 +1278,45 @@ export const usePdfEditor = () => {
 
             const fileBuffer = await fileData.file.arrayBuffer();
             const srcPdf = await pdfLib.PDFDocument.load(fileBuffer);
-
-            if (pageSize === 'Original') {
-                const [copiedPage] = await newPdf.copyPages(srcPdf, [page.pageIndex - 1]);
-                const existingRotation = copiedPage.getRotation()?.angle ?? 0;
-                const newRotation = (existingRotation + page.rotation) % 360;
-                copiedPage.setRotation(pdfLib.degrees(newRotation));
-                newPdf.addPage(copiedPage);
-
-                if (page.annotations.length > 0) {
-                    const { width, height } = copiedPage.getSize();
-                    await applyAnnotationsToPage(copiedPage, page.annotations, height, width, newRotation);
-                }
-                continue;
-            }
-
-            const targetDims = PAGE_SIZES[pageSize];
-            if (!targetDims) {
-                throw new Error('Invalid page size');
-            }
-
-            const embeddedPage = await newPdf.embedPage(srcPdf.getPages()[page.pageIndex - 1]);
             const srcPage = srcPdf.getPage(page.pageIndex - 1);
             const srcRotation = srcPage.getRotation().angle;
             const totalRotation = (srcRotation + page.rotation) % 360;
+            const embeddedPage = await newPdf.embedPage(srcPage);
 
             const { width: srcWidth, height: srcHeight } = embeddedPage;
             const isRotatedSides = totalRotation === 90 || totalRotation === 270;
             const effectiveWidth = isRotatedSides ? srcHeight : srcWidth;
             const effectiveHeight = isRotatedSides ? srcWidth : srcHeight;
 
-            let [targetWidth, targetHeight] = targetDims;
-            if (effectiveWidth > effectiveHeight) {
-                [targetWidth, targetHeight] = [targetHeight, targetWidth];
+            let targetWidth = effectiveWidth;
+            let targetHeight = effectiveHeight;
+
+            if (pageSize !== 'Original') {
+                const targetDims = PAGE_SIZES[pageSize];
+                if (!targetDims) {
+                    throw new Error('Invalid page size');
+                }
+
+                [targetWidth, targetHeight] = targetDims;
+                if (effectiveWidth > effectiveHeight) {
+                    [targetWidth, targetHeight] = [targetHeight, targetWidth];
+                }
             }
 
             const newPage = newPdf.addPage([targetWidth, targetHeight]);
-            const scale = Math.min(targetWidth / effectiveWidth, targetHeight / effectiveHeight);
-            const destWidth = effectiveWidth * scale;
-            const destHeight = effectiveHeight * scale;
-            const x = (targetWidth - destWidth) / 2;
-            const y = (targetHeight - destHeight) / 2;
+            const contentBox = getContentBox(targetWidth, targetHeight, marginPercent);
+            const scale = Math.min(contentBox.width / effectiveWidth, contentBox.height / effectiveHeight);
+            const destWidth = effectiveWidth * scale * cropZoom;
+            const destHeight = effectiveHeight * scale * cropZoom;
+            const x = contentBox.x + ((contentBox.width - destWidth) / 2);
+            const y = contentBox.y + ((contentBox.height - destHeight) / 2);
 
             const dims = { w: srcWidth * scale, h: srcHeight * scale };
             let drawX = x;
             let drawY = y;
+
+            dims.w *= cropZoom;
+            dims.h *= cropZoom;
 
             if (totalRotation === 90) {
                 drawX += dims.h;
@@ -1110,10 +1338,109 @@ export const usePdfEditor = () => {
             if (page.annotations.length > 0) {
                 await applyAnnotationsToPage(newPage, page.annotations, targetHeight, targetWidth, totalRotation);
             }
+            await applyPrintOverlays(newPage, pagePosition + 1, sourcePages.length);
         }
 
         return newPdf.save();
-    }, [pages, files, pageSize]);
+    }, [files, pageSize, printOverlayOptions, applyAnnotationsToPage, applyPrintOverlays]);
+
+    const exportPdf = useCallback(async (labels?: ExportLabels, pageIds?: string[]) => {
+        const sourcePages = pageIds?.length
+            ? pages.filter(page => pageIds.includes(page.id))
+            : pages;
+
+        if (sourcePages.length === 0) {
+            return;
+        }
+
+        setIsProcessing(true);
+        try {
+            const pdfBytes = await buildPdfBytes(sourcePages);
+            const prefix = labels?.downloadPrefix ?? 'edited_document';
+            const originalName = labels?.originalName ?? 'original';
+            const filename = `${prefix}_${pageSize === 'Original' ? originalName : pageSize}.pdf`;
+            downloadPdfBytes(pdfBytes, filename);
+            recordExport(filename, sourcePages.length, pageIds?.length ? 'selection' : 'all');
+        } catch (error) {
+            console.error('Error exporting PDF:', error);
+            alert(labels?.failed ?? 'Failed to export PDF.');
+        } finally {
+            setIsProcessing(false);
+        }
+    }, [pages, buildPdfBytes, pageSize, recordExport]);
+
+    const exportPageRange = useCallback(async (
+        startPage: number,
+        endPage: number,
+        labels?: ExportLabels,
+    ) => {
+        const rangeStart = Math.max(1, Math.min(startPage, endPage));
+        const rangeEnd = Math.min(pages.length, Math.max(startPage, endPage));
+        const sourcePages = pages.slice(rangeStart - 1, rangeEnd);
+
+        if (sourcePages.length === 0) {
+            return false;
+        }
+
+        setIsProcessing(true);
+        try {
+            const pdfBytes = await buildPdfBytes(sourcePages);
+            const prefix = labels?.downloadPrefix ?? 'edited_document';
+            const originalName = labels?.originalName ?? 'original';
+            const sizeLabel = pageSize === 'Original' ? originalName : pageSize;
+            const filename = `${prefix}_${rangeStart}-${rangeEnd}_${sizeLabel}.pdf`;
+            downloadPdfBytes(pdfBytes, filename);
+            recordExport(filename, sourcePages.length, 'range');
+            return true;
+        } catch (error) {
+            console.error('Error exporting PDF range:', error);
+            alert(labels?.failed ?? 'Failed to export PDF.');
+            return false;
+        } finally {
+            setIsProcessing(false);
+        }
+    }, [pages, buildPdfBytes, pageSize, recordExport]);
+
+    const splitPdf = useCallback(async (
+        mode: 'single' | 'odd-even',
+        labels?: SplitPdfLabels,
+    ) => {
+        if (pages.length === 0) {
+            return false;
+        }
+
+        const groups = mode === 'single'
+            ? pages.map((page, index) => ({
+                pages: [page],
+                filename: `${labels?.splitDownloadPrefix ?? 'split_document'}_${labels?.pageSuffix ?? 'page'}-${index + 1}.pdf`
+            }))
+            : [
+                {
+                    pages: pages.filter((_, index) => index % 2 === 0),
+                    filename: `${labels?.splitDownloadPrefix ?? 'split_document'}_${labels?.oddSuffix ?? 'odd'}.pdf`
+                },
+                {
+                    pages: pages.filter((_, index) => index % 2 === 1),
+                    filename: `${labels?.splitDownloadPrefix ?? 'split_document'}_${labels?.evenSuffix ?? 'even'}.pdf`
+                }
+            ].filter(group => group.pages.length > 0);
+
+        setIsProcessing(true);
+        try {
+            for (const group of groups) {
+                const pdfBytes = await buildPdfBytes(group.pages);
+                downloadPdfBytes(pdfBytes, group.filename);
+                recordExport(group.filename, group.pages.length, mode === 'single' ? 'split-single' : 'split-odd-even');
+            }
+            return true;
+        } catch (error) {
+            console.error('Error splitting PDF:', error);
+            alert(labels?.failed ?? 'Failed to export PDF.');
+            return false;
+        } finally {
+            setIsProcessing(false);
+        }
+    }, [pages, buildPdfBytes, recordExport]);
 
     const exportProtectedPdf = useCallback(async (
         password: string,
@@ -1131,7 +1458,7 @@ export const usePdfEditor = () => {
 
         setIsProcessing(true);
         try {
-            const rawBytes = await buildCurrentPdfBytes();
+            const rawBytes = await buildPdfBytes(pages);
             const { PDF: SecurePDF } = await import('@libpdf/core');
             const securePdf = await SecurePDF.load(rawBytes);
             securePdf.setProtection({
@@ -1144,7 +1471,9 @@ export const usePdfEditor = () => {
             const prefix = labels?.downloadPrefix ?? 'protected_document';
             const originalName = labels?.originalName ?? 'original';
             const sizeLabel = pageSize === 'Original' ? originalName : pageSize;
-            downloadPdfBytes(protectedBytes, `${prefix}_${sizeLabel}.pdf`);
+            const filename = `${prefix}_${sizeLabel}.pdf`;
+            downloadPdfBytes(protectedBytes, filename);
+            recordExport(filename, pages.length, 'protected');
             return true;
         } catch (error) {
             console.error('Error protecting PDF:', error);
@@ -1153,7 +1482,7 @@ export const usePdfEditor = () => {
         } finally {
             setIsProcessing(false);
         }
-    }, [pages.length, buildCurrentPdfBytes, pageSize]);
+    }, [pages, buildPdfBytes, pageSize, recordExport]);
 
     const unlockPdfFile = useCallback(async (
         file: File | null,
@@ -1184,7 +1513,9 @@ export const usePdfEditor = () => {
             const unlockedBytes = await securePdf.save();
             const prefix = labels?.downloadPrefix ?? 'unlocked_document';
             const baseName = file.name.replace(/\.pdf$/i, '');
-            downloadPdfBytes(unlockedBytes, `${prefix}_${baseName}.pdf`);
+            const filename = `${prefix}_${baseName}.pdf`;
+            downloadPdfBytes(unlockedBytes, filename);
+            recordExport(filename, 0, 'unlocked');
             return true;
         } catch (error) {
             console.error('Error unlocking PDF:', error);
@@ -1197,7 +1528,7 @@ export const usePdfEditor = () => {
         } finally {
             setIsProcessing(false);
         }
-    }, []);
+    }, [recordExport]);
 
     const updatePageAnnotations = useCallback((pageId: string, annotations: Annotation[]) => {
         setPages(prev => prev.map(page => {
@@ -1212,8 +1543,13 @@ export const usePdfEditor = () => {
         files,
         pages,
         isProcessing,
+        isSessionReady,
+        hasSavedSession,
+        exportHistory,
         pageSize,
         setPageSize,
+        printOverlayOptions,
+        setPrintOverlayOptions,
         addFiles,
         movePage,
         rotatePage,
@@ -1223,6 +1559,8 @@ export const usePdfEditor = () => {
         duplicatePages,
         clearAll,
         exportPdf,
+        exportPageRange,
+        splitPdf,
         exportProtectedPdf,
         unlockPdfFile,
         undo,
