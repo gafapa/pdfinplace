@@ -1,13 +1,16 @@
-﻿import { useCallback, useRef, useState } from 'react';
+import { Suspense, lazy, useCallback, useRef, useState } from 'react';
 import { usePdfEditor, type EditorFile, type EditorPage, type PageSize } from '../hooks/usePdfEditor';
 import { PdfPreview } from '../components/PdfPreview';
-import { PageEditorModal } from '../components/PageEditorModal';
 import { DndContext, closestCenter, KeyboardSensor, PointerSensor, useSensor, useSensors, DragOverlay } from '@dnd-kit/core';
 import { SortableContext, sortableKeyboardCoordinates, rectSortingStrategy, useSortable } from '@dnd-kit/sortable';
 import { CSS } from '@dnd-kit/utilities';
 import { Upload, RotateCw, Trash2, Download, Plus, ZoomIn, ZoomOut, Undo, Redo, FileText, Lock, LockOpen, FolderOpen, Check, X } from 'lucide-react';
 import type { DragEndEvent, DragStartEvent } from '@dnd-kit/core';
 import { useI18n, type Locale } from '../i18n';
+
+const LazyPageEditorModal = lazy(() =>
+    import('../components/PageEditorModal').then((module) => ({ default: module.PageEditorModal }))
+);
 
 // Color palette for different documents
 const DOCUMENT_COLORS = [
@@ -580,17 +583,25 @@ export const PdfEditor = () => {
                 const selectedPage = selectedPageId ? pages.find(p => p.id === selectedPageId) : null;
                 if (!selectedPage) return null;
                 return (
-                    <PageEditorModal
-                        isOpen={!!selectedPageId}
-                        onClose={() => setSelectedPageId(null)}
-                        onSave={(annotations) => {
-                            updatePageAnnotations(selectedPageId!, annotations);
-                        }}
-                        pdfDocument={files[selectedPage.fileId]?.pdfDoc}
-                        pageIndex={selectedPage.pageIndex}
-                        pageRotation={selectedPage.rotation}
-                        initialAnnotations={selectedPage.annotations || []}
-                    />
+                    <Suspense
+                        fallback={
+                            <div className="fixed inset-0 z-40 flex items-center justify-center bg-white/80">
+                                <div className="h-8 w-8 rounded-full border-2 border-blue-500 border-t-transparent animate-spin" />
+                            </div>
+                        }
+                    >
+                        <LazyPageEditorModal
+                            isOpen={!!selectedPageId}
+                            onClose={() => setSelectedPageId(null)}
+                            onSave={(annotations) => {
+                                updatePageAnnotations(selectedPageId!, annotations);
+                            }}
+                            pdfDocument={files[selectedPage.fileId]?.pdfDoc}
+                            pageIndex={selectedPage.pageIndex}
+                            pageRotation={selectedPage.rotation}
+                            initialAnnotations={selectedPage.annotations || []}
+                        />
+                    </Suspense>
                 );
             })()}
 

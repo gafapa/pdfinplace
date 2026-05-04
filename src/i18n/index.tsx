@@ -4,13 +4,14 @@ export type Locale = 'es' | 'en' | 'gl';
 
 type TranslationNode = string | { [key: string]: TranslationNode };
 
-const STORAGE_KEY = 'pdfing.locale';
+const STORAGE_KEY = 'pageforge.locale';
+const LEGACY_STORAGE_KEY = 'pdfing.locale';
 
 const translations: Record<Locale, TranslationNode> = {
     es: {
         app: {
-            title: 'PDFing',
-            windowTitle: 'PDFing - Editor PDF',
+            title: 'ForjaPDF',
+            windowTitle: 'ForjaPDF - Editor PDF',
         },
         common: {
             language: 'Idioma',
@@ -91,8 +92,8 @@ const translations: Record<Locale, TranslationNode> = {
     },
     en: {
         app: {
-            title: 'PDFing',
-            windowTitle: 'PDFing - PDF Editor',
+            title: 'PageForge',
+            windowTitle: 'PageForge - PDF Editor',
         },
         common: {
             language: 'Language',
@@ -173,8 +174,8 @@ const translations: Record<Locale, TranslationNode> = {
     },
     gl: {
         app: {
-            title: 'PDFing',
-            windowTitle: 'PDFing - Editor de PDF',
+            title: 'ForxaPDF',
+            windowTitle: 'ForxaPDF - Editor de PDF',
         },
         common: {
             language: 'Idioma',
@@ -262,7 +263,7 @@ const detectLocale = (): Locale => {
         return 'es';
     }
 
-    const stored = window.localStorage.getItem(STORAGE_KEY);
+    const stored = window.localStorage.getItem(STORAGE_KEY) ?? window.localStorage.getItem(LEGACY_STORAGE_KEY);
     if (stored && isLocale(stored)) {
         return stored;
     }

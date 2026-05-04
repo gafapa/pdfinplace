@@ -17,6 +17,7 @@ import {
 import type { PDFDocumentProxy } from 'pdfjs-dist';
 import type { Annotation, TextAnnotationData, DrawingAnnotationData, ShapeAnnotationData, ImageAnnotationData } from '../types/annotations';
 import { useI18n } from '../i18n';
+import { createId } from '../utils/createId';
 
 type Tool = 'select' | 'text' | 'draw' | 'rectangle' | 'circle' | 'line' | 'image';
 type InteractionMode = 'idle' | 'drawing' | 'moving' | 'resizing';
@@ -464,7 +465,7 @@ export const PageEditorModal = ({
             // If we were editing, and the click is to finish, usually we don't want 
             // to immediately start another one at the SAME pixel.
             // But if it's a different pixel, it's fine.
-            const id = Math.random().toString(36).substr(2, 9);
+            const id = createId();
             const textData: TextAnnotationData = {
                 text: '',
                 fontSize,
@@ -560,14 +561,14 @@ export const PageEditorModal = ({
                 const ys = currentDrawing.map(p => p.y);
                 const minX = Math.min(...xs), minY = Math.min(...ys), maxX = Math.max(...xs), maxY = Math.max(...ys);
                 newAnn = {
-                    id: Math.random().toString(36).substr(2, 9),
+                    id: createId(),
                     type: 'drawing',
                     x: minX, y: minY, width: maxX - minX, height: maxY - minY, rotation: 0,
                     data: { points: currentDrawing, strokeColor: color, strokeWidth }
                 };
             } else if (isShapeTool(activeTool) && currentDrawing.length >= 2) {
                 newAnn = {
-                    id: Math.random().toString(36).substr(2, 9),
+                    id: createId(),
                     type: 'shape',
                     x: Math.min(start.x, end.x), y: Math.min(start.y, end.y),
                     width: Math.max(1, Math.abs(end.x - start.x)), height: Math.max(1, Math.abs(end.y - start.y)), rotation: 0,
@@ -601,6 +602,10 @@ export const PageEditorModal = ({
         if (!file) return;
         const reader = new FileReader();
         reader.onload = (event) => {
+            const result = event.target?.result;
+            if (typeof result !== 'string') {
+                return;
+            }
             const img = new Image();
             img.onload = () => {
                 // Fit uploaded images into the visible page area while preserving aspect ratio.
@@ -611,20 +616,20 @@ export const PageEditorModal = ({
                 const fittedHeight = Math.max(40, img.height * fitScale);
 
                 const newAnnotation: Annotation = {
-                    id: Math.random().toString(36).substr(2, 9),
+                    id: createId(),
                     type: 'image',
                     x: Math.max(0, (canvasWidth - fittedWidth) / 2),
                     y: Math.max(0, (canvasHeight - fittedHeight) / 2),
                     width: fittedWidth,
                     height: fittedHeight,
                     rotation: 0,
-                    data: { dataUrl: event.target?.result as string, originalWidth: img.width, originalHeight: img.height }
+                    data: { dataUrl: result, originalWidth: img.width, originalHeight: img.height }
                 };
                 setAnnotations(prev => [...prev, newAnnotation]);
                 setSelectedAnnotationId(newAnnotation.id);
                 setActiveTool('select');
             };
-            img.src = event.target?.result as string;
+            img.src = result;
         };
         reader.readAsDataURL(file);
         e.target.value = '';

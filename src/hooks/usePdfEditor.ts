@@ -1,6 +1,4 @@
 import { useState, useCallback } from 'react';
-import { PDFDocument, StandardFonts, rgb, degrees, type PDFPage } from 'pdf-lib';
-import * as pdfjsLib from 'pdfjs-dist';
 import { arrayMove } from '@dnd-kit/sortable';
 import type {
     Annotation,
@@ -9,6 +7,36 @@ import type {
     ShapeAnnotationData,
     ImageAnnotationData
 } from '../types/annotations';
+import type { PDFPage } from 'pdf-lib';
+import { createId } from '../utils/createId';
+
+type PdfLibModule = typeof import('pdf-lib');
+type PdfJsModule = typeof import('pdfjs-dist');
+
+let pdfLibPromise: Promise<PdfLibModule> | null = null;
+let pdfJsPromise: Promise<PdfJsModule> | null = null;
+
+const loadPdfLib = async (): Promise<PdfLibModule> => {
+    if (!pdfLibPromise) {
+        pdfLibPromise = import('pdf-lib');
+    }
+    return pdfLibPromise;
+};
+
+const loadPdfJs = async (): Promise<PdfJsModule> => {
+    if (!pdfJsPromise) {
+        pdfJsPromise = import('pdfjs-dist').then((module) => {
+            if (!module.GlobalWorkerOptions.workerSrc) {
+                module.GlobalWorkerOptions.workerSrc = new URL(
+                    'pdfjs-dist/build/pdf.worker.min.mjs',
+                    import.meta.url
+                ).toString();
+            }
+            return module;
+        });
+    }
+    return pdfJsPromise;
+};
 
 export interface EditorPage {
     id: string; // Unique ID for dnd (e.g., "fileId-pageIndex")
@@ -21,7 +49,7 @@ export interface EditorPage {
 export interface EditorFile {
     id: string;
     file: File;
-    pdfDoc?: pdfjsLib.PDFDocumentProxy; // Cached pdf.js document for rendering
+    pdfDoc?: import('pdfjs-dist').PDFDocumentProxy; // Cached pdf.js document for rendering
     pageCount: number;
 }
 
@@ -147,11 +175,11 @@ const useHistory = <T>(initialState: T) => {
     };
 };
 
-const hexToRgb = (hex: string) => {
+const hexToRgb = (hex: string, rgbFactory: PdfLibModule['rgb']) => {
     const r = parseInt(hex.slice(1, 3), 16) / 255;
     const g = parseInt(hex.slice(3, 5), 16) / 255;
     const b = parseInt(hex.slice(5, 7), 16) / 255;
-    return rgb(r, g, b);
+    return rgbFactory(r, g, b);
 };
 
 const escapeHtml = (text: string): string =>
@@ -182,15 +210,17 @@ export const usePdfEditor = () => {
     const addFiles = useCallback(async (newFiles: File[]) => {
         const newFilesMap: Record<string, EditorFile> = {};
         const newPages: EditorPage[] = [];
+        const pdfLib = await loadPdfLib();
+        const pdfJs = await loadPdfJs();
 
         for (const file of newFiles) {
-            const fileId = Math.random().toString(36).substr(2, 9);
+            const fileId = createId();
             try {
                 let arrayBuffer = await file.arrayBuffer();
 
                 // If image, convert to PDF first
                 if (file.type === 'image/jpeg' || file.type === 'image/png' || file.name.endsWith('.jpg') || file.name.endsWith('.jpeg') || file.name.endsWith('.png')) {
-                    const pdfDoc = await PDFDocument.create();
+                    const pdfDoc = await pdfLib.PDFDocument.create();
                     let image;
                     if (file.type === 'image/jpeg' || file.name.endsWith('.jpg') || file.name.endsWith('.jpeg')) {
                         image = await pdfDoc.embedJpg(arrayBuffer);
@@ -222,7 +252,7 @@ export const usePdfEditor = () => {
                     newFilesMap[fileId] = {
                         id: fileId,
                         file: newFile,
-                        pdfDoc: await pdfjsLib.getDocument({ data: arrayBuffer }).promise,
+                        pdfDoc: await pdfJs.getDocument({ data: arrayBuffer }).promise,
                         pageCount: 1 // We know it's 1 page
                     };
 
@@ -230,7 +260,7 @@ export const usePdfEditor = () => {
                     const pdfDocJS = newFilesMap[fileId].pdfDoc!;
                     for (let i = 1; i <= pdfDocJS.numPages; i++) {
                         newPages.push({
-                            id: `${fileId}-${i}-${Math.random().toString(36).substr(2, 5)}`,
+                            id: `${fileId}-${i}-${createId().slice(0, 8)}`,
                             fileId,
                             pageIndex: i,
                             rotation: 0,
@@ -290,7 +320,7 @@ export const usePdfEditor = () => {
                     document.body.removeChild(container);
 
                     // Create PDF with pdf-lib
-                    const pdfDoc = await PDFDocument.create();
+                    const pdfDoc = await pdfLib.PDFDocument.create();
 
                     // A4 size in points (72 DPI)
                     const pageWidthPt = 595.28;
@@ -399,7 +429,7 @@ export const usePdfEditor = () => {
                     const newFileName = file.name.replace(/\.docx$/i, '.pdf');
                     const newFile = new File([arrayBuffer], newFileName, { type: 'application/pdf' });
 
-                    const loadingTask = pdfjsLib.getDocument({ data: arrayBuffer });
+                    const loadingTask = pdfJs.getDocument({ data: arrayBuffer });
                     const loadedPdf = await loadingTask.promise;
 
                     newFilesMap[fileId] = {
@@ -411,7 +441,7 @@ export const usePdfEditor = () => {
 
                     for (let i = 1; i <= loadedPdf.numPages; i++) {
                         newPages.push({
-                            id: `${fileId}-${i}-${Math.random().toString(36).substr(2, 5)}`,
+                            id: `${fileId}-${i}-${createId().slice(0, 8)}`,
                             fileId,
                             pageIndex: i,
                             rotation: 0,
@@ -507,7 +537,7 @@ export const usePdfEditor = () => {
                         document.body.removeChild(container);
 
                         // Create PDF with pdf-lib
-                        const pdfDoc = await PDFDocument.create();
+                        const pdfDoc = await pdfLib.PDFDocument.create();
 
                         // A4 size in points (72 DPI)
                         const pageWidthPt = 595.28;
@@ -613,7 +643,7 @@ export const usePdfEditor = () => {
                         const newFileName = file.name.replace(/\.odt$/i, '.pdf');
                         const newFile = new File([arrayBuffer], newFileName, { type: 'application/pdf' });
 
-                        const loadingTask = pdfjsLib.getDocument({ data: arrayBuffer });
+                        const loadingTask = pdfJs.getDocument({ data: arrayBuffer });
                         const loadedPdf = await loadingTask.promise;
 
                         newFilesMap[fileId] = {
@@ -625,7 +655,7 @@ export const usePdfEditor = () => {
 
                         for (let i = 1; i <= loadedPdf.numPages; i++) {
                             newPages.push({
-                                id: `${fileId}-${i}-${Math.random().toString(36).substr(2, 5)}`,
+                                id: `${fileId}-${i}-${createId().slice(0, 8)}`,
                                 fileId,
                                 pageIndex: i,
                                 rotation: 0,
@@ -636,7 +666,7 @@ export const usePdfEditor = () => {
                     }
                 }
 
-                const loadingTask = pdfjsLib.getDocument({ data: arrayBuffer });
+                const loadingTask = pdfJs.getDocument({ data: arrayBuffer });
                 const pdfDoc = await loadingTask.promise;
 
                 newFilesMap[fileId] = {
@@ -648,7 +678,7 @@ export const usePdfEditor = () => {
 
                 for (let i = 1; i <= pdfDoc.numPages; i++) {
                     newPages.push({
-                        id: `${fileId}-${i}-${Math.random().toString(36).substr(2, 5)}`,
+                        id: `${fileId}-${i}-${createId().slice(0, 8)}`,
                         fileId,
                         pageIndex: i,
                         rotation: 0,
@@ -720,7 +750,7 @@ export const usePdfEditor = () => {
                 if (idSet.has(page.id)) {
                     next.push({
                         ...page,
-                        id: `${page.fileId}-${page.pageIndex}-${Math.random().toString(36).slice(2, 9)}`,
+                        id: `${page.fileId}-${page.pageIndex}-${createId().slice(0, 8)}`,
                         annotations: JSON.parse(JSON.stringify(page.annotations)) as Annotation[]
                     });
                 }
@@ -741,20 +771,21 @@ export const usePdfEditor = () => {
         setIsProcessing(true);
 
         try {
-            const newPdf = await PDFDocument.create();
+            const pdfLib = await loadPdfLib();
+            const newPdf = await pdfLib.PDFDocument.create();
 
             for (const page of pages) {
                 const fileData = files[page.fileId];
                 if (!fileData) continue;
 
                 const fileBuffer = await fileData.file.arrayBuffer();
-                const srcPdf = await PDFDocument.load(fileBuffer);
+                const srcPdf = await pdfLib.PDFDocument.load(fileBuffer);
 
                 if (pageSize === 'Original') {
                     const [copiedPage] = await newPdf.copyPages(srcPdf, [page.pageIndex - 1]);
                     const existingRotation = copiedPage.getRotation()?.angle ?? 0;
                     const newRotation = (existingRotation + page.rotation) % 360;
-                    copiedPage.setRotation(degrees(newRotation));
+                    copiedPage.setRotation(pdfLib.degrees(newRotation));
                     newPdf.addPage(copiedPage);
 
                     if (page.annotations.length > 0) {
@@ -805,7 +836,7 @@ export const usePdfEditor = () => {
                         y: drawY,
                         width: dims.w,
                         height: dims.h,
-                        rotate: degrees(totalRotation)
+                        rotate: pdfLib.degrees(totalRotation)
                     });
 
                     if (page.annotations.length > 0) {
@@ -826,17 +857,18 @@ export const usePdfEditor = () => {
         }
     }, [pages, files, pageSize]);
 
-    const applyAnnotationsToPage = async (
+    async function applyAnnotationsToPage(
         pdfPage: PDFPage,
         annotations: Annotation[],
         pageHeight: number,
         pageWidth: number,
         rotation: number
-    ) => {
-        const fontHelvetica = await pdfPage.doc.embedFont(StandardFonts.Helvetica);
-        const fontHelveticaBold = await pdfPage.doc.embedFont(StandardFonts.HelveticaBold);
-        const fontHelveticaOblique = await pdfPage.doc.embedFont(StandardFonts.HelveticaOblique);
-        const fontHelveticaBoldOblique = await pdfPage.doc.embedFont(StandardFonts.HelveticaBoldOblique);
+    ) {
+        const pdfLib = await loadPdfLib();
+        const fontHelvetica = await pdfPage.doc.embedFont(pdfLib.StandardFonts.Helvetica);
+        const fontHelveticaBold = await pdfPage.doc.embedFont(pdfLib.StandardFonts.HelveticaBold);
+        const fontHelveticaOblique = await pdfPage.doc.embedFont(pdfLib.StandardFonts.HelveticaOblique);
+        const fontHelveticaBoldOblique = await pdfPage.doc.embedFont(pdfLib.StandardFonts.HelveticaBoldOblique);
 
         // Visual Dimensions (Editor Canvas)
         const VISUAL_WIDTH_PORTRAIT = 800;
@@ -909,8 +941,8 @@ export const usePdfEditor = () => {
                             y: startY - (index * lineHeight),
                             size: scaledFontSize,
                             font,
-                            color: hexToRgb(data.color || '#000000'),
-                            rotate: degrees(rotAdj - ann.rotation),
+                            color: hexToRgb(data.color || '#000000', pdfLib.rgb),
+                            rotate: pdfLib.degrees(rotAdj - ann.rotation),
                         });
                     });
                 } else if (ann.type === 'drawing') {
@@ -925,12 +957,12 @@ export const usePdfEditor = () => {
                             start: p1,
                             end: p2,
                             thickness: data.strokeWidth * (isLandscape ? scaleX : scaleY),
-                            color: hexToRgb(data.strokeColor),
+                            color: hexToRgb(data.strokeColor, pdfLib.rgb),
                         });
                     }
                 } else if (ann.type === 'shape') {
                     const data = ann.data as ShapeAnnotationData;
-                    const color = hexToRgb(data.strokeColor);
+                    const color = hexToRgb(data.strokeColor, pdfLib.rgb);
                     const thickness = data.strokeWidth * (isLandscape ? scaleX : scaleY);
 
                     if (data.shapeType === 'rectangle') {
@@ -988,7 +1020,7 @@ export const usePdfEditor = () => {
                             y: y - height,
                             width,
                             height,
-                            rotate: degrees(-ann.rotation + rotAdj),
+                            rotate: pdfLib.degrees(-ann.rotation + rotAdj),
                         });
                     } catch (e) {
                         console.error("Failed to embed image", e);
@@ -998,10 +1030,11 @@ export const usePdfEditor = () => {
                 console.error("Error drawing annotation:", err);
             }
         }
-    };
+    }
 
     const buildCurrentPdfBytes = useCallback(async () => {
-        const newPdf = await PDFDocument.create();
+        const pdfLib = await loadPdfLib();
+        const newPdf = await pdfLib.PDFDocument.create();
 
         for (const page of pages) {
             const fileData = files[page.fileId];
@@ -1010,13 +1043,13 @@ export const usePdfEditor = () => {
             }
 
             const fileBuffer = await fileData.file.arrayBuffer();
-            const srcPdf = await PDFDocument.load(fileBuffer);
+            const srcPdf = await pdfLib.PDFDocument.load(fileBuffer);
 
             if (pageSize === 'Original') {
                 const [copiedPage] = await newPdf.copyPages(srcPdf, [page.pageIndex - 1]);
                 const existingRotation = copiedPage.getRotation()?.angle ?? 0;
                 const newRotation = (existingRotation + page.rotation) % 360;
-                copiedPage.setRotation(degrees(newRotation));
+                copiedPage.setRotation(pdfLib.degrees(newRotation));
                 newPdf.addPage(copiedPage);
 
                 if (page.annotations.length > 0) {
@@ -1071,7 +1104,7 @@ export const usePdfEditor = () => {
                 y: drawY,
                 width: dims.w,
                 height: dims.h,
-                rotate: degrees(totalRotation),
+                rotate: pdfLib.degrees(totalRotation),
             });
 
             if (page.annotations.length > 0) {

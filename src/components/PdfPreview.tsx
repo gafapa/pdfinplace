@@ -1,5 +1,4 @@
 import { useEffect, useRef, useState } from 'react';
-import * as pdfjsLib from 'pdfjs-dist';
 import type {
     Annotation,
     DrawingAnnotationData,
@@ -9,14 +8,30 @@ import type {
 } from '../types/annotations';
 import { useI18n } from '../i18n';
 
-// Ensure worker is loaded
-if (!pdfjsLib.GlobalWorkerOptions.workerSrc) {
-    pdfjsLib.GlobalWorkerOptions.workerSrc = `https://unpkg.com/pdfjs-dist@${pdfjsLib.version}/build/pdf.worker.min.mjs`;
-}
+type PdfJsModule = typeof import('pdfjs-dist');
+type PdfDocumentProxy = import('pdfjs-dist').PDFDocumentProxy;
+type PdfRenderTask = import('pdfjs-dist').RenderTask;
+
+let pdfJsPromise: Promise<PdfJsModule> | null = null;
+
+const loadPdfJs = async (): Promise<PdfJsModule> => {
+    if (!pdfJsPromise) {
+        pdfJsPromise = import('pdfjs-dist').then((module) => {
+            if (!module.GlobalWorkerOptions.workerSrc) {
+                module.GlobalWorkerOptions.workerSrc = new URL(
+                    'pdfjs-dist/build/pdf.worker.min.mjs',
+                    import.meta.url
+                ).toString();
+            }
+            return module;
+        });
+    }
+    return pdfJsPromise;
+};
 
 interface PdfPreviewProps {
     file?: File;
-    pdfDocument?: pdfjsLib.PDFDocumentProxy;
+    pdfDocument?: PdfDocumentProxy;
     pageIndex?: number;
     width?: number; // Treat as maxWidth if height is also provided
     height?: number; // Optional maxHeight
@@ -33,19 +48,21 @@ export const PdfPreview = ({ file, pdfDocument, pageIndex = 1, width = 200, heig
 
     useEffect(() => {
         let isMounted = true;
-        let loadedPdf: pdfjsLib.PDFDocumentProxy | null = null;
-        let renderTask: pdfjsLib.RenderTask | null = null;
+        let loadedPdf: PdfDocumentProxy | null = null;
+        let renderTask: PdfRenderTask | null = null;
+        let loadingTask: ReturnType<PdfJsModule['getDocument']> | null = null;
 
         const renderPreview = async () => {
             try {
                 setLoading(true);
                 setError(false);
+                const pdfJs = await loadPdfJs();
 
                 if (pdfDocument) {
                     loadedPdf = pdfDocument;
                 } else if (file) {
                     const arrayBuffer = await file.arrayBuffer();
-                    const loadingTask = pdfjsLib.getDocument({ data: arrayBuffer });
+                    loadingTask = pdfJs.getDocument({ data: arrayBuffer });
                     loadedPdf = await loadingTask.promise;
                 } else {
                     return;
@@ -178,6 +195,9 @@ export const PdfPreview = ({ file, pdfDocument, pageIndex = 1, width = 200, heig
             isMounted = false;
             if (renderTask) {
                 renderTask.cancel();
+            }
+            if (loadingTask) {
+                void loadingTask.destroy();
             }
         };
     }, [file, pdfDocument, pageIndex, width, height, rotation, annotations]);
