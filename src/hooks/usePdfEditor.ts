@@ -1,4 +1,4 @@
-import { useState, useCallback, useEffect } from 'react';
+import { useState, useCallback, useEffect, useRef } from 'react';
 import { arrayMove } from '@dnd-kit/sortable';
 import type {
     Annotation,
@@ -7,9 +7,9 @@ import type {
     ShapeAnnotationData,
     ImageAnnotationData
 } from '../types/annotations';
-import type { PDFPage } from 'pdf-lib';
+import type { PDFDocument, PDFPage } from 'pdf-lib';
 import { createId } from '../utils/createId';
-import { clearPersistedSession, loadPersistedSession, savePersistedSession } from '../utils/persistedSession';
+import { clearPersistedSession, loadPersistedSession, savePersistedSession, type PersistedFileRecord } from '../utils/persistedSession';
 import { loadPdfJs } from '../utils/pdfjs';
 
 type PdfLibModule = typeof import('pdf-lib');
@@ -96,6 +96,16 @@ const toArrayBuffer = (bytes: Uint8Array<ArrayBufferLike>): ArrayBuffer => {
     return buffer;
 };
 
+const cloneArrayBuffer = (buffer: ArrayBuffer) => buffer.slice(0);
+
+const isUsableArrayBuffer = (buffer: ArrayBuffer) => {
+    try {
+        return buffer.byteLength > 0;
+    } catch {
+        return false;
+    }
+};
+
 const downloadPdfBytes = (pdfBytes: Uint8Array<ArrayBufferLike>, filename: string) => {
     const pdfBytesBuffer = new ArrayBuffer(pdfBytes.byteLength);
     new Uint8Array(pdfBytesBuffer).set(pdfBytes);
@@ -113,6 +123,15 @@ const downloadPdfBytes = (pdfBytes: Uint8Array<ArrayBufferLike>, filename: strin
 const EXPORT_HISTORY_STORAGE_KEY = 'pageforge.export-history';
 const MAX_EXPORT_HISTORY = 10;
 const OVERLAY_OPTIONS_STORAGE_KEY = 'pageforge.overlay-options';
+const MAX_HISTORY_ENTRIES = 80;
+const SESSION_PERSIST_DEBOUNCE_MS = 600;
+const MAX_IMPORT_FILES = 20;
+const MAX_IMPORT_FILE_SIZE_BYTES = 75 * 1024 * 1024;
+const MAX_IMPORT_TOTAL_SIZE_BYTES = 250 * 1024 * 1024;
+const MAX_IMPORT_PAGES = 500;
+const MAX_IMAGE_PIXELS = 32_000_000;
+const MAX_CANVAS_HEIGHT_PX = 160_000;
+const SUPPORTED_IMPORT_EXTENSIONS = /\.(pdf|jpe?g|png|docx|odt)$/i;
 
 const loadExportHistory = (): ExportHistoryEntry[] => {
     if (typeof window === 'undefined') {
@@ -212,6 +231,49 @@ const isLikelyInvalidPasswordError = (error: unknown): boolean => {
         content.includes('decrypt');
 };
 
+const formatMegabytes = (bytes: number) => `${Math.round(bytes / (1024 * 1024))} MB`;
+
+const isSupportedImportFile = (file: File) =>
+    file.type === 'application/pdf' ||
+    file.type === 'image/jpeg' ||
+    file.type === 'image/png' ||
+    file.type === 'application/vnd.openxmlformats-officedocument.wordprocessingml.document' ||
+    file.type === 'application/vnd.oasis.opendocument.text' ||
+    SUPPORTED_IMPORT_EXTENSIONS.test(file.name);
+
+const getAcceptedImportFiles = (newFiles: File[]) => {
+    const acceptedFiles: File[] = [];
+    const skippedReasons: string[] = [];
+    let acceptedBytes = 0;
+
+    for (const file of newFiles) {
+        if (acceptedFiles.length >= MAX_IMPORT_FILES) {
+            skippedReasons.push(`${file.name}: import limit is ${MAX_IMPORT_FILES} files at once.`);
+            continue;
+        }
+
+        if (!isSupportedImportFile(file)) {
+            skippedReasons.push(`${file.name}: unsupported file type.`);
+            continue;
+        }
+
+        if (file.size > MAX_IMPORT_FILE_SIZE_BYTES) {
+            skippedReasons.push(`${file.name}: file is larger than ${formatMegabytes(MAX_IMPORT_FILE_SIZE_BYTES)}.`);
+            continue;
+        }
+
+        if (acceptedBytes + file.size > MAX_IMPORT_TOTAL_SIZE_BYTES) {
+            skippedReasons.push(`Batch exceeds ${formatMegabytes(MAX_IMPORT_TOTAL_SIZE_BYTES)}.`);
+            break;
+        }
+
+        acceptedFiles.push(file);
+        acceptedBytes += file.size;
+    }
+
+    return { acceptedFiles, skippedReasons };
+};
+
 // Custom hook for history management
 const useHistory = <T>(initialState: T) => {
     const [historyState, setHistoryState] = useState<{ history: T[]; currentIndex: number }>({
@@ -228,11 +290,11 @@ const useHistory = <T>(initialState: T) => {
                 ? (newState as (prev: T) => T)(current)
                 : newState;
 
-            // If we're not at the end of history, truncate it before adding new state
             const truncatedHistory = prev.history.slice(0, prev.currentIndex + 1);
+            const nextHistory = [...truncatedHistory, updated].slice(-MAX_HISTORY_ENTRIES);
             return {
-                history: [...truncatedHistory, updated],
-                currentIndex: truncatedHistory.length
+                history: nextHistory,
+                currentIndex: nextHistory.length - 1
             };
         });
     }, []);
@@ -324,6 +386,7 @@ export const usePdfEditor = () => {
     const [pageSize, setPageSize] = useState<PageSize>(getInitialPageSize);
     const [isSessionReady, setIsSessionReady] = useState(false);
     const [hasSavedSession, setHasSavedSession] = useState(false);
+    const persistedFileCacheRef = useRef<Record<string, PersistedFileRecord>>({});
     const [exportHistory, setExportHistory] = useState<ExportHistoryEntry[]>(loadExportHistory);
     const [printOverlayOptions, setPrintOverlayOptions] = useState<PrintOverlayOptions>(loadOverlayOptions);
 
@@ -353,20 +416,25 @@ export const usePdfEditor = () => {
                 const persistedSession = await loadPersistedSession();
                 if (isCancelled || !persistedSession) {
                     if (!isCancelled) {
+                        persistedFileCacheRef.current = {};
                         setIsSessionReady(true);
                         setHasSavedSession(Boolean(persistedSession));
                     }
                     return;
                 }
 
+                persistedFileCacheRef.current = Object.fromEntries(
+                    persistedSession.files.map((persistedFile) => [persistedFile.id, persistedFile])
+                );
+
                 const restoredFiles = await Promise.all(
                     persistedSession.files.map(async (persistedFile) => {
-                        const file = new File([persistedFile.buffer], persistedFile.name, {
+                        const file = new File([cloneArrayBuffer(persistedFile.buffer)], persistedFile.name, {
                             type: persistedFile.type,
                             lastModified: persistedFile.lastModified,
                         });
                         const pdfJs = await loadPdfJs();
-                        const pdfDoc = await pdfJs.getDocument({ data: persistedFile.buffer }).promise;
+                        const pdfDoc = await pdfJs.getDocument({ data: cloneArrayBuffer(persistedFile.buffer) }).promise;
 
                         return [persistedFile.id, {
                             id: persistedFile.id,
@@ -405,23 +473,41 @@ export const usePdfEditor = () => {
 
         const persistSession = async () => {
             if (pages.length === 0 || Object.keys(files).length === 0) {
+                persistedFileCacheRef.current = {};
                 await clearPersistedSession();
                 setHasSavedSession(false);
                 return;
             }
 
             try {
+                const nextFileCache: Record<string, PersistedFileRecord> = {};
                 const persistedFiles = await Promise.all(
-                    Object.values(files).map(async (fileData) => ({
-                        id: fileData.id,
-                        name: fileData.file.name,
-                        type: fileData.file.type,
-                        lastModified: fileData.file.lastModified,
-                        pageCount: fileData.pageCount,
-                        buffer: await fileData.file.arrayBuffer(),
-                    }))
+                    Object.values(files).map(async (fileData) => {
+                        const cachedFile = persistedFileCacheRef.current[fileData.id];
+                        const canReuseCachedFile = cachedFile &&
+                            isUsableArrayBuffer(cachedFile.buffer) &&
+                            cachedFile.name === fileData.file.name &&
+                            cachedFile.type === fileData.file.type &&
+                            cachedFile.lastModified === fileData.file.lastModified &&
+                            cachedFile.pageCount === fileData.pageCount;
+
+                        const persistedFile = canReuseCachedFile
+                            ? cachedFile
+                            : {
+                                id: fileData.id,
+                                name: fileData.file.name,
+                                type: fileData.file.type,
+                                lastModified: fileData.file.lastModified,
+                                pageCount: fileData.pageCount,
+                                buffer: await fileData.file.arrayBuffer(),
+                            };
+
+                        nextFileCache[fileData.id] = persistedFile;
+                        return persistedFile;
+                    })
                 );
 
+                persistedFileCacheRef.current = nextFileCache;
                 await savePersistedSession({
                     files: persistedFiles,
                     pages,
@@ -434,7 +520,11 @@ export const usePdfEditor = () => {
             }
         };
 
-        void persistSession();
+        const timeoutId = window.setTimeout(() => {
+            void persistSession();
+        }, SESSION_PERSIST_DEBOUNCE_MS);
+
+        return () => window.clearTimeout(timeoutId);
     }, [files, pages, pageSize, isSessionReady]);
 
     useEffect(() => {
@@ -442,12 +532,43 @@ export const usePdfEditor = () => {
     }, [printOverlayOptions]);
 
     const addFiles = useCallback(async (newFiles: File[]) => {
-        const newFilesMap: Record<string, EditorFile> = {};
-        const newPages: EditorPage[] = [];
-        const pdfLib = await loadPdfLib();
-        const pdfJs = await loadPdfJs();
+        const { acceptedFiles, skippedReasons } = getAcceptedImportFiles(newFiles);
 
-        for (const file of newFiles) {
+        if (skippedReasons.length > 0) {
+            alert(`Some files were skipped:\n${skippedReasons.join('\n')}`);
+        }
+
+        if (acceptedFiles.length === 0) {
+            return;
+        }
+
+        setIsProcessing(true);
+        try {
+            const newFilesMap: Record<string, EditorFile> = {};
+            const newPages: EditorPage[] = [];
+            const failedReasons: string[] = [];
+            const pdfLib = await loadPdfLib();
+            const pdfJs = await loadPdfJs();
+            let importedPageCount = pages.length;
+
+            const appendFilePages = (fileId: string, pageCount: number) => {
+                if (importedPageCount + pageCount > MAX_IMPORT_PAGES) {
+                    throw new Error(`Import would exceed the ${MAX_IMPORT_PAGES} page limit.`);
+                }
+
+                for (let i = 1; i <= pageCount; i++) {
+                    newPages.push({
+                        id: `${fileId}-${i}-${createId().slice(0, 8)}`,
+                        fileId,
+                        pageIndex: i,
+                        rotation: 0,
+                        annotations: []
+                    });
+                }
+                importedPageCount += pageCount;
+            };
+
+            for (const file of acceptedFiles) {
             const fileId = createId();
             try {
                 let arrayBuffer = await file.arrayBuffer();
@@ -462,6 +583,10 @@ export const usePdfEditor = () => {
                         image = await pdfDoc.embedPng(arrayBuffer);
                     }
 
+                    if (image.width * image.height > MAX_IMAGE_PIXELS) {
+                        throw new Error(`Image exceeds the ${MAX_IMAGE_PIXELS.toLocaleString()} pixel limit.`);
+                    }
+
                     const page = pdfDoc.addPage([image.width, image.height]);
                     page.drawImage(image, {
                         x: 0,
@@ -473,35 +598,18 @@ export const usePdfEditor = () => {
                     const pdfBytes = await pdfDoc.save();
                     arrayBuffer = toArrayBuffer(pdfBytes);
 
-                    // IMPORTANT: Replace the original image file with this new PDF file
-                    // so that exportPdf reads this PDF buffer instead of the original image bytes.
                     const newFileName = file.name.replace(/\.(jpg|jpeg|png)$/i, '.pdf');
-                    // Create a new File object
                     const newFile = new File([arrayBuffer], newFileName, { type: 'application/pdf' });
-                    // Using distinct variable to avoid TS const re-assignment if we didn't use 'let' loop var, 
-                    // but here 'file' is const in for-loop. We need to use this newFile in newFilesMap.
 
-                    // We need to update the usage below to use newFile instead of file
-                    // Let's store it in a map to override
                     newFilesMap[fileId] = {
                         id: fileId,
                         file: newFile,
-                        pdfDoc: await pdfJs.getDocument({ data: arrayBuffer }).promise,
-                        pageCount: 1 // We know it's 1 page
+                        pdfDoc: await pdfJs.getDocument({ data: cloneArrayBuffer(arrayBuffer) }).promise,
+                        pageCount: 1
                     };
 
-                    // Skip the default loading below for this file
-                    const pdfDocJS = newFilesMap[fileId].pdfDoc!;
-                    for (let i = 1; i <= pdfDocJS.numPages; i++) {
-                        newPages.push({
-                            id: `${fileId}-${i}-${createId().slice(0, 8)}`,
-                            fileId,
-                            pageIndex: i,
-                            rotation: 0,
-                            annotations: []
-                        });
-                    }
-                    continue; // Skip the rest of the loop for this file
+                    appendFilePages(fileId, 1);
+                    continue;
                 }
 
                 // DOCX Handling
@@ -513,7 +621,6 @@ export const usePdfEditor = () => {
                     const pageWidthPx = 794;
                     const pageHeightPx = 1123;
 
-                    // Create container for docx-preview rendering
                     const container = document.createElement('div');
                     container.style.width = `${pageWidthPx}px`;
                     container.style.backgroundColor = 'white';
@@ -522,36 +629,40 @@ export const usePdfEditor = () => {
                     container.style.top = '0';
                     container.style.zIndex = '-9999';
                     container.style.overflow = 'visible';
-                    document.body.appendChild(container);
+                    let canvas: HTMLCanvasElement;
+                    try {
+                        document.body.appendChild(container);
 
-                    // Render DOCX using docx-preview
-                    await docxPreview.renderAsync(arrayBuffer, container, undefined, {
-                        className: 'docx-preview',
-                        inWrapper: false,
-                        ignoreWidth: false,
-                        ignoreHeight: false,
-                        ignoreFonts: false,
-                        breakPages: true,
-                        ignoreLastRenderedPageBreak: false,
-                        experimental: true,
-                        trimXmlDeclaration: true,
-                        useBase64URL: true
-                    });
+                        await docxPreview.renderAsync(arrayBuffer, container, undefined, {
+                            className: 'docx-preview',
+                            inWrapper: false,
+                            ignoreWidth: false,
+                            ignoreHeight: false,
+                            ignoreFonts: false,
+                            breakPages: true,
+                            ignoreLastRenderedPageBreak: false,
+                            experimental: true,
+                            trimXmlDeclaration: true,
+                            useBase64URL: true
+                        });
 
-                    // Wait for rendering to complete
-                    await new Promise(r => setTimeout(r, 500));
+                        await new Promise(r => setTimeout(r, 500));
 
-                    // Capture the rendered content
-                    const canvas = await html2canvas(container, {
-                        scale: 1,
-                        useCORS: true,
-                        logging: false,
-                        width: pageWidthPx,
-                        windowWidth: pageWidthPx,
-                        scrollY: -window.scrollY
-                    });
+                        canvas = await html2canvas(container, {
+                            scale: 1,
+                            useCORS: true,
+                            logging: false,
+                            width: pageWidthPx,
+                            windowWidth: pageWidthPx,
+                            scrollY: -window.scrollY
+                        });
+                    } finally {
+                        container.remove();
+                    }
 
-                    document.body.removeChild(container);
+                    if (canvas.height > MAX_CANVAS_HEIGHT_PX) {
+                        throw new Error(`Rendered document exceeds the ${MAX_CANVAS_HEIGHT_PX}px height limit.`);
+                    }
 
                     // Create PDF with pdf-lib
                     const pdfDoc = await pdfLib.PDFDocument.create();
@@ -663,7 +774,7 @@ export const usePdfEditor = () => {
                     const newFileName = file.name.replace(/\.docx$/i, '.pdf');
                     const newFile = new File([arrayBuffer], newFileName, { type: 'application/pdf' });
 
-                    const loadingTask = pdfJs.getDocument({ data: arrayBuffer });
+                    const loadingTask = pdfJs.getDocument({ data: cloneArrayBuffer(arrayBuffer) });
                     const loadedPdf = await loadingTask.promise;
 
                     newFilesMap[fileId] = {
@@ -673,15 +784,7 @@ export const usePdfEditor = () => {
                         pageCount: loadedPdf.numPages
                     };
 
-                    for (let i = 1; i <= loadedPdf.numPages; i++) {
-                        newPages.push({
-                            id: `${fileId}-${i}-${createId().slice(0, 8)}`,
-                            fileId,
-                            pageIndex: i,
-                            rotation: 0,
-                            annotations: []
-                        });
-                    }
+                    appendFilePages(fileId, loadedPdf.numPages);
                     continue;
                 }
 
@@ -755,20 +858,26 @@ export const usePdfEditor = () => {
                         container.style.lineHeight = '1.5';
                         container.style.color = '#000';
                         container.innerHTML = htmlContent || '<p>No text content found.</p>';
-                        document.body.appendChild(container);
+                        let canvas: HTMLCanvasElement;
+                        try {
+                            document.body.appendChild(container);
 
-                        // Wait for rendering
-                        await new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r)));
+                            await new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r)));
 
-                        const canvas = await html2canvas(container, {
-                            scale: 1,
-                            useCORS: true,
-                            logging: false,
-                            width: pageWidthPx,
-                            windowWidth: pageWidthPx
-                        });
+                            canvas = await html2canvas(container, {
+                                scale: 1,
+                                useCORS: true,
+                                logging: false,
+                                width: pageWidthPx,
+                                windowWidth: pageWidthPx
+                            });
+                        } finally {
+                            container.remove();
+                        }
 
-                        document.body.removeChild(container);
+                        if (canvas.height > MAX_CANVAS_HEIGHT_PX) {
+                            throw new Error(`Rendered document exceeds the ${MAX_CANVAS_HEIGHT_PX}px height limit.`);
+                        }
 
                         // Create PDF with pdf-lib
                         const pdfDoc = await pdfLib.PDFDocument.create();
@@ -877,7 +986,7 @@ export const usePdfEditor = () => {
                         const newFileName = file.name.replace(/\.odt$/i, '.pdf');
                         const newFile = new File([arrayBuffer], newFileName, { type: 'application/pdf' });
 
-                        const loadingTask = pdfJs.getDocument({ data: arrayBuffer });
+                        const loadingTask = pdfJs.getDocument({ data: cloneArrayBuffer(arrayBuffer) });
                         const loadedPdf = await loadingTask.promise;
 
                         newFilesMap[fileId] = {
@@ -887,20 +996,12 @@ export const usePdfEditor = () => {
                             pageCount: loadedPdf.numPages
                         };
 
-                        for (let i = 1; i <= loadedPdf.numPages; i++) {
-                            newPages.push({
-                                id: `${fileId}-${i}-${createId().slice(0, 8)}`,
-                                fileId,
-                                pageIndex: i,
-                                rotation: 0,
-                                annotations: []
-                            });
-                        }
+                        appendFilePages(fileId, loadedPdf.numPages);
                         continue;
                     }
                 }
 
-                const loadingTask = pdfJs.getDocument({ data: arrayBuffer });
+                const loadingTask = pdfJs.getDocument({ data: cloneArrayBuffer(arrayBuffer) });
                 const pdfDoc = await loadingTask.promise;
 
                 newFilesMap[fileId] = {
@@ -910,25 +1011,27 @@ export const usePdfEditor = () => {
                     pageCount: pdfDoc.numPages
                 };
 
-                for (let i = 1; i <= pdfDoc.numPages; i++) {
-                    newPages.push({
-                        id: `${fileId}-${i}-${createId().slice(0, 8)}`,
-                        fileId,
-                        pageIndex: i,
-                        rotation: 0,
-                        annotations: []
-                    });
-                }
+                appendFilePages(fileId, pdfDoc.numPages);
             } catch (error) {
+                delete newFilesMap[fileId];
+                failedReasons.push(`${file.name}: could not be imported.`);
                 console.error(`Error loading file ${file.name}:`, error);
-                // Handle error (maybe skip file or show notification)
             }
         }
 
-        setFiles(prev => ({ ...prev, ...newFilesMap }));
-        // Ensure strictly new array for history
-        setPages(prev => [...prev, ...newPages]);
-    }, [setPages]);
+            if (failedReasons.length > 0) {
+                alert(`Some files could not be imported:\n${failedReasons.join('\n')}`);
+            }
+            if (Object.keys(newFilesMap).length > 0) {
+                setFiles(prev => ({ ...prev, ...newFilesMap }));
+            }
+            if (newPages.length > 0) {
+                setPages(prev => [...prev, ...newPages]);
+            }
+        } finally {
+            setIsProcessing(false);
+        }
+    }, [pages.length, setPages]);
 
     const movePage = useCallback((activeId: string, overId: string) => {
         setPages((items) => {
@@ -1269,6 +1372,18 @@ export const usePdfEditor = () => {
         const newPdf = await pdfLib.PDFDocument.create();
         const marginPercent = Math.max(0, Math.min(printOverlayOptions.marginPercent, 20));
         const cropZoom = getCropZoom(Math.max(0, Math.min(printOverlayOptions.cropPercent, 20)));
+        const sourcePdfCache = new Map<string, Promise<PDFDocument>>();
+
+        const loadSourcePdf = (fileData: EditorFile) => {
+            const cachedPdf = sourcePdfCache.get(fileData.id);
+            if (cachedPdf) {
+                return cachedPdf;
+            }
+
+            const pdfPromise = fileData.file.arrayBuffer().then((fileBuffer) => pdfLib.PDFDocument.load(fileBuffer));
+            sourcePdfCache.set(fileData.id, pdfPromise);
+            return pdfPromise;
+        };
 
         for (const [pagePosition, page] of sourcePages.entries()) {
             const fileData = files[page.fileId];
@@ -1276,8 +1391,7 @@ export const usePdfEditor = () => {
                 continue;
             }
 
-            const fileBuffer = await fileData.file.arrayBuffer();
-            const srcPdf = await pdfLib.PDFDocument.load(fileBuffer);
+            const srcPdf = await loadSourcePdf(fileData);
             const srcPage = srcPdf.getPage(page.pageIndex - 1);
             const srcRotation = srcPage.getRotation().angle;
             const totalRotation = (srcRotation + page.rotation) % 360;

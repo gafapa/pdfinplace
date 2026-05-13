@@ -27,6 +27,9 @@ type ResizeHandle = 'tl' | 'tr' | 'bl' | 'br' | null;
 type ShapeTool = Extract<Tool, 'rectangle' | 'circle' | 'line'>;
 const TEXT_FONTS = ['Arial', 'Times New Roman', 'Georgia', 'Verdana', 'Courier New'] as const;
 const STROKE_GRAPHIC_OPTIONS = [1, 2, 4, 8, 12, 16, 24, 32] as const;
+const MAX_UPLOAD_IMAGE_BYTES = 10 * 1024 * 1024;
+const MAX_UPLOAD_IMAGE_PIXELS = 16_000_000;
+const MAX_SAVED_ASSETS = 30;
 
 interface PageEditorModalProps {
     isOpen: boolean;
@@ -110,6 +113,10 @@ export const PageEditorModal = ({
     const fileInputRef = useRef<HTMLInputElement>(null);
     const textareaRef = useRef<HTMLTextAreaElement>(null);
     const editingTextIdRef = useRef<string | null>(null);
+    const imageCacheRef = useRef<Map<string, HTMLImageElement>>(new Map());
+    const canvasBoundsRef = useRef<DOMRect | null>(null);
+    const pointerMoveFrameRef = useRef<number | null>(null);
+    const pendingPointerCoordsRef = useRef<{ x: number; y: number } | null>(null);
 
     const totalRotation = (nativeRotation + pageRotation) % 360;
     const isLandscape = (totalRotation % 180) !== 0;
@@ -306,7 +313,7 @@ export const PageEditorModal = ({
     }, [canvasWidth, canvasHeight]);
 
     const addSavedAsset = useCallback((asset: SavedAsset) => {
-        setSavedAssets(prev => [asset, ...prev.filter(item => item.id !== asset.id)]);
+        setSavedAssets(prev => [asset, ...prev.filter(item => item.id !== asset.id)].slice(0, MAX_SAVED_ASSETS));
     }, []);
 
     const insertSavedAsset = useCallback((asset: SavedAsset) => {
@@ -380,6 +387,41 @@ export const PageEditorModal = ({
         }
     }, [editingTextId]);
 
+    useEffect(() => {
+        return () => {
+            if (pointerMoveFrameRef.current !== null) {
+                cancelAnimationFrame(pointerMoveFrameRef.current);
+            }
+        };
+    }, []);
+
+    useEffect(() => {
+        const referencedDataUrls = new Set(
+            annotations
+                .filter((ann) => ann.type === 'image' || ann.type === 'signature')
+                .map((ann) => (ann.data as ImageAnnotationData).dataUrl)
+        );
+
+        imageCacheRef.current.forEach((_, dataUrl) => {
+            if (!referencedDataUrls.has(dataUrl) && !savedAssets.some((asset) => asset.dataUrl === dataUrl)) {
+                imageCacheRef.current.delete(dataUrl);
+            }
+        });
+    }, [annotations, savedAssets]);
+
+    const getCachedImage = useCallback((dataUrl: string) => {
+        const cachedImage = imageCacheRef.current.get(dataUrl);
+        if (cachedImage) {
+            return cachedImage;
+        }
+
+        const image = new Image();
+        image.onload = () => setImageRenderTick(prev => prev + 1);
+        image.src = dataUrl;
+        imageCacheRef.current.set(dataUrl, image);
+        return image;
+    }, []);
+
     const drawAnnotations = useCallback(() => {
         const canvas = canvasRef.current;
         if (!canvas) return;
@@ -445,12 +487,9 @@ export const PageEditorModal = ({
                 });
             } else if (ann.type === 'image' || ann.type === 'signature') {
                 const data = ann.data as ImageAnnotationData;
-                const img = new Image();
-                img.src = data.dataUrl;
+                const img = getCachedImage(data.dataUrl);
                 if (img.complete) {
                     ctx.drawImage(img, ann.x, ann.y, ann.width, ann.height);
-                } else {
-                    img.onload = () => setImageRenderTick(prev => prev + 1);
                 }
             }
 
@@ -505,7 +544,7 @@ export const PageEditorModal = ({
             }
             ctx.restore();
         }
-    }, [annotations, selectedAnnotationId, interactionMode, currentDrawing, activeTool, color, strokeWidth, editingTextId, getTextLayout]);
+    }, [annotations, selectedAnnotationId, interactionMode, currentDrawing, activeTool, color, strokeWidth, editingTextId, getTextLayout, getCachedImage]);
 
     useEffect(() => {
         drawAnnotations();
@@ -514,12 +553,71 @@ export const PageEditorModal = ({
     const getCanvasCoords = (e: { clientX: number; clientY: number }): { x: number; y: number } => {
         const canvas = canvasRef.current;
         if (!canvas) return { x: 0, y: 0 };
-        const rect = canvas.getBoundingClientRect();
+        const rect = canvasBoundsRef.current ?? canvas.getBoundingClientRect();
         return {
             x: (e.clientX - rect.left) * (canvasWidth / rect.width),
             y: (e.clientY - rect.top) * (canvasHeight / rect.height)
         };
     };
+
+    const updatePointerInteraction = useCallback((coords: { x: number; y: number }) => {
+        if (interactionMode === 'moving' && selectedAnnotationId && initialAnnotationState) {
+            const dx = coords.x - dragStart.x;
+            const dy = coords.y - dragStart.y;
+            setAnnotations(prev => prev.map(ann =>
+                ann.id === selectedAnnotationId
+                    ? { ...ann, x: initialAnnotationState.x + dx, y: initialAnnotationState.y + dy }
+                    : ann
+            ));
+        } else if (interactionMode === 'resizing' && selectedAnnotationId && initialAnnotationState && resizeHandle) {
+            const dx = coords.x - dragStart.x;
+            const dy = coords.y - dragStart.y;
+
+            setAnnotations(prev => prev.map(ann => {
+                if (ann.id !== selectedAnnotationId) return ann;
+
+                let { x, y, width, height } = initialAnnotationState;
+                if (resizeHandle === 'br') {
+                    width += dx;
+                    height += dy;
+                } else if (resizeHandle === 'tl') {
+                    x += dx;
+                    y += dy;
+                    width -= dx;
+                    height -= dy;
+                } else if (resizeHandle === 'tr') {
+                    y += dy;
+                    width += dx;
+                    height -= dy;
+                } else if (resizeHandle === 'bl') {
+                    x += dx;
+                    width -= dx;
+                    height += dy;
+                }
+
+                return { ...ann, x, y, width: Math.max(10, width), height: Math.max(10, height) };
+            }));
+        } else if (interactionMode === 'drawing') {
+            setCurrentDrawing(prev => [...prev, coords]);
+        }
+    }, [dragStart.x, dragStart.y, initialAnnotationState, interactionMode, resizeHandle, selectedAnnotationId]);
+
+    const schedulePointerInteractionUpdate = useCallback((coords: { x: number; y: number }) => {
+        pendingPointerCoordsRef.current = coords;
+
+        if (pointerMoveFrameRef.current !== null) {
+            return;
+        }
+
+        pointerMoveFrameRef.current = requestAnimationFrame(() => {
+            pointerMoveFrameRef.current = null;
+            const latestCoords = pendingPointerCoordsRef.current;
+            pendingPointerCoordsRef.current = null;
+            if (latestCoords) {
+                updatePointerInteraction(latestCoords);
+            }
+        });
+    }, [updatePointerInteraction]);
 
     const isPointInHandle = (px: number, py: number, ann: Annotation): ResizeHandle => {
         const handleSize = 10;
@@ -540,6 +638,7 @@ export const PageEditorModal = ({
     const handlePointerDown = (e: React.PointerEvent<HTMLCanvasElement>) => {
         const startPointerInteraction = () => {
             e.preventDefault();
+            canvasBoundsRef.current = e.currentTarget.getBoundingClientRect();
             e.currentTarget.setPointerCapture(e.pointerId);
         };
         // If clicking outside while editing, complete it but DON'T RETURN yet
@@ -616,46 +715,7 @@ export const PageEditorModal = ({
         e.preventDefault();
         if (editingTextIdRef.current) return;
         const coords = getCanvasCoords(e);
-
-        if (interactionMode === 'moving' && selectedAnnotationId && initialAnnotationState) {
-            const dx = coords.x - dragStart.x;
-            const dy = coords.y - dragStart.y;
-            setAnnotations(prev => prev.map(ann =>
-                ann.id === selectedAnnotationId
-                    ? { ...ann, x: initialAnnotationState.x + dx, y: initialAnnotationState.y + dy }
-                    : ann
-            ));
-        } else if (interactionMode === 'resizing' && selectedAnnotationId && initialAnnotationState && resizeHandle) {
-            const dx = coords.x - dragStart.x;
-            const dy = coords.y - dragStart.y;
-
-            setAnnotations(prev => prev.map(ann => {
-                if (ann.id !== selectedAnnotationId) return ann;
-
-                let { x, y, width, height } = initialAnnotationState;
-                if (resizeHandle === 'br') {
-                    width += dx;
-                    height += dy;
-                } else if (resizeHandle === 'tl') {
-                    x += dx;
-                    y += dy;
-                    width -= dx;
-                    height -= dy;
-                } else if (resizeHandle === 'tr') {
-                    y += dy;
-                    width += dx;
-                    height -= dy;
-                } else if (resizeHandle === 'bl') {
-                    x += dx;
-                    width -= dx;
-                    height += dy;
-                }
-
-                return { ...ann, x, y, width: Math.max(10, width), height: Math.max(10, height) };
-            }));
-        } else if (interactionMode === 'drawing') {
-            setCurrentDrawing(prev => [...prev, coords]);
-        }
+        schedulePointerInteractionUpdate(coords);
     };
 
     const handlePointerUp = (e?: React.PointerEvent<HTMLCanvasElement>) => {
@@ -666,22 +726,37 @@ export const PageEditorModal = ({
             }
         }
 
-        if (interactionMode === 'drawing' && currentDrawing.length > 0) {
-            const start = currentDrawing[0];
-            const end = currentDrawing[currentDrawing.length - 1];
+        const pendingCoords = pendingPointerCoordsRef.current;
+        if (pointerMoveFrameRef.current !== null) {
+            cancelAnimationFrame(pointerMoveFrameRef.current);
+            pointerMoveFrameRef.current = null;
+        }
+        pendingPointerCoordsRef.current = null;
+
+        if (pendingCoords && interactionMode !== 'drawing') {
+            updatePointerInteraction(pendingCoords);
+        }
+
+        const finalizedDrawing = pendingCoords && interactionMode === 'drawing'
+            ? [...currentDrawing, pendingCoords]
+            : currentDrawing;
+
+        if (interactionMode === 'drawing' && finalizedDrawing.length > 0) {
+            const start = finalizedDrawing[0];
+            const end = finalizedDrawing[finalizedDrawing.length - 1];
 
             let newAnn: Annotation | null = null;
-            if (activeTool === 'draw' && currentDrawing.length > 1) {
-                const xs = currentDrawing.map(p => p.x);
-                const ys = currentDrawing.map(p => p.y);
+            if (activeTool === 'draw' && finalizedDrawing.length > 1) {
+                const xs = finalizedDrawing.map(p => p.x);
+                const ys = finalizedDrawing.map(p => p.y);
                 const minX = Math.min(...xs), minY = Math.min(...ys), maxX = Math.max(...xs), maxY = Math.max(...ys);
                 newAnn = {
                     id: createId(),
                     type: 'drawing',
                     x: minX, y: minY, width: maxX - minX, height: maxY - minY, rotation: 0,
-                    data: { points: currentDrawing, strokeColor: color, strokeWidth }
+                    data: { points: finalizedDrawing, strokeColor: color, strokeWidth }
                 };
-            } else if (isShapeTool(activeTool) && currentDrawing.length >= 2) {
+            } else if (isShapeTool(activeTool) && finalizedDrawing.length >= 2) {
                 newAnn = {
                     id: createId(),
                     type: 'shape',
@@ -710,11 +785,19 @@ export const PageEditorModal = ({
         setInteractionMode('idle');
         setResizeHandle(null);
         setInitialAnnotationState(null);
+        canvasBoundsRef.current = null;
     };
 
     const handleImageUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
         const file = e.target.files?.[0];
         if (!file) return;
+
+        if (!file.type.startsWith('image/') || file.size > MAX_UPLOAD_IMAGE_BYTES) {
+            alert('Choose an image up to 10 MB.');
+            e.target.value = '';
+            return;
+        }
+
         const reader = new FileReader();
         reader.onload = (event) => {
             const result = event.target?.result;
@@ -723,12 +806,19 @@ export const PageEditorModal = ({
             }
             const img = new Image();
             img.onload = () => {
+                if (img.width * img.height > MAX_UPLOAD_IMAGE_PIXELS) {
+                    alert('Choose a smaller image.');
+                    return;
+                }
+
                 if (uploadTarget === 'canvas') {
+                    imageCacheRef.current.set(result, img);
                     const newAnnotation = createImageLikeAnnotation(result, img.width, img.height);
                     setAnnotations(prev => [...prev, newAnnotation]);
                     setSelectedAnnotationId(newAnnotation.id);
                     setActiveTool('select');
                 } else {
+                    imageCacheRef.current.set(result, img);
                     addSavedAsset({
                         id: createId(),
                         name: `${uploadTarget}-${savedAssets.length + 1}`,

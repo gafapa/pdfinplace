@@ -252,15 +252,18 @@ export const PdfEditor = () => {
     }, [isExportPanelOpen]);
 
     const handleFilesPicked = useCallback((filesList: FileList | null) => {
-        if (!filesList) {
+        if (!filesList || isProcessing) {
             return;
         }
         addFiles(Array.from(filesList));
-    }, [addFiles]);
+    }, [addFiles, isProcessing]);
 
     const triggerAddFiles = useCallback(() => {
+        if (isProcessing) {
+            return;
+        }
         addFilesInputRef.current?.click();
-    }, []);
+    }, [isProcessing]);
 
     const handleExport = useCallback(() => {
         if (!canExport) {
@@ -512,6 +515,9 @@ export const PdfEditor = () => {
     const handleDrop = (e: React.DragEvent) => {
         e.preventDefault();
         e.stopPropagation();
+        if (isProcessing) {
+            return;
+        }
         if (e.dataTransfer.files && e.dataTransfer.files.length > 0) {
             const droppedFiles = Array.from(e.dataTransfer.files).filter(file =>
                 file.type === 'application/pdf' ||
@@ -597,6 +603,7 @@ export const PdfEditor = () => {
                         <button
                             type="button"
                             onClick={triggerAddFiles}
+                            disabled={isProcessing}
                             className={`${toolbarIconButtonClass} shrink-0`}
                             title={t('common.add')}
                             aria-label={t('common.add')}
@@ -605,6 +612,7 @@ export const PdfEditor = () => {
                         </button>
                         <button
                             onClick={clearAll}
+                            disabled={isProcessing}
                             className={toolbarIconButtonClass}
                             title={t('common.clear')}
                             aria-label={t('common.clear')}

@@ -1,73 +1,71 @@
-# React + TypeScript + Vite
+# PageForge
 
-This template provides a minimal setup to get React working in Vite with HMR and some ESLint rules.
+PageForge is a browser-based PDF editor built with React, TypeScript, Vite, Tailwind CSS, pdf.js, pdf-lib, and @libpdf/core.
 
-Currently, two official plugins are available:
+It runs entirely in the browser. Imported documents, reusable signatures/stamps, preferences, and the current session are stored locally in the user's browser storage.
 
-- [@vitejs/plugin-react](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react) uses [Babel](https://babeljs.io/) (or [oxc](https://oxc.rs) when used in [rolldown-vite](https://vite.dev/guide/rolldown)) for Fast Refresh
-- [@vitejs/plugin-react-swc](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react-swc) uses [SWC](https://swc.rs/) for Fast Refresh
+## Features
 
-## React Compiler
+- Import PDF, JPG, PNG, DOCX, and ODT files.
+- Reorder, rotate, duplicate, delete, select, split, and export pages.
+- Export all pages, selected pages, or a page range.
+- Add text, drawings, shapes, images, signatures, and stamps to pages.
+- Add watermark, header, footer, margins, crop, and page numbers.
+- Protect exported PDFs with AES-256 encryption.
+- Unlock password-protected PDFs when the user provides the password.
+- Restore the latest local editing session from IndexedDB.
+- Install and run as a PWA.
 
-The React Compiler is not enabled on this template because of its impact on dev & build performances. To add it, see [this documentation](https://react.dev/learn/react-compiler/installation).
+## Local Development
 
-## Expanding the ESLint configuration
-
-If you are developing a production application, we recommend updating the configuration to enable type-aware lint rules:
-
-```js
-export default defineConfig([
-  globalIgnores(['dist']),
-  {
-    files: ['**/*.{ts,tsx}'],
-    extends: [
-      // Other configs...
-
-      // Remove tseslint.configs.recommended and replace with this
-      tseslint.configs.recommendedTypeChecked,
-      // Alternatively, use this for stricter rules
-      tseslint.configs.strictTypeChecked,
-      // Optionally, add this for stylistic rules
-      tseslint.configs.stylisticTypeChecked,
-
-      // Other configs...
-    ],
-    languageOptions: {
-      parserOptions: {
-        project: ['./tsconfig.node.json', './tsconfig.app.json'],
-        tsconfigRootDir: import.meta.dirname,
-      },
-      // other options...
-    },
-  },
-])
+```bash
+npm install
+npm run dev
 ```
 
-You can also install [eslint-plugin-react-x](https://github.com/Rel1cx/eslint-react/tree/main/packages/plugins/eslint-plugin-react-x) and [eslint-plugin-react-dom](https://github.com/Rel1cx/eslint-react/tree/main/packages/plugins/eslint-plugin-react-dom) for React-specific lint rules:
+## Quality Checks
 
-```js
-// eslint.config.js
-import reactX from 'eslint-plugin-react-x'
-import reactDom from 'eslint-plugin-react-dom'
-
-export default defineConfig([
-  globalIgnores(['dist']),
-  {
-    files: ['**/*.{ts,tsx}'],
-    extends: [
-      // Other configs...
-      // Enable lint rules for React
-      reactX.configs['recommended-typescript'],
-      // Enable lint rules for React DOM
-      reactDom.configs.recommended,
-    ],
-    languageOptions: {
-      parserOptions: {
-        project: ['./tsconfig.node.json', './tsconfig.app.json'],
-        tsconfigRootDir: import.meta.dirname,
-      },
-      // other options...
-    },
-  },
-])
+```bash
+npm run lint
+npm run build
+npm audit --omit=dev
 ```
+
+The project includes a local `.npmrc` that points npm to the official npm registry, so `npm audit` works even when a global npm mirror is configured.
+
+## Production Build
+
+```bash
+npm run build
+npm run preview
+```
+
+The production app is emitted to `dist/`.
+
+## Browser Storage And Privacy
+
+PageForge does not upload files to a server. The browser stores:
+
+- The current editing session in IndexedDB.
+- Export history and UI preferences in localStorage.
+- Saved signatures and stamps in localStorage.
+- PWA shell and same-origin assets in the service worker cache.
+
+Use the in-app clear action or the browser site-data controls to remove local data.
+
+## Import Limits
+
+The app rejects oversized imports before expensive parsing or rendering:
+
+- Maximum files per batch: 20.
+- Maximum single file size: 75 MB.
+- Maximum batch size: 250 MB.
+- Maximum active imported pages: 500.
+- Maximum imported image size: 32 megapixels.
+- Maximum rendered DOCX/ODT canvas height: 160,000 px.
+
+These limits protect the browser from memory exhaustion when processing large PDFs or office documents.
+
+## Dependency Notes
+
+Most dependencies are kept on compatible semver ranges. Major upgrades such as Vite 8, ESLint 10, TypeScript 6, and Lucide 1 should be tested separately because they may require configuration or API changes.

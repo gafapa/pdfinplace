@@ -13,6 +13,8 @@ type PdfJsModule = typeof import('pdfjs-dist');
 type PdfDocumentProxy = import('pdfjs-dist').PDFDocumentProxy;
 type PdfRenderTask = import('pdfjs-dist').RenderTask;
 
+const cloneArrayBuffer = (buffer: ArrayBuffer) => buffer.slice(0);
+
 interface PdfPreviewProps {
     file?: File;
     pdfDocument?: PdfDocumentProxy;
@@ -27,6 +29,7 @@ interface PdfPreviewProps {
 export const PdfPreview = ({ file, pdfDocument, pageIndex = 1, width = 200, height, rotation = 0, className = "", annotations = [] }: PdfPreviewProps) => {
     const { t } = useI18n();
     const canvasRef = useRef<HTMLCanvasElement>(null);
+    const imageCacheRef = useRef<Map<string, HTMLImageElement>>(new Map());
     const [loading, setLoading] = useState(true);
     const [error, setError] = useState(false);
 
@@ -46,7 +49,7 @@ export const PdfPreview = ({ file, pdfDocument, pageIndex = 1, width = 200, heig
                     loadedPdf = pdfDocument;
                 } else if (file) {
                     const arrayBuffer = await file.arrayBuffer();
-                    loadingTask = pdfJs.getDocument({ data: arrayBuffer });
+                    loadingTask = pdfJs.getDocument({ data: cloneArrayBuffer(arrayBuffer) });
                     loadedPdf = await loadingTask.promise;
                 } else {
                     return;
@@ -144,17 +147,22 @@ export const PdfPreview = ({ file, pdfDocument, pageIndex = 1, width = 200, heig
                                     });
                                 } else if (ann.type === 'image' || ann.type === 'signature') {
                                     const data = ann.data as ImageAnnotationData;
-                                    const img = new Image();
-                                    img.src = data.dataUrl;
+                                    let img = imageCacheRef.current.get(data.dataUrl);
+                                    if (!img) {
+                                        img = new Image();
+                                        imageCacheRef.current.set(data.dataUrl, img);
+                                    }
                                     if (img.complete) {
                                         context.drawImage(img, ann.x, ann.y, ann.width, ann.height);
                                     } else {
                                         img.onload = () => {
+                                            if (!isMounted) return;
                                             context.save();
                                             context.scale(annotationScale, annotationScale);
                                             context.drawImage(img, ann.x, ann.y, ann.width, ann.height);
                                             context.restore();
                                         };
+                                        img.src = data.dataUrl;
                                     }
                                 }
 
