@@ -12,6 +12,8 @@ import {
     Check,
     X,
     Trash2,
+    ZoomIn,
+    ZoomOut,
     MousePointer2,
     ChevronLeft,
     ChevronRight
@@ -27,6 +29,9 @@ type ResizeHandle = 'tl' | 'tr' | 'bl' | 'br' | null;
 type ShapeTool = Extract<Tool, 'rectangle' | 'circle' | 'line'>;
 const TEXT_FONTS = ['Arial', 'Times New Roman', 'Georgia', 'Verdana', 'Courier New'] as const;
 const STROKE_GRAPHIC_OPTIONS = [1, 2, 4, 8, 12, 16, 24, 32] as const;
+const MIN_EDITOR_ZOOM = 0.5;
+const MAX_EDITOR_ZOOM = 3;
+const EDITOR_ZOOM_STEP = 0.25;
 const MAX_UPLOAD_IMAGE_BYTES = 10 * 1024 * 1024;
 const MAX_UPLOAD_IMAGE_PIXELS = 16_000_000;
 const MAX_SAVED_ASSETS = 30;
@@ -51,6 +56,15 @@ interface SavedAsset {
 }
 
 const SAVED_ASSETS_STORAGE_KEY = 'pageforge.saved-assets';
+const LOCAL_PERSISTENCE_STORAGE_KEY = 'pageforge.local-persistence-enabled';
+
+const isLocalPersistenceEnabled = () => {
+    if (typeof window === 'undefined') {
+        return false;
+    }
+
+    return localStorage.getItem(LOCAL_PERSISTENCE_STORAGE_KEY) === 'true';
+};
 
 const getInitialAssetsPanelOpen = () => {
     if (typeof window === 'undefined') {
@@ -89,9 +103,15 @@ export const PageEditorModal = ({
     const [textItalic, setTextItalic] = useState(false);
     const [imageRenderTick, setImageRenderTick] = useState(0);
     const [nativeRotation, setNativeRotation] = useState(0);
-    const [editorScale, setEditorScale] = useState(1);
+    const [fitScale, setFitScale] = useState(1);
+    const [editorZoom, setEditorZoom] = useState(1);
     const [savedAssets, setSavedAssets] = useState<SavedAsset[]>(() => {
         try {
+            if (!isLocalPersistenceEnabled()) {
+                localStorage.removeItem(SAVED_ASSETS_STORAGE_KEY);
+                return [];
+            }
+
             const rawAssets = localStorage.getItem(SAVED_ASSETS_STORAGE_KEY);
             if (!rawAssets) {
                 return [];
@@ -122,6 +142,8 @@ export const PageEditorModal = ({
     const isLandscape = (totalRotation % 180) !== 0;
     const canvasWidth = isLandscape ? 1000 : 800;
     const canvasHeight = isLandscape ? 800 : 1000;
+    const editorScale = fitScale * editorZoom;
+    const editorZoomPercent = Math.round(editorZoom * 100);
 
     // Sync ref with state for event handlers
     useEffect(() => {
@@ -130,7 +152,11 @@ export const PageEditorModal = ({
 
     useEffect(() => {
         try {
-            localStorage.setItem(SAVED_ASSETS_STORAGE_KEY, JSON.stringify(savedAssets));
+            if (isLocalPersistenceEnabled()) {
+                localStorage.setItem(SAVED_ASSETS_STORAGE_KEY, JSON.stringify(savedAssets));
+            } else {
+                localStorage.removeItem(SAVED_ASSETS_STORAGE_KEY);
+            }
         } catch (error) {
             console.error('Failed to persist saved assets:', error);
         }
@@ -148,19 +174,16 @@ export const PageEditorModal = ({
 
         const measureCanvas = canvasRef.current;
         const measureCtx = measureCanvas?.getContext('2d');
-        let measuredWidth = 0;
-
-        if (measureCtx) {
+        const measuredWidth = measureCtx ? (() => {
             measureCtx.save();
             measureCtx.font = font;
-            measuredWidth = normalizedLines.reduce((max, line) => {
+            const width = normalizedLines.reduce((max, line) => {
                 const sample = line.length > 0 ? line : ' ';
                 return Math.max(max, measureCtx.measureText(sample).width);
             }, 0);
             measureCtx.restore();
-        } else {
-            measuredWidth = normalizedLines.reduce((max, line) => Math.max(max, line.length * data.fontSize * 0.55), 0);
-        }
+            return width;
+        })() : normalizedLines.reduce((max, line) => Math.max(max, line.length * data.fontSize * 0.55), 0);
 
         return {
             lines: normalizedLines,
@@ -227,7 +250,7 @@ export const PageEditorModal = ({
             const widthScale = availableWidth / canvasWidth;
             const heightScale = availableHeight / canvasHeight;
             const nextScale = Math.min(1, widthScale, heightScale);
-            setEditorScale(Number.isFinite(nextScale) && nextScale > 0 ? nextScale : 1);
+            setFitScale(Number.isFinite(nextScale) && nextScale > 0 ? nextScale : 1);
         };
 
         recalculateScale();
@@ -793,7 +816,7 @@ export const PageEditorModal = ({
         if (!file) return;
 
         if (!file.type.startsWith('image/') || file.size > MAX_UPLOAD_IMAGE_BYTES) {
-            alert('Choose an image up to 10 MB.');
+            alert(t('modal.imageFileTooLarge'));
             e.target.value = '';
             return;
         }
@@ -807,7 +830,7 @@ export const PageEditorModal = ({
             const img = new Image();
             img.onload = () => {
                 if (img.width * img.height > MAX_UPLOAD_IMAGE_PIXELS) {
-                    alert('Choose a smaller image.');
+                    alert(t('modal.imagePixelsTooLarge'));
                     return;
                 }
 
@@ -900,6 +923,31 @@ export const PageEditorModal = ({
                         )}
                     </div>
                     <div className="flex items-center gap-2 justify-self-end">
+                        <div className="flex items-center gap-1 rounded-lg border border-gray-200 bg-white p-1">
+                            <button
+                                type="button"
+                                onClick={() => setEditorZoom(prev => Math.max(MIN_EDITOR_ZOOM, Number((prev - EDITOR_ZOOM_STEP).toFixed(2))))}
+                                disabled={editorZoom <= MIN_EDITOR_ZOOM}
+                                className="h-7 w-7 inline-flex items-center justify-center rounded-md text-gray-700 hover:bg-gray-50 disabled:opacity-30"
+                                title={t('editor.zoomOut')}
+                                aria-label={t('editor.zoomOut')}
+                            >
+                                <ZoomOut className="h-3.5 w-3.5" />
+                            </button>
+                            <span className="min-w-12 text-center text-[11px] font-semibold tabular-nums text-gray-600">
+                                {editorZoomPercent}%
+                            </span>
+                            <button
+                                type="button"
+                                onClick={() => setEditorZoom(prev => Math.min(MAX_EDITOR_ZOOM, Number((prev + EDITOR_ZOOM_STEP).toFixed(2))))}
+                                disabled={editorZoom >= MAX_EDITOR_ZOOM}
+                                className="h-7 w-7 inline-flex items-center justify-center rounded-md text-gray-700 hover:bg-gray-50 disabled:opacity-30"
+                                title={t('editor.zoomIn')}
+                                aria-label={t('editor.zoomIn')}
+                            >
+                                <ZoomIn className="h-3.5 w-3.5" />
+                            </button>
+                        </div>
                         <button
                             onClick={onClose}
                             className="h-9 w-9 inline-flex items-center justify-center rounded-lg border border-gray-200 bg-white hover:bg-gray-50 text-gray-700 transition-colors shrink-0"
@@ -1135,9 +1183,9 @@ export const PageEditorModal = ({
             </div>
 
             <div ref={editorViewportRef} className={`flex-1 overflow-auto custom-scrollbar bg-white p-2 pr-14 sm:p-4 sm:pr-16 lg:p-8 lg:pr-20 ${isAssetsPanelOpen ? 'lg:pl-[20rem]' : ''}`}>
-                <div className="mx-auto flex w-full justify-center">
+                <div className="flex min-h-full w-max min-w-full items-start justify-center">
                     <div
-                        className="relative"
+                        className="relative mx-auto"
                         style={{
                             width: canvasWidth * editorScale,
                             height: canvasHeight * editorScale

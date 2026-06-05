@@ -10,7 +10,7 @@ import type {
 import type { PDFDocument, PDFPage } from 'pdf-lib';
 import { createId } from '../utils/createId';
 import { clearPersistedSession, loadPersistedSession, savePersistedSession, type PersistedFileRecord } from '../utils/persistedSession';
-import { loadPdfJs } from '../utils/pdfjs';
+import { getPdfDocument, loadPdfDocument } from '../utils/pdfjs';
 
 type PdfLibModule = typeof import('pdf-lib');
 
@@ -123,6 +123,8 @@ const downloadPdfBytes = (pdfBytes: Uint8Array<ArrayBufferLike>, filename: strin
 const EXPORT_HISTORY_STORAGE_KEY = 'pageforge.export-history';
 const MAX_EXPORT_HISTORY = 10;
 const OVERLAY_OPTIONS_STORAGE_KEY = 'pageforge.overlay-options';
+const LOCAL_PERSISTENCE_STORAGE_KEY = 'pageforge.local-persistence-enabled';
+const SAVED_ASSETS_STORAGE_KEY = 'pageforge.saved-assets';
 const MAX_HISTORY_ENTRIES = 80;
 const SESSION_PERSIST_DEBOUNCE_MS = 600;
 const MAX_IMPORT_FILES = 20;
@@ -133,8 +135,25 @@ const MAX_IMAGE_PIXELS = 32_000_000;
 const MAX_CANVAS_HEIGHT_PX = 160_000;
 const SUPPORTED_IMPORT_EXTENSIONS = /\.(pdf|jpe?g|png|docx|odt)$/i;
 
-const loadExportHistory = (): ExportHistoryEntry[] => {
+const isLocalPersistenceEnabled = () => {
     if (typeof window === 'undefined') {
+        return false;
+    }
+
+    return localStorage.getItem(LOCAL_PERSISTENCE_STORAGE_KEY) === 'true';
+};
+
+const clearSensitiveBrowserData = async () => {
+    if (typeof window !== 'undefined') {
+        localStorage.removeItem(EXPORT_HISTORY_STORAGE_KEY);
+        localStorage.removeItem(SAVED_ASSETS_STORAGE_KEY);
+    }
+
+    await clearPersistedSession();
+};
+
+const loadExportHistory = (): ExportHistoryEntry[] => {
+    if (typeof window === 'undefined' || !isLocalPersistenceEnabled()) {
         return [];
     }
 
@@ -344,14 +363,6 @@ const hexToRgb = (hex: string, rgbFactory: PdfLibModule['rgb']) => {
     return rgbFactory(r, g, b);
 };
 
-const escapeHtml = (text: string): string =>
-    text
-        .replace(/&/g, '&amp;')
-        .replace(/</g, '&lt;')
-        .replace(/>/g, '&gt;')
-        .replace(/"/g, '&quot;')
-        .replace(/'/g, '&#39;');
-
 const isImageLikeAnnotation = (annotation: Annotation): annotation is Annotation & {
     type: 'image' | 'signature';
     data: ImageAnnotationData | { dataUrl: string };
@@ -386,6 +397,7 @@ export const usePdfEditor = () => {
     const [pageSize, setPageSize] = useState<PageSize>(getInitialPageSize);
     const [isSessionReady, setIsSessionReady] = useState(false);
     const [hasSavedSession, setHasSavedSession] = useState(false);
+    const [isSessionPersistenceEnabled, setIsSessionPersistenceEnabled] = useState(isLocalPersistenceEnabled);
     const persistedFileCacheRef = useRef<Record<string, PersistedFileRecord>>({});
     const [exportHistory, setExportHistory] = useState<ExportHistoryEntry[]>(loadExportHistory);
     const [printOverlayOptions, setPrintOverlayOptions] = useState<PrintOverlayOptions>(loadOverlayOptions);
@@ -403,15 +415,40 @@ export const usePdfEditor = () => {
                 ...prev,
             ].slice(0, MAX_EXPORT_HISTORY);
 
-            localStorage.setItem(EXPORT_HISTORY_STORAGE_KEY, JSON.stringify(nextHistory));
+            if (isSessionPersistenceEnabled) {
+                localStorage.setItem(EXPORT_HISTORY_STORAGE_KEY, JSON.stringify(nextHistory));
+            }
+
             return nextHistory;
         });
+    }, [isSessionPersistenceEnabled]);
+
+    const setSessionPersistenceEnabled = useCallback((enabled: boolean) => {
+        setIsSessionPersistenceEnabled(enabled);
+        localStorage.setItem(LOCAL_PERSISTENCE_STORAGE_KEY, String(enabled));
+
+        if (!enabled) {
+            persistedFileCacheRef.current = {};
+            setHasSavedSession(false);
+            setExportHistory([]);
+            void clearSensitiveBrowserData();
+        }
     }, []);
 
     useEffect(() => {
         let isCancelled = false;
 
         const restoreSession = async () => {
+            if (!isSessionPersistenceEnabled) {
+                persistedFileCacheRef.current = {};
+                await clearSensitiveBrowserData();
+                if (!isCancelled) {
+                    setHasSavedSession(false);
+                    setIsSessionReady(true);
+                }
+                return;
+            }
+
             try {
                 const persistedSession = await loadPersistedSession();
                 if (isCancelled || !persistedSession) {
@@ -433,8 +470,7 @@ export const usePdfEditor = () => {
                             type: persistedFile.type,
                             lastModified: persistedFile.lastModified,
                         });
-                        const pdfJs = await loadPdfJs();
-                        const pdfDoc = await pdfJs.getDocument({ data: cloneArrayBuffer(persistedFile.buffer) }).promise;
+                        const pdfDoc = await loadPdfDocument({ data: cloneArrayBuffer(persistedFile.buffer) });
 
                         return [persistedFile.id, {
                             id: persistedFile.id,
@@ -464,7 +500,7 @@ export const usePdfEditor = () => {
         return () => {
             isCancelled = true;
         };
-    }, [setPagesCurrentIndex, setPagesHistory]);
+    }, [isSessionPersistenceEnabled, setPagesCurrentIndex, setPagesHistory]);
 
     useEffect(() => {
         if (!isSessionReady) {
@@ -475,6 +511,13 @@ export const usePdfEditor = () => {
             if (pages.length === 0 || Object.keys(files).length === 0) {
                 persistedFileCacheRef.current = {};
                 await clearPersistedSession();
+                setHasSavedSession(false);
+                return;
+            }
+
+            if (!isSessionPersistenceEnabled) {
+                persistedFileCacheRef.current = {};
+                await clearSensitiveBrowserData();
                 setHasSavedSession(false);
                 return;
             }
@@ -525,7 +568,7 @@ export const usePdfEditor = () => {
         }, SESSION_PERSIST_DEBOUNCE_MS);
 
         return () => window.clearTimeout(timeoutId);
-    }, [files, pages, pageSize, isSessionReady]);
+    }, [files, pages, pageSize, isSessionReady, isSessionPersistenceEnabled]);
 
     useEffect(() => {
         localStorage.setItem(OVERLAY_OPTIONS_STORAGE_KEY, JSON.stringify(printOverlayOptions));
@@ -548,7 +591,6 @@ export const usePdfEditor = () => {
             const newPages: EditorPage[] = [];
             const failedReasons: string[] = [];
             const pdfLib = await loadPdfLib();
-            const pdfJs = await loadPdfJs();
             let importedPageCount = pages.length;
 
             const appendFilePages = (fileId: string, pageCount: number) => {
@@ -604,7 +646,7 @@ export const usePdfEditor = () => {
                     newFilesMap[fileId] = {
                         id: fileId,
                         file: newFile,
-                        pdfDoc: await pdfJs.getDocument({ data: cloneArrayBuffer(arrayBuffer) }).promise,
+                        pdfDoc: await loadPdfDocument({ data: cloneArrayBuffer(arrayBuffer) }),
                         pageCount: 1
                     };
 
@@ -774,7 +816,7 @@ export const usePdfEditor = () => {
                     const newFileName = file.name.replace(/\.docx$/i, '.pdf');
                     const newFile = new File([arrayBuffer], newFileName, { type: 'application/pdf' });
 
-                    const loadingTask = pdfJs.getDocument({ data: cloneArrayBuffer(arrayBuffer) });
+                    const loadingTask = await getPdfDocument({ data: cloneArrayBuffer(arrayBuffer) });
                     const loadedPdf = await loadingTask.promise;
 
                     newFilesMap[fileId] = {
@@ -800,42 +842,44 @@ export const usePdfEditor = () => {
                         const parser = new DOMParser();
                         const xmlDoc = parser.parseFromString(contentXml, "text/xml");
 
-                        // Create a simple HTML structure
-                        let htmlContent = '';
-
-                        const extractText = (node: Node): string => {
-                            let text = '';
+                        const appendExtractedText = (target: HTMLElement, node: Node) => {
                             node.childNodes.forEach(child => {
-                                if (child.nodeType === 3) text += escapeHtml(child.textContent ?? ''); // Text node
-                                else if (child.nodeName.endsWith(':s')) text += ' '; // Space
-                                else if (child.nodeName.endsWith(':tab')) text += '\t'; // Tab
-                                else if (child.nodeName.endsWith(':line-break')) text += '<br/>';
-                                else text += extractText(child);
+                                if (child.nodeType === Node.TEXT_NODE) {
+                                    target.appendChild(document.createTextNode(child.textContent ?? ''));
+                                } else if (child.nodeName.endsWith(':s')) {
+                                    target.appendChild(document.createTextNode(' '));
+                                } else if (child.nodeName.endsWith(':tab')) {
+                                    target.appendChild(document.createTextNode('\t'));
+                                } else if (child.nodeName.endsWith(':line-break')) {
+                                    target.appendChild(document.createElement('br'));
+                                } else {
+                                    appendExtractedText(target, child);
+                                }
                             });
-                            return text;
                         };
 
-                        const processNode = (node: Element) => {
+                        const processNode = (parent: HTMLElement, node: Element): boolean => {
                             const name = node.nodeName;
                             if (name.endsWith(':h')) {
                                 const level = node.getAttributeNS("*", "outline-level") || '1';
                                 const hLevel = parseInt(level) || 1;
-                                htmlContent += `<h${Math.min(6, hLevel)}>${extractText(node)}</h${Math.min(6, hLevel)}>`;
+                                const heading = document.createElement(`h${Math.min(6, hLevel)}`);
+                                appendExtractedText(heading, node);
+                                parent.appendChild(heading);
+                                return true;
                             } else if (name.endsWith(':p')) {
-                                htmlContent += `<p>${extractText(node)}</p>`;
-                            } else {
-                                for (let i = 0; i < node.children.length; i++) {
-                                    processNode(node.children[i]);
-                                }
+                                const paragraph = document.createElement('p');
+                                appendExtractedText(paragraph, node);
+                                parent.appendChild(paragraph);
+                                return true;
                             }
-                        }
 
-                        // Start from office:body -> office:text
-                        const officeText = xmlDoc.getElementsByTagNameNS("*", "text")[0];
-                        if (officeText) {
-                            for (let i = 0; i < officeText.children.length; i++) {
-                                processNode(officeText.children[i]);
+                            let appended = false;
+                            for (let i = 0; i < node.children.length; i++) {
+                                appended = processNode(parent, node.children[i]) || appended;
                             }
+
+                            return appended;
                         }
 
                         // A4 dimensions at 96 DPI
@@ -857,7 +901,18 @@ export const usePdfEditor = () => {
                         container.style.fontSize = '12pt';
                         container.style.lineHeight = '1.5';
                         container.style.color = '#000';
-                        container.innerHTML = htmlContent || '<p>No text content found.</p>';
+                        let hasTextContent = false;
+                        const officeText = xmlDoc.getElementsByTagNameNS("*", "text")[0];
+                        if (officeText) {
+                            for (let i = 0; i < officeText.children.length; i++) {
+                                hasTextContent = processNode(container, officeText.children[i]) || hasTextContent;
+                            }
+                        }
+                        if (!hasTextContent) {
+                            const emptyParagraph = document.createElement('p');
+                            emptyParagraph.textContent = 'No text content found.';
+                            container.appendChild(emptyParagraph);
+                        }
                         let canvas: HTMLCanvasElement;
                         try {
                             document.body.appendChild(container);
@@ -986,7 +1041,7 @@ export const usePdfEditor = () => {
                         const newFileName = file.name.replace(/\.odt$/i, '.pdf');
                         const newFile = new File([arrayBuffer], newFileName, { type: 'application/pdf' });
 
-                        const loadingTask = pdfJs.getDocument({ data: cloneArrayBuffer(arrayBuffer) });
+                        const loadingTask = await getPdfDocument({ data: cloneArrayBuffer(arrayBuffer) });
                         const loadedPdf = await loadingTask.promise;
 
                         newFilesMap[fileId] = {
@@ -1001,7 +1056,7 @@ export const usePdfEditor = () => {
                     }
                 }
 
-                const loadingTask = pdfJs.getDocument({ data: cloneArrayBuffer(arrayBuffer) });
+                const loadingTask = await getPdfDocument({ data: cloneArrayBuffer(arrayBuffer) });
                 const pdfDoc = await loadingTask.promise;
 
                 newFilesMap[fileId] = {
@@ -1564,8 +1619,7 @@ export const usePdfEditor = () => {
             return false;
         }
 
-        const normalizedPassword = password.trim();
-        if (!normalizedPassword) {
+        if (password.length === 0) {
             alert(labels?.invalidPassword ?? 'Please provide a valid password.');
             return false;
         }
@@ -1576,8 +1630,8 @@ export const usePdfEditor = () => {
             const { PDF: SecurePDF } = await import('@libpdf/core');
             const securePdf = await SecurePDF.load(rawBytes);
             securePdf.setProtection({
-                userPassword: normalizedPassword,
-                ownerPassword: normalizedPassword,
+                userPassword: password,
+                ownerPassword: createId(),
                 algorithm: 'AES-256',
             });
 
@@ -1659,6 +1713,8 @@ export const usePdfEditor = () => {
         isProcessing,
         isSessionReady,
         hasSavedSession,
+        isSessionPersistenceEnabled,
+        setSessionPersistenceEnabled,
         exportHistory,
         pageSize,
         setPageSize,

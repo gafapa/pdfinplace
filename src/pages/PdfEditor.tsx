@@ -189,6 +189,8 @@ export const PdfEditor = () => {
         isProcessing,
         isSessionReady,
         hasSavedSession,
+        isSessionPersistenceEnabled,
+        setSessionPersistenceEnabled,
         pageSize,
         setPageSize,
         printOverlayOptions,
@@ -562,7 +564,7 @@ export const PdfEditor = () => {
                 }}
             />
             {/* Toolbar */}
-            <div className="bg-white border-b border-gray-200 px-2 sm:px-3 py-2 shadow-sm z-10">
+            <div className="shrink-0 bg-white border-b border-gray-200 px-2 sm:px-3 py-2 shadow-sm z-10">
                 <div className="flex items-center justify-between gap-2 pb-2 border-b border-gray-100">
                     <div className="flex items-center gap-2 shrink-0">
                         <div className="bg-red-600 p-1.5 rounded text-white">
@@ -573,13 +575,28 @@ export const PdfEditor = () => {
                             <span className="text-[11px] text-gray-500">
                                 {!isSessionReady
                                     ? t('editor.restoringSession')
-                                    : hasSavedSession
+                                    : !isSessionPersistenceEnabled
+                                        ? t('editor.sessionPersistenceOff')
+                                        : hasSavedSession
                                         ? t('editor.sessionSaved')
                                         : t('editor.sessionEmpty')}
                             </span>
                         </div>
                     </div>
                     <div className="flex items-center gap-2 shrink-0" title={t('common.language')}>
+                        <label
+                            className="inline-flex h-8 items-center gap-2 rounded-md border border-gray-200 bg-white px-2.5 text-xs font-medium text-gray-700 hover:bg-gray-50"
+                            title={isSessionPersistenceEnabled ? t('editor.disableLocalSession') : t('editor.enableLocalSession')}
+                        >
+                            <input
+                                type="checkbox"
+                                checked={isSessionPersistenceEnabled}
+                                onChange={(event) => setSessionPersistenceEnabled(event.target.checked)}
+                                className="h-3.5 w-3.5 rounded border-gray-300"
+                                aria-label={isSessionPersistenceEnabled ? t('editor.disableLocalSession') : t('editor.enableLocalSession')}
+                            />
+                            <span className="hidden sm:inline">{t('editor.localSession')}</span>
+                        </label>
                         <label htmlFor="language-select" className="text-xs font-medium text-gray-600 sr-only">
                             {t('common.language')}
                         </label>
@@ -917,9 +934,9 @@ export const PdfEditor = () => {
             ) : null}
 
             {/* Main Content */}
-            <div className={`flex-1 bg-white overflow-y-auto p-3 sm:p-5 lg:p-8 custom-scrollbar ${pages.length > 0 && isExportPanelOpen ? 'lg:pl-[22rem]' : ''}`}>
+            <div className={`min-h-0 flex-1 bg-white overflow-y-auto p-3 sm:p-5 lg:p-8 custom-scrollbar ${pages.length > 0 && isExportPanelOpen ? 'lg:pl-[22rem]' : ''}`}>
                 {pages.length === 0 ? (
-                    <div className="h-full flex flex-col items-center justify-center text-gray-400 border-2 border-dashed border-gray-300 rounded-xl m-1 sm:m-4 p-4">
+                    <div className="box-border flex min-h-full flex-col items-center justify-center rounded-xl border-2 border-dashed border-gray-300 p-4 text-gray-400">
                         <Upload className="w-12 h-12 sm:w-16 sm:h-16 mb-4 text-gray-300" />
                         <h3 className="text-base sm:text-xl font-medium text-gray-600 mb-2 text-center">{t('editor.dragDropTitle')}</h3>
                         <p className="max-w-md text-center mb-6 text-sm sm:text-base">{t('editor.dragDropDescription')}</p>

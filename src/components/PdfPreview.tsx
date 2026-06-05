@@ -7,11 +7,11 @@ import type {
     ImageAnnotationData
 } from '../types/annotations';
 import { useI18n } from '../i18n';
-import { loadPdfJs } from '../utils/pdfjs';
+import { getPdfDocument } from '../utils/pdfjs';
 
-type PdfJsModule = typeof import('pdfjs-dist');
 type PdfDocumentProxy = import('pdfjs-dist').PDFDocumentProxy;
 type PdfRenderTask = import('pdfjs-dist').RenderTask;
+type PdfLoadingTask = import('pdfjs-dist').PDFDocumentLoadingTask;
 
 const cloneArrayBuffer = (buffer: ArrayBuffer) => buffer.slice(0);
 
@@ -37,19 +37,18 @@ export const PdfPreview = ({ file, pdfDocument, pageIndex = 1, width = 200, heig
         let isMounted = true;
         let loadedPdf: PdfDocumentProxy | null = null;
         let renderTask: PdfRenderTask | null = null;
-        let loadingTask: ReturnType<PdfJsModule['getDocument']> | null = null;
+        let loadingTask: PdfLoadingTask | null = null;
 
         const renderPreview = async () => {
             try {
                 setLoading(true);
                 setError(false);
-                const pdfJs = await loadPdfJs();
 
                 if (pdfDocument) {
                     loadedPdf = pdfDocument;
                 } else if (file) {
                     const arrayBuffer = await file.arrayBuffer();
-                    loadingTask = pdfJs.getDocument({ data: cloneArrayBuffer(arrayBuffer) });
+                    loadingTask = await getPdfDocument({ data: cloneArrayBuffer(arrayBuffer) });
                     loadedPdf = await loadingTask.promise;
                 } else {
                     return;
