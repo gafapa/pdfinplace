@@ -1,15 +1,21 @@
 ﻿{
-  "name": "PDFing",
-  "short_name": "PDFing",
-  "description": "Editor para combinar, ordenar y exportar PDF, imagenes y documentos.",
+  "name": "PageForge",
+  "short_name": "PageForge",
+  "description": "Modern workspace to combine, annotate, organize, protect and export PDF documents.",
   "start_url": "./",
   "scope": "./",
   "display": "standalone",
   "orientation": "portrait-primary",
   "background_color": "#f9fafb",
   "theme_color": "#dc2626",
-  "lang": "es",
+  "lang": "en",
   "icons": [
+    {
+      "src": "./icon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any"
+    },
     {
       "src": "./pwa-192.png",
       "sizes": "192x192",

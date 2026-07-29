@@ -1,6 +1,4 @@
-import { useState, useCallback } from 'react';
-import { PDFDocument, StandardFonts, rgb, degrees, type PDFPage } from 'pdf-lib';
-import * as pdfjsLib from 'pdfjs-dist';
+import { useState, useCallback, useEffect, useRef } from 'react';
 import { arrayMove } from '@dnd-kit/sortable';
 import type {
     Annotation,
@@ -9,6 +7,45 @@ import type {
     ShapeAnnotationData,
     ImageAnnotationData
 } from '../types/annotations';
+import type { PDFDocument, PDFPage } from 'pdf-lib';
+import { createId } from '../utils/createId';
+import { clearPersistedSession, loadPersistedSession, savePersistedSession, type PersistedFileRecord } from '../utils/persistedSession';
+import { getPdfDocument, loadPdfDocument } from '../utils/pdfjs';
+import {
+    MAX_ARCHIVE_ENTRIES,
+    MAX_ARCHIVE_ENTRY_BYTES,
+    MAX_ARCHIVE_UNCOMPRESSED_BYTES,
+    MAX_IMAGE_PIXELS,
+    MAX_IMPORT_PAGES,
+    MAX_OFFICE_XML_ELEMENTS,
+    MAX_RENDER_PIXELS,
+    formatMegabytes,
+    getAcceptedImportFiles,
+    getImportFileKind,
+    isAcceptedUnlockPdf,
+} from '../utils/importValidation';
+import { getDataUrlImageKind, readImageDimensions } from '../utils/imageValidation';
+import { getLegacyEditorCanvasSize } from '../utils/pageGeometry';
+import type { ContentEdit } from '../features/content-editor/types';
+
+type PdfLibModule = typeof import('pdf-lib');
+
+let pdfLibPromise: Promise<PdfLibModule> | null = null;
+let contentEditExporterPromise: Promise<typeof import('../features/content-editor/applyContentEdits')> | null = null;
+
+const loadPdfLib = async (): Promise<PdfLibModule> => {
+    if (!pdfLibPromise) {
+        pdfLibPromise = import('pdf-lib');
+    }
+    return pdfLibPromise;
+};
+
+const loadContentEditExporter = () => {
+    if (!contentEditExporterPromise) {
+        contentEditExporterPromise = import('../features/content-editor/applyContentEdits');
+    }
+    return contentEditExporterPromise;
+};
 
 export interface EditorPage {
     id: string; // Unique ID for dnd (e.g., "fileId-pageIndex")
@@ -16,12 +53,15 @@ export interface EditorPage {
     pageIndex: number; // 1-based index in the source file
     rotation: number; // 0, 90, 180, 270
     annotations: Annotation[]; // Page annotations
+    contentEdits: ContentEdit[];
+    annotationCanvasWidth?: number;
+    annotationCanvasHeight?: number;
 }
 
 export interface EditorFile {
     id: string;
     file: File;
-    pdfDoc?: pdfjsLib.PDFDocumentProxy; // Cached pdf.js document for rendering
+    pdfDoc?: import('pdfjs-dist').PDFDocumentProxy; // Cached pdf.js document for rendering
     pageCount: number;
 }
 
@@ -30,6 +70,45 @@ interface ExportLabels {
     failed: string;
     downloadPrefix: string;
     originalName: string;
+}
+
+interface ImportLabels {
+    skippedPrefix: string;
+    failedPrefix: string;
+    fileCount: string;
+    unsupported: string;
+    fileSize: string;
+    batchSize: string;
+}
+
+export interface EditorNotification {
+    id: string;
+    message: string;
+    tone: 'error' | 'status';
+}
+
+interface SplitPdfLabels extends ExportLabels {
+    splitDownloadPrefix: string;
+    oddSuffix: string;
+    evenSuffix: string;
+    pageSuffix: string;
+}
+
+export interface ExportHistoryEntry {
+    id: string;
+    filename: string;
+    exportedAt: number;
+    pageCount: number;
+    mode: 'all' | 'selection' | 'range' | 'split-single' | 'split-odd-even' | 'protected' | 'unlocked';
+}
+
+export interface PrintOverlayOptions {
+    watermarkText: string;
+    includePageNumbers: boolean;
+    headerText: string;
+    footerText: string;
+    cropPercent: number;
+    marginPercent: number;
 }
 
 interface ProtectPdfLabels {
@@ -59,6 +138,78 @@ const toArrayBuffer = (bytes: Uint8Array<ArrayBufferLike>): ArrayBuffer => {
     return buffer;
 };
 
+const cloneArrayBuffer = (buffer: ArrayBuffer) => buffer.slice(0);
+
+const isUsableArrayBuffer = (buffer: ArrayBuffer) => {
+    try {
+        return buffer.byteLength > 0;
+    } catch {
+        return false;
+    }
+};
+
+interface ArchiveEntryMetadata {
+    dir: boolean;
+    _data?: {
+        uncompressedSize?: number;
+    };
+}
+
+const validateArchiveLimits = (files: Record<string, ArchiveEntryMetadata>) => {
+    const entries = Object.values(files);
+    if (entries.length > MAX_ARCHIVE_ENTRIES) {
+        throw new Error(`Archive contains more than ${MAX_ARCHIVE_ENTRIES} entries.`);
+    }
+
+    let totalUncompressedBytes = 0;
+    for (const entry of entries) {
+        if (entry.dir) continue;
+        const entryBytes = entry._data?.uncompressedSize;
+        if (!Number.isFinite(entryBytes) || entryBytes === undefined || entryBytes < 0) {
+            throw new Error('Archive entry size could not be verified.');
+        }
+        if (entryBytes > MAX_ARCHIVE_ENTRY_BYTES) {
+            throw new Error(`Archive entry exceeds ${formatMegabytes(MAX_ARCHIVE_ENTRY_BYTES)}.`);
+        }
+        totalUncompressedBytes += entryBytes;
+        if (totalUncompressedBytes > MAX_ARCHIVE_UNCOMPRESSED_BYTES) {
+            throw new Error(`Archive expands beyond ${formatMegabytes(MAX_ARCHIVE_UNCOMPRESSED_BYTES)}.`);
+        }
+    }
+};
+
+const assertRenderableArea = (width: number, height: number) => {
+    if (!Number.isFinite(width) || !Number.isFinite(height) || width <= 0 || height <= 0) {
+        throw new Error('Document produced invalid render dimensions.');
+    }
+    if (width * height > MAX_RENDER_PIXELS) {
+        throw new Error(`Rendered document exceeds the ${MAX_RENDER_PIXELS.toLocaleString()} pixel limit.`);
+    }
+};
+
+const validateOfficeXmlComplexity = (xml: string) => {
+    let elementCount = 0;
+    for (let index = 0; index < xml.length; index += 1) {
+        if (xml[index] === '<' && !['/', '?', '!'].includes(xml[index + 1] ?? '')) {
+            elementCount += 1;
+            if (elementCount > MAX_OFFICE_XML_ELEMENTS) {
+                throw new Error(`Office XML exceeds the ${MAX_OFFICE_XML_ELEMENTS.toLocaleString()} element limit.`);
+            }
+        }
+    }
+};
+
+const canvasToPngBytes = (canvas: HTMLCanvasElement): Promise<ArrayBuffer> =>
+    new Promise((resolve, reject) => {
+        canvas.toBlob((blob) => {
+            if (!blob) {
+                reject(new Error('Canvas could not be encoded as PNG.'));
+                return;
+            }
+            blob.arrayBuffer().then(resolve, reject);
+        }, 'image/png');
+    });
+
 const downloadPdfBytes = (pdfBytes: Uint8Array<ArrayBufferLike>, filename: string) => {
     const pdfBytesBuffer = new ArrayBuffer(pdfBytes.byteLength);
     new Uint8Array(pdfBytesBuffer).set(pdfBytes);
@@ -73,6 +224,110 @@ const downloadPdfBytes = (pdfBytes: Uint8Array<ArrayBufferLike>, filename: strin
     URL.revokeObjectURL(url);
 };
 
+const EXPORT_HISTORY_STORAGE_KEY = 'pageforge.export-history';
+const MAX_EXPORT_HISTORY = 10;
+const OVERLAY_OPTIONS_STORAGE_KEY = 'pageforge.overlay-options';
+const LOCAL_PERSISTENCE_STORAGE_KEY = 'pageforge.local-persistence-enabled';
+const SAVED_ASSETS_STORAGE_KEY = 'pageforge.saved-assets';
+const MAX_HISTORY_ENTRIES = 80;
+const SESSION_PERSIST_DEBOUNCE_MS = 600;
+
+const isLocalPersistenceEnabled = () => {
+    if (typeof window === 'undefined') {
+        return false;
+    }
+
+    return localStorage.getItem(LOCAL_PERSISTENCE_STORAGE_KEY) === 'true';
+};
+
+const clearSensitiveBrowserData = async () => {
+    if (typeof window !== 'undefined') {
+        localStorage.removeItem(EXPORT_HISTORY_STORAGE_KEY);
+        localStorage.removeItem(SAVED_ASSETS_STORAGE_KEY);
+        localStorage.removeItem(OVERLAY_OPTIONS_STORAGE_KEY);
+    }
+
+    await clearPersistedSession();
+};
+
+const loadExportHistory = (): ExportHistoryEntry[] => {
+    if (typeof window === 'undefined' || !isLocalPersistenceEnabled()) {
+        return [];
+    }
+
+    try {
+        const rawHistory = localStorage.getItem(EXPORT_HISTORY_STORAGE_KEY);
+        if (!rawHistory) {
+            return [];
+        }
+
+        const parsedHistory = JSON.parse(rawHistory) as ExportHistoryEntry[];
+        return Array.isArray(parsedHistory) ? parsedHistory : [];
+    } catch (error) {
+        console.error('Failed to read export history:', error);
+        return [];
+    }
+};
+
+const DEFAULT_PRINT_OVERLAY_OPTIONS: PrintOverlayOptions = {
+    watermarkText: '',
+    includePageNumbers: false,
+    headerText: '',
+    footerText: '',
+    cropPercent: 0,
+    marginPercent: 0,
+};
+
+const loadOverlayOptions = (): PrintOverlayOptions => {
+    if (typeof window === 'undefined' || !isLocalPersistenceEnabled()) {
+        if (typeof window !== 'undefined') {
+            localStorage.removeItem(OVERLAY_OPTIONS_STORAGE_KEY);
+        }
+        return DEFAULT_PRINT_OVERLAY_OPTIONS;
+    }
+
+    try {
+        const rawOptions = localStorage.getItem(OVERLAY_OPTIONS_STORAGE_KEY);
+        if (!rawOptions) {
+            return DEFAULT_PRINT_OVERLAY_OPTIONS;
+        }
+
+        const parsedOptions = JSON.parse(rawOptions) as Partial<PrintOverlayOptions>;
+        return {
+            watermarkText: typeof parsedOptions.watermarkText === 'string' ? parsedOptions.watermarkText : '',
+            includePageNumbers: Boolean(parsedOptions.includePageNumbers),
+            headerText: typeof parsedOptions.headerText === 'string' ? parsedOptions.headerText : '',
+            footerText: typeof parsedOptions.footerText === 'string' ? parsedOptions.footerText : '',
+            cropPercent: typeof parsedOptions.cropPercent === 'number' ? Math.max(0, Math.min(parsedOptions.cropPercent, 20)) : 0,
+            marginPercent: typeof parsedOptions.marginPercent === 'number' ? Math.max(0, Math.min(parsedOptions.marginPercent, 20)) : 0,
+        };
+    } catch (error) {
+        console.error('Failed to read overlay options:', error);
+        return DEFAULT_PRINT_OVERLAY_OPTIONS;
+    }
+};
+
+const getContentBox = (
+    pageWidth: number,
+    pageHeight: number,
+    marginPercent: number,
+) => {
+    const marginX = (pageWidth * marginPercent) / 100;
+    const marginY = (pageHeight * marginPercent) / 100;
+
+    return {
+        x: marginX,
+        y: marginY,
+        width: Math.max(1, pageWidth - (marginX * 2)),
+        height: Math.max(1, pageHeight - (marginY * 2)),
+    };
+};
+
+const getCropZoom = (cropPercent: number) => {
+    const visibleRatio = Math.max(0.2, 1 - ((cropPercent * 2) / 100));
+    return 1 / visibleRatio;
+};
+
 const isLikelyInvalidPasswordError = (error: unknown): boolean => {
     const content = error instanceof Error
         ? `${error.name} ${error.message}`.toLowerCase()
@@ -83,6 +338,7 @@ const isLikelyInvalidPasswordError = (error: unknown): boolean => {
         content.includes('auth') ||
         content.includes('decrypt');
 };
+
 
 // Custom hook for history management
 const useHistory = <T>(initialState: T) => {
@@ -100,11 +356,11 @@ const useHistory = <T>(initialState: T) => {
                 ? (newState as (prev: T) => T)(current)
                 : newState;
 
-            // If we're not at the end of history, truncate it before adding new state
             const truncatedHistory = prev.history.slice(0, prev.currentIndex + 1);
+            const nextHistory = [...truncatedHistory, updated].slice(-MAX_HISTORY_ENTRIES);
             return {
-                history: [...truncatedHistory, updated],
-                currentIndex: truncatedHistory.length
+                history: nextHistory,
+                currentIndex: nextHistory.length - 1
             };
         });
     }, []);
@@ -147,20 +403,28 @@ const useHistory = <T>(initialState: T) => {
     };
 };
 
-const hexToRgb = (hex: string) => {
+const hexToRgb = (hex: string, rgbFactory: PdfLibModule['rgb']) => {
     const r = parseInt(hex.slice(1, 3), 16) / 255;
     const g = parseInt(hex.slice(3, 5), 16) / 255;
     const b = parseInt(hex.slice(5, 7), 16) / 255;
-    return rgb(r, g, b);
+    return rgbFactory(r, g, b);
 };
 
-const escapeHtml = (text: string): string =>
-    text
-        .replace(/&/g, '&amp;')
-        .replace(/</g, '&lt;')
-        .replace(/>/g, '&gt;')
-        .replace(/"/g, '&quot;')
-        .replace(/'/g, '&#39;');
+const isImageLikeAnnotation = (annotation: Annotation): annotation is Annotation & {
+    type: 'image' | 'signature';
+    data: ImageAnnotationData | { dataUrl: string };
+} => annotation.type === 'image' || annotation.type === 'signature';
+
+const getInitialPageSize = (): PageSize => {
+    if (typeof window === 'undefined') {
+        return 'Original';
+    }
+
+    const savedPageSize = localStorage.getItem('pageforge.editor.page-size');
+    return savedPageSize === 'A4' || savedPageSize === 'A3' || savedPageSize === 'Letter' || savedPageSize === 'Legal'
+        ? savedPageSize
+        : 'Original';
+};
 
 export const usePdfEditor = () => {
     const [files, setFiles] = useState<Record<string, EditorFile>>({});
@@ -177,22 +441,277 @@ export const usePdfEditor = () => {
     } = useHistory<EditorPage[]>([]);
 
     const [isProcessing, setIsProcessing] = useState(false);
-    const [pageSize, setPageSize] = useState<PageSize>('Original');
+    const [notification, setNotification] = useState<EditorNotification | null>(null);
+    const [pageSize, setPageSize] = useState<PageSize>(getInitialPageSize);
+    const [isSessionReady, setIsSessionReady] = useState(false);
+    const [hasSavedSession, setHasSavedSession] = useState(false);
+    const [isSessionPersistenceEnabled, setIsSessionPersistenceEnabled] = useState(isLocalPersistenceEnabled);
+    const persistedFileCacheRef = useRef<Record<string, PersistedFileRecord>>({});
+    const filesRef = useRef<Record<string, EditorFile>>({});
+    const [exportHistory, setExportHistory] = useState<ExportHistoryEntry[]>(loadExportHistory);
+    const [printOverlayOptions, setPrintOverlayOptions] = useState<PrintOverlayOptions>(loadOverlayOptions);
+    const notifyError = useCallback((message: string) => {
+        setNotification({ id: createId(), message, tone: 'error' });
+    }, []);
+    const dismissNotification = useCallback(() => setNotification(null), []);
 
-    const addFiles = useCallback(async (newFiles: File[]) => {
-        const newFilesMap: Record<string, EditorFile> = {};
-        const newPages: EditorPage[] = [];
+    const recordExport = useCallback((filename: string, pageCount: number, mode: ExportHistoryEntry['mode']) => {
+        setExportHistory(prev => {
+            const nextHistory = [
+                {
+                    id: createId(),
+                    filename,
+                    exportedAt: Date.now(),
+                    pageCount,
+                    mode,
+                },
+                ...prev,
+            ].slice(0, MAX_EXPORT_HISTORY);
 
-        for (const file of newFiles) {
-            const fileId = Math.random().toString(36).substr(2, 9);
+            if (isSessionPersistenceEnabled) {
+                localStorage.setItem(EXPORT_HISTORY_STORAGE_KEY, JSON.stringify(nextHistory));
+            }
+
+            return nextHistory;
+        });
+    }, [isSessionPersistenceEnabled]);
+
+    const setSessionPersistenceEnabled = useCallback((enabled: boolean) => {
+        setIsSessionPersistenceEnabled(enabled);
+        localStorage.setItem(LOCAL_PERSISTENCE_STORAGE_KEY, String(enabled));
+
+        if (!enabled) {
+            persistedFileCacheRef.current = {};
+            setHasSavedSession(false);
+            setExportHistory([]);
+            setPrintOverlayOptions(DEFAULT_PRINT_OVERLAY_OPTIONS);
+            void clearSensitiveBrowserData();
+        }
+    }, []);
+
+    useEffect(() => {
+        let isCancelled = false;
+
+        const restoreSession = async () => {
+            if (!isSessionPersistenceEnabled) {
+                persistedFileCacheRef.current = {};
+                await clearSensitiveBrowserData();
+                if (!isCancelled) {
+                    setHasSavedSession(false);
+                    setIsSessionReady(true);
+                }
+                return;
+            }
+
+            try {
+                const persistedSession = await loadPersistedSession();
+                if (isCancelled || !persistedSession) {
+                    if (!isCancelled) {
+                        persistedFileCacheRef.current = {};
+                        setIsSessionReady(true);
+                        setHasSavedSession(Boolean(persistedSession));
+                    }
+                    return;
+                }
+
+                persistedFileCacheRef.current = Object.fromEntries(
+                    persistedSession.files.map((persistedFile) => [persistedFile.id, persistedFile])
+                );
+
+                const restoredFiles = await Promise.all(
+                    persistedSession.files.map(async (persistedFile) => {
+                        const file = new File([cloneArrayBuffer(persistedFile.buffer)], persistedFile.name, {
+                            type: persistedFile.type,
+                            lastModified: persistedFile.lastModified,
+                        });
+                        const pdfDoc = await loadPdfDocument({ data: cloneArrayBuffer(persistedFile.buffer) });
+
+                        return [persistedFile.id, {
+                            id: persistedFile.id,
+                            file,
+                            pageCount: persistedFile.pageCount,
+                            pdfDoc,
+                        } satisfies EditorFile] as const;
+                    })
+                );
+
+                setFiles(Object.fromEntries(restoredFiles));
+                setPagesHistory([persistedSession.pages.map((page) => ({
+                    ...page,
+                    contentEdits: page.contentEdits ?? [],
+                }))]);
+                setPagesCurrentIndex(0);
+                setPageSize(persistedSession.pageSize);
+                setHasSavedSession(true);
+            } catch (error) {
+                console.error('Failed to restore session:', error);
+            } finally {
+                if (!isCancelled) {
+                    setIsSessionReady(true);
+                }
+            }
+        };
+
+        void restoreSession();
+
+        return () => {
+            isCancelled = true;
+        };
+    }, [isSessionPersistenceEnabled, setPagesCurrentIndex, setPagesHistory]);
+
+    useEffect(() => {
+        if (!isSessionReady) {
+            return;
+        }
+
+        const persistSession = async () => {
+            if (pages.length === 0 || Object.keys(files).length === 0) {
+                persistedFileCacheRef.current = {};
+                await clearPersistedSession();
+                setHasSavedSession(false);
+                return;
+            }
+
+            if (!isSessionPersistenceEnabled) {
+                persistedFileCacheRef.current = {};
+                await clearSensitiveBrowserData();
+                setHasSavedSession(false);
+                return;
+            }
+
+            try {
+                const nextFileCache: Record<string, PersistedFileRecord> = {};
+                const referencedFileIds = new Set(pages.map((page) => page.fileId));
+                const persistedFiles = await Promise.all(
+                    Object.values(files).filter((fileData) => referencedFileIds.has(fileData.id)).map(async (fileData) => {
+                        const cachedFile = persistedFileCacheRef.current[fileData.id];
+                        const canReuseCachedFile = cachedFile &&
+                            isUsableArrayBuffer(cachedFile.buffer) &&
+                            cachedFile.name === fileData.file.name &&
+                            cachedFile.type === fileData.file.type &&
+                            cachedFile.lastModified === fileData.file.lastModified &&
+                            cachedFile.pageCount === fileData.pageCount;
+
+                        const persistedFile = canReuseCachedFile
+                            ? cachedFile
+                            : {
+                                id: fileData.id,
+                                name: fileData.file.name,
+                                type: fileData.file.type,
+                                lastModified: fileData.file.lastModified,
+                                pageCount: fileData.pageCount,
+                                buffer: await fileData.file.arrayBuffer(),
+                            };
+
+                        nextFileCache[fileData.id] = persistedFile;
+                        return persistedFile;
+                    })
+                );
+
+                persistedFileCacheRef.current = nextFileCache;
+                await savePersistedSession({
+                    files: persistedFiles,
+                    pages,
+                    pageSize,
+                    savedAt: Date.now(),
+                });
+                setHasSavedSession(true);
+            } catch (error) {
+                console.error('Failed to persist session:', error);
+            }
+        };
+
+        const timeoutId = window.setTimeout(() => {
+            void persistSession();
+        }, SESSION_PERSIST_DEBOUNCE_MS);
+
+        return () => window.clearTimeout(timeoutId);
+    }, [files, pages, pageSize, isSessionReady, isSessionPersistenceEnabled]);
+
+    useEffect(() => {
+        if (isSessionPersistenceEnabled) {
+            localStorage.setItem(OVERLAY_OPTIONS_STORAGE_KEY, JSON.stringify(printOverlayOptions));
+        } else {
+            localStorage.removeItem(OVERLAY_OPTIONS_STORAGE_KEY);
+        }
+    }, [printOverlayOptions, isSessionPersistenceEnabled]);
+
+    useEffect(() => {
+        filesRef.current = files;
+    }, [files]);
+
+    useEffect(() => () => {
+        Object.values(filesRef.current).forEach((fileData) => {
+            void fileData.pdfDoc?.cleanup();
+        });
+    }, []);
+
+    const addFiles = useCallback(async (newFiles: File[], labels: ImportLabels) => {
+        const { acceptedFiles, skippedReasons } = getAcceptedImportFiles(newFiles);
+
+        if (skippedReasons.length > 0) {
+            const formattedReasons = skippedReasons.map((reason) => {
+                const label = reason.code === 'file-count'
+                    ? labels.fileCount
+                    : reason.code === 'unsupported'
+                        ? labels.unsupported
+                        : reason.code === 'file-size'
+                            ? labels.fileSize
+                            : labels.batchSize;
+                return reason.fileName ? `${reason.fileName}: ${label}` : label;
+            });
+            notifyError(`${labels.skippedPrefix}\n${formattedReasons.join('\n')}`);
+        }
+
+        if (acceptedFiles.length === 0) {
+            return;
+        }
+
+        setIsProcessing(true);
+        try {
+            const newFilesMap: Record<string, EditorFile> = {};
+            const newPages: EditorPage[] = [];
+            const failedReasons: string[] = [];
+            const pdfLib = await loadPdfLib();
+            let importedPageCount = pages.length;
+
+            const appendFilePages = (fileId: string, pageCount: number) => {
+                if (importedPageCount + pageCount > MAX_IMPORT_PAGES) {
+                    throw new Error(`Import would exceed the ${MAX_IMPORT_PAGES} page limit.`);
+                }
+
+                for (let i = 1; i <= pageCount; i++) {
+                    newPages.push({
+                        id: `${fileId}-${i}-${createId().slice(0, 8)}`,
+                        fileId,
+                        pageIndex: i,
+                        rotation: 0,
+                        annotations: [],
+                        contentEdits: [],
+                    });
+                }
+                importedPageCount += pageCount;
+            };
+
+            for (const file of acceptedFiles) {
+            const fileId = createId();
             try {
                 let arrayBuffer = await file.arrayBuffer();
+                const fileKind = getImportFileKind(file);
 
                 // If image, convert to PDF first
-                if (file.type === 'image/jpeg' || file.type === 'image/png' || file.name.endsWith('.jpg') || file.name.endsWith('.jpeg') || file.name.endsWith('.png')) {
-                    const pdfDoc = await PDFDocument.create();
+                if (fileKind === 'jpeg' || fileKind === 'png') {
+                    const imageDimensions = readImageDimensions(arrayBuffer);
+                    if (!imageDimensions || imageDimensions.kind !== fileKind) {
+                        throw new Error('Image contents do not match a supported PNG or JPEG file.');
+                    }
+                    if (imageDimensions.width * imageDimensions.height > MAX_IMAGE_PIXELS) {
+                        throw new Error(`Image exceeds the ${MAX_IMAGE_PIXELS.toLocaleString()} pixel limit.`);
+                    }
+
+                    const pdfDoc = await pdfLib.PDFDocument.create();
                     let image;
-                    if (file.type === 'image/jpeg' || file.name.endsWith('.jpg') || file.name.endsWith('.jpeg')) {
+                    if (fileKind === 'jpeg') {
                         image = await pdfDoc.embedJpg(arrayBuffer);
                     } else {
                         image = await pdfDoc.embedPng(arrayBuffer);
@@ -209,47 +728,37 @@ export const usePdfEditor = () => {
                     const pdfBytes = await pdfDoc.save();
                     arrayBuffer = toArrayBuffer(pdfBytes);
 
-                    // IMPORTANT: Replace the original image file with this new PDF file
-                    // so that exportPdf reads this PDF buffer instead of the original image bytes.
                     const newFileName = file.name.replace(/\.(jpg|jpeg|png)$/i, '.pdf');
-                    // Create a new File object
                     const newFile = new File([arrayBuffer], newFileName, { type: 'application/pdf' });
-                    // Using distinct variable to avoid TS const re-assignment if we didn't use 'let' loop var, 
-                    // but here 'file' is const in for-loop. We need to use this newFile in newFilesMap.
 
-                    // We need to update the usage below to use newFile instead of file
-                    // Let's store it in a map to override
                     newFilesMap[fileId] = {
                         id: fileId,
                         file: newFile,
-                        pdfDoc: await pdfjsLib.getDocument({ data: arrayBuffer }).promise,
-                        pageCount: 1 // We know it's 1 page
+                        pdfDoc: await loadPdfDocument({ data: cloneArrayBuffer(arrayBuffer) }),
+                        pageCount: 1
                     };
 
-                    // Skip the default loading below for this file
-                    const pdfDocJS = newFilesMap[fileId].pdfDoc!;
-                    for (let i = 1; i <= pdfDocJS.numPages; i++) {
-                        newPages.push({
-                            id: `${fileId}-${i}-${Math.random().toString(36).substr(2, 5)}`,
-                            fileId,
-                            pageIndex: i,
-                            rotation: 0,
-                            annotations: []
-                        });
-                    }
-                    continue; // Skip the rest of the loop for this file
+                    appendFilePages(fileId, 1);
+                    continue;
                 }
 
                 // DOCX Handling
-                if (file.name.endsWith('.docx') || file.type === 'application/vnd.openxmlformats-officedocument.wordprocessingml.document') {
+                if (fileKind === 'docx') {
+                    const JSZip = (await import('jszip')).default;
                     const docxPreview = await import('docx-preview');
                     const html2canvas = (await import('html2canvas')).default;
+                    const archive = await JSZip.loadAsync(arrayBuffer);
+                    validateArchiveLimits(archive.files as Record<string, ArchiveEntryMetadata>);
+                    const documentXml = await archive.file('word/document.xml')?.async('string');
+                    if (!documentXml) {
+                        throw new Error('DOCX document.xml is missing.');
+                    }
+                    validateOfficeXmlComplexity(documentXml);
 
                     // A4 dimensions at 96 DPI
                     const pageWidthPx = 794;
                     const pageHeightPx = 1123;
 
-                    // Create container for docx-preview rendering
                     const container = document.createElement('div');
                     container.style.width = `${pageWidthPx}px`;
                     container.style.backgroundColor = 'white';
@@ -258,39 +767,48 @@ export const usePdfEditor = () => {
                     container.style.top = '0';
                     container.style.zIndex = '-9999';
                     container.style.overflow = 'visible';
-                    document.body.appendChild(container);
+                    let canvas: HTMLCanvasElement;
+                    try {
+                        document.body.appendChild(container);
 
-                    // Render DOCX using docx-preview
-                    await docxPreview.renderAsync(arrayBuffer, container, undefined, {
-                        className: 'docx-preview',
-                        inWrapper: false,
-                        ignoreWidth: false,
-                        ignoreHeight: false,
-                        ignoreFonts: false,
-                        breakPages: true,
-                        ignoreLastRenderedPageBreak: false,
-                        experimental: true,
-                        trimXmlDeclaration: true,
-                        useBase64URL: true
-                    });
+                        await docxPreview.renderAsync(arrayBuffer, container, undefined, {
+                            className: 'docx-preview',
+                            inWrapper: false,
+                            ignoreWidth: false,
+                            ignoreHeight: false,
+                            ignoreFonts: false,
+                            breakPages: true,
+                            ignoreLastRenderedPageBreak: false,
+                            experimental: true,
+                            trimXmlDeclaration: true,
+                            useBase64URL: true
+                        });
 
-                    // Wait for rendering to complete
-                    await new Promise(r => setTimeout(r, 500));
+                        await new Promise(r => setTimeout(r, 500));
 
-                    // Capture the rendered content
-                    const canvas = await html2canvas(container, {
-                        scale: 1,
-                        useCORS: true,
-                        logging: false,
-                        width: pageWidthPx,
-                        windowWidth: pageWidthPx,
-                        scrollY: -window.scrollY
-                    });
+                        const renderHeight = Math.max(container.scrollHeight, container.offsetHeight);
+                        assertRenderableArea(pageWidthPx, renderHeight);
+                        const estimatedPages = Math.max(1, Math.ceil(renderHeight / (pageHeightPx - 120)));
+                        if (importedPageCount + estimatedPages > MAX_IMPORT_PAGES) {
+                            throw new Error(`Import would exceed the ${MAX_IMPORT_PAGES} page limit.`);
+                        }
 
-                    document.body.removeChild(container);
+                        canvas = await html2canvas(container, {
+                            scale: 1,
+                            useCORS: true,
+                            logging: false,
+                            width: pageWidthPx,
+                            windowWidth: pageWidthPx,
+                            scrollY: -window.scrollY
+                        });
+                    } finally {
+                        container.remove();
+                    }
+
+                    assertRenderableArea(canvas.width, canvas.height);
 
                     // Create PDF with pdf-lib
-                    const pdfDoc = await PDFDocument.create();
+                    const pdfDoc = await pdfLib.PDFDocument.create();
 
                     // A4 size in points (72 DPI)
                     const pageWidthPt = 595.28;
@@ -380,8 +898,7 @@ export const usePdfEditor = () => {
                             );
                         }
 
-                        const sliceData = sliceCanvas.toDataURL('image/png');
-                        const sliceBytes = await fetch(sliceData).then(r => r.arrayBuffer());
+                        const sliceBytes = await canvasToPngBytes(sliceCanvas);
                         const sliceImage = await pdfDoc.embedPng(sliceBytes);
 
                         const page = pdfDoc.addPage([pageWidthPt, pageHeightPt]);
@@ -399,7 +916,7 @@ export const usePdfEditor = () => {
                     const newFileName = file.name.replace(/\.docx$/i, '.pdf');
                     const newFile = new File([arrayBuffer], newFileName, { type: 'application/pdf' });
 
-                    const loadingTask = pdfjsLib.getDocument({ data: arrayBuffer });
+                    const loadingTask = await getPdfDocument({ data: cloneArrayBuffer(arrayBuffer) });
                     const loadedPdf = await loadingTask.promise;
 
                     newFilesMap[fileId] = {
@@ -409,67 +926,70 @@ export const usePdfEditor = () => {
                         pageCount: loadedPdf.numPages
                     };
 
-                    for (let i = 1; i <= loadedPdf.numPages; i++) {
-                        newPages.push({
-                            id: `${fileId}-${i}-${Math.random().toString(36).substr(2, 5)}`,
-                            fileId,
-                            pageIndex: i,
-                            rotation: 0,
-                            annotations: []
-                        });
-                    }
+                    appendFilePages(fileId, loadedPdf.numPages);
                     continue;
                 }
 
                 // ODT Handling
-                if (file.name.endsWith('.odt') || file.type === 'application/vnd.oasis.opendocument.text') {
+                if (fileKind === 'odt') {
                     const JSZip = (await import('jszip')).default;
                     const html2canvas = (await import('html2canvas')).default;
 
                     const zip = await JSZip.loadAsync(arrayBuffer);
+                    validateArchiveLimits(zip.files as Record<string, ArchiveEntryMetadata>);
                     const contentXml = await zip.file("content.xml")?.async("string");
 
                     if (contentXml) {
+                        validateOfficeXmlComplexity(contentXml);
                         const parser = new DOMParser();
                         const xmlDoc = parser.parseFromString(contentXml, "text/xml");
 
-                        // Create a simple HTML structure
-                        let htmlContent = '';
-
-                        const extractText = (node: Node): string => {
-                            let text = '';
-                            node.childNodes.forEach(child => {
-                                if (child.nodeType === 3) text += escapeHtml(child.textContent ?? ''); // Text node
-                                else if (child.nodeName.endsWith(':s')) text += ' '; // Space
-                                else if (child.nodeName.endsWith(':tab')) text += '\t'; // Tab
-                                else if (child.nodeName.endsWith(':line-break')) text += '<br/>';
-                                else text += extractText(child);
-                            });
-                            return text;
-                        };
-
-                        const processNode = (node: Element) => {
-                            const name = node.nodeName;
-                            if (name.endsWith(':h')) {
-                                const level = node.getAttributeNS("*", "outline-level") || '1';
-                                const hLevel = parseInt(level) || 1;
-                                htmlContent += `<h${Math.min(6, hLevel)}>${extractText(node)}</h${Math.min(6, hLevel)}>`;
-                            } else if (name.endsWith(':p')) {
-                                htmlContent += `<p>${extractText(node)}</p>`;
-                            } else {
-                                for (let i = 0; i < node.children.length; i++) {
-                                    processNode(node.children[i]);
+                        const appendExtractedText = (target: HTMLElement, node: Node) => {
+                            const stack = Array.from(node.childNodes).reverse();
+                            while (stack.length > 0) {
+                                const child = stack.pop();
+                                if (!child) continue;
+                                if (child.nodeType === Node.TEXT_NODE) {
+                                    target.appendChild(document.createTextNode(child.textContent ?? ''));
+                                } else if (child.nodeName.endsWith(':s')) {
+                                    target.appendChild(document.createTextNode(' '));
+                                } else if (child.nodeName.endsWith(':tab')) {
+                                    target.appendChild(document.createTextNode('\t'));
+                                } else if (child.nodeName.endsWith(':line-break')) {
+                                    target.appendChild(document.createElement('br'));
+                                } else {
+                                    stack.push(...Array.from(child.childNodes).reverse());
                                 }
                             }
-                        }
+                        };
 
-                        // Start from office:body -> office:text
-                        const officeText = xmlDoc.getElementsByTagNameNS("*", "text")[0];
-                        if (officeText) {
-                            for (let i = 0; i < officeText.children.length; i++) {
-                                processNode(officeText.children[i]);
+                        const processNode = (parent: HTMLElement, root: Element): boolean => {
+                            const stack: Element[] = [root];
+                            let appended = false;
+                            while (stack.length > 0) {
+                                const node = stack.pop();
+                                if (!node) continue;
+                                const name = node.nodeName;
+                                if (name.endsWith(':h')) {
+                                    const level = node.getAttributeNS("*", "outline-level") || '1';
+                                    const hLevel = parseInt(level) || 1;
+                                    const heading = document.createElement(`h${Math.min(6, Math.max(1, hLevel))}`);
+                                    appendExtractedText(heading, node);
+                                    parent.appendChild(heading);
+                                    appended = true;
+                                    continue;
+                                }
+                                if (name.endsWith(':p')) {
+                                    const paragraph = document.createElement('p');
+                                    appendExtractedText(paragraph, node);
+                                    parent.appendChild(paragraph);
+                                    appended = true;
+                                    continue;
+                                }
+                                stack.push(...Array.from(node.children).reverse());
                             }
-                        }
+                            return appended;
+                        };
 
                         // A4 dimensions at 96 DPI
                         const pageWidthPx = 794;
@@ -490,24 +1010,46 @@ export const usePdfEditor = () => {
                         container.style.fontSize = '12pt';
                         container.style.lineHeight = '1.5';
                         container.style.color = '#000';
-                        container.innerHTML = htmlContent || '<p>No text content found.</p>';
-                        document.body.appendChild(container);
+                        let hasTextContent = false;
+                        const officeText = xmlDoc.getElementsByTagNameNS("*", "text")[0];
+                        if (officeText) {
+                            for (let i = 0; i < officeText.children.length; i++) {
+                                hasTextContent = processNode(container, officeText.children[i]) || hasTextContent;
+                            }
+                        }
+                        if (!hasTextContent) {
+                            const emptyParagraph = document.createElement('p');
+                            emptyParagraph.textContent = 'No text content found.';
+                            container.appendChild(emptyParagraph);
+                        }
+                        let canvas: HTMLCanvasElement;
+                        try {
+                            document.body.appendChild(container);
 
-                        // Wait for rendering
-                        await new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r)));
+                            await new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r)));
 
-                        const canvas = await html2canvas(container, {
-                            scale: 1,
-                            useCORS: true,
-                            logging: false,
-                            width: pageWidthPx,
-                            windowWidth: pageWidthPx
-                        });
+                            const renderHeight = Math.max(container.scrollHeight, container.offsetHeight);
+                            assertRenderableArea(pageWidthPx, renderHeight);
+                            const estimatedPages = Math.max(1, Math.ceil(renderHeight / (pageHeightPx - 120)));
+                            if (importedPageCount + estimatedPages > MAX_IMPORT_PAGES) {
+                                throw new Error(`Import would exceed the ${MAX_IMPORT_PAGES} page limit.`);
+                            }
 
-                        document.body.removeChild(container);
+                            canvas = await html2canvas(container, {
+                                scale: 1,
+                                useCORS: true,
+                                logging: false,
+                                width: pageWidthPx,
+                                windowWidth: pageWidthPx
+                            });
+                        } finally {
+                            container.remove();
+                        }
+
+                        assertRenderableArea(canvas.width, canvas.height);
 
                         // Create PDF with pdf-lib
-                        const pdfDoc = await PDFDocument.create();
+                        const pdfDoc = await pdfLib.PDFDocument.create();
 
                         // A4 size in points (72 DPI)
                         const pageWidthPt = 595.28;
@@ -594,8 +1136,7 @@ export const usePdfEditor = () => {
                                 );
                             }
 
-                            const sliceData = sliceCanvas.toDataURL('image/png');
-                            const sliceBytes = await fetch(sliceData).then(r => r.arrayBuffer());
+                            const sliceBytes = await canvasToPngBytes(sliceCanvas);
                             const sliceImage = await pdfDoc.embedPng(sliceBytes);
 
                             const page = pdfDoc.addPage([pageWidthPt, pageHeightPt]);
@@ -613,7 +1154,7 @@ export const usePdfEditor = () => {
                         const newFileName = file.name.replace(/\.odt$/i, '.pdf');
                         const newFile = new File([arrayBuffer], newFileName, { type: 'application/pdf' });
 
-                        const loadingTask = pdfjsLib.getDocument({ data: arrayBuffer });
+                        const loadingTask = await getPdfDocument({ data: cloneArrayBuffer(arrayBuffer) });
                         const loadedPdf = await loadingTask.promise;
 
                         newFilesMap[fileId] = {
@@ -623,20 +1164,12 @@ export const usePdfEditor = () => {
                             pageCount: loadedPdf.numPages
                         };
 
-                        for (let i = 1; i <= loadedPdf.numPages; i++) {
-                            newPages.push({
-                                id: `${fileId}-${i}-${Math.random().toString(36).substr(2, 5)}`,
-                                fileId,
-                                pageIndex: i,
-                                rotation: 0,
-                                annotations: []
-                            });
-                        }
+                        appendFilePages(fileId, loadedPdf.numPages);
                         continue;
                     }
                 }
 
-                const loadingTask = pdfjsLib.getDocument({ data: arrayBuffer });
+                const loadingTask = await getPdfDocument({ data: cloneArrayBuffer(arrayBuffer) });
                 const pdfDoc = await loadingTask.promise;
 
                 newFilesMap[fileId] = {
@@ -646,25 +1179,28 @@ export const usePdfEditor = () => {
                     pageCount: pdfDoc.numPages
                 };
 
-                for (let i = 1; i <= pdfDoc.numPages; i++) {
-                    newPages.push({
-                        id: `${fileId}-${i}-${Math.random().toString(36).substr(2, 5)}`,
-                        fileId,
-                        pageIndex: i,
-                        rotation: 0,
-                        annotations: []
-                    });
-                }
+                appendFilePages(fileId, pdfDoc.numPages);
             } catch (error) {
+                void newFilesMap[fileId]?.pdfDoc?.cleanup();
+                delete newFilesMap[fileId];
+                failedReasons.push(file.name);
                 console.error(`Error loading file ${file.name}:`, error);
-                // Handle error (maybe skip file or show notification)
             }
         }
 
-        setFiles(prev => ({ ...prev, ...newFilesMap }));
-        // Ensure strictly new array for history
-        setPages(prev => [...prev, ...newPages]);
-    }, [setPages]);
+            if (failedReasons.length > 0) {
+                notifyError(`${labels.failedPrefix}\n${failedReasons.join('\n')}`);
+            }
+            if (Object.keys(newFilesMap).length > 0) {
+                setFiles(prev => ({ ...prev, ...newFilesMap }));
+            }
+            if (newPages.length > 0) {
+                setPages(prev => [...prev, ...newPages]);
+            }
+        } finally {
+            setIsProcessing(false);
+        }
+    }, [pages.length, setPages, notifyError]);
 
     const movePage = useCallback((activeId: string, overId: string) => {
         setPages((items) => {
@@ -720,8 +1256,9 @@ export const usePdfEditor = () => {
                 if (idSet.has(page.id)) {
                     next.push({
                         ...page,
-                        id: `${page.fileId}-${page.pageIndex}-${Math.random().toString(36).slice(2, 9)}`,
-                        annotations: JSON.parse(JSON.stringify(page.annotations)) as Annotation[]
+                        id: `${page.fileId}-${page.pageIndex}-${createId().slice(0, 8)}`,
+                        annotations: structuredClone(page.annotations),
+                        contentEdits: structuredClone(page.contentEdits),
                     });
                 }
             }
@@ -730,210 +1267,173 @@ export const usePdfEditor = () => {
     }, [setPages]);
 
     const clearAll = useCallback(() => {
+        Object.values(filesRef.current).forEach((fileData) => {
+            void fileData.pdfDoc?.cleanup();
+        });
+        filesRef.current = {};
         setFiles({});
         // Reset history completely
         setPagesHistory([[]]);
         setPagesCurrentIndex(0);
+        void clearPersistedSession();
+        setHasSavedSession(false);
     }, [setPagesHistory, setPagesCurrentIndex]);
 
-    const exportPdf = useCallback(async (labels?: ExportLabels) => {
-        if (pages.length === 0) return;
-        setIsProcessing(true);
-
-        try {
-            const newPdf = await PDFDocument.create();
-
-            for (const page of pages) {
-                const fileData = files[page.fileId];
-                if (!fileData) continue;
-
-                const fileBuffer = await fileData.file.arrayBuffer();
-                const srcPdf = await PDFDocument.load(fileBuffer);
-
-                if (pageSize === 'Original') {
-                    const [copiedPage] = await newPdf.copyPages(srcPdf, [page.pageIndex - 1]);
-                    const existingRotation = copiedPage.getRotation()?.angle ?? 0;
-                    const newRotation = (existingRotation + page.rotation) % 360;
-                    copiedPage.setRotation(degrees(newRotation));
-                    newPdf.addPage(copiedPage);
-
-                    if (page.annotations.length > 0) {
-                        const { width, height } = copiedPage.getSize();
-                        await applyAnnotationsToPage(copiedPage, page.annotations, height, width, newRotation);
-                    }
-                } else {
-                    const targetDims = PAGE_SIZES[pageSize];
-                    if (!targetDims) throw new Error("Invalid page size");
-
-                    const embeddedPage = await newPdf.embedPage(srcPdf.getPages()[page.pageIndex - 1]);
-                    const srcPage = srcPdf.getPage(page.pageIndex - 1);
-                    const srcRotation = srcPage.getRotation().angle;
-                    const totalRotation = (srcRotation + page.rotation) % 360;
-
-                    const { width: srcWidth, height: srcHeight } = embeddedPage;
-                    const isRotatedSides = totalRotation === 90 || totalRotation === 270;
-                    const effectiveWidth = isRotatedSides ? srcHeight : srcWidth;
-                    const effectiveHeight = isRotatedSides ? srcWidth : srcHeight;
-
-                    let [targetWidth, targetHeight] = targetDims;
-                    if (effectiveWidth > effectiveHeight) {
-                        [targetWidth, targetHeight] = [targetHeight, targetWidth];
-                    }
-
-                    const newPage = newPdf.addPage([targetWidth, targetHeight]);
-                    const scale = Math.min(targetWidth / effectiveWidth, targetHeight / effectiveHeight);
-                    const destWidth = effectiveWidth * scale;
-                    const destHeight = effectiveHeight * scale;
-                    const x = (targetWidth - destWidth) / 2;
-                    const y = (targetHeight - destHeight) / 2;
-
-                    const dims = { w: srcWidth * scale, h: srcHeight * scale };
-                    let drawX = x;
-                    let drawY = y;
-
-                    if (totalRotation === 90) {
-                        drawX += dims.h;
-                    } else if (totalRotation === 180) {
-                        drawX += dims.w;
-                        drawY += dims.h;
-                    } else if (totalRotation === 270) {
-                        drawY += dims.w;
-                    }
-
-                    newPage.drawPage(embeddedPage, {
-                        x: drawX,
-                        y: drawY,
-                        width: dims.w,
-                        height: dims.h,
-                        rotate: degrees(totalRotation)
-                    });
-
-                    if (page.annotations.length > 0) {
-                        await applyAnnotationsToPage(newPage, page.annotations, targetHeight, targetWidth, totalRotation);
-                    }
-                }
-            }
-
-            const pdfBytes = await newPdf.save();
-            const prefix = labels?.downloadPrefix ?? 'edited_document';
-            const originalName = labels?.originalName ?? 'original';
-            downloadPdfBytes(pdfBytes, `${prefix}_${pageSize === 'Original' ? originalName : pageSize}.pdf`);
-        } catch (error) {
-            console.error("Error exporting PDF:", error);
-            alert(labels?.failed ?? "Failed to export PDF.");
-        } finally {
-            setIsProcessing(false);
-        }
-    }, [pages, files, pageSize]);
-
-    const applyAnnotationsToPage = async (
+    const applyAnnotationsToPage = useCallback(async (
         pdfPage: PDFPage,
         annotations: Annotation[],
         pageHeight: number,
         pageWidth: number,
-        rotation: number
+        editorCanvasWidth: number,
+        editorCanvasHeight: number,
     ) => {
-        const fontHelvetica = await pdfPage.doc.embedFont(StandardFonts.Helvetica);
-        const fontHelveticaBold = await pdfPage.doc.embedFont(StandardFonts.HelveticaBold);
-        const fontHelveticaOblique = await pdfPage.doc.embedFont(StandardFonts.HelveticaOblique);
-        const fontHelveticaBoldOblique = await pdfPage.doc.embedFont(StandardFonts.HelveticaBoldOblique);
-
-        // Visual Dimensions (Editor Canvas)
-        const VISUAL_WIDTH_PORTRAIT = 800;
-        const VISUAL_HEIGHT_PORTRAIT = 1000;
-        const VISUAL_WIDTH_LANDSCAPE = 1000;
-        const VISUAL_HEIGHT_LANDSCAPE = 800;
-
-        const isLandscape = rotation % 180 !== 0;
-
-        // Scale factors: Visual -> PDF Page
-        let scaleX = 1;
-        let scaleY = 1;
-
-        if (isLandscape) {
-            scaleX = pageHeight / VISUAL_WIDTH_LANDSCAPE;
-            scaleY = pageWidth / VISUAL_HEIGHT_LANDSCAPE;
-        } else {
-            scaleX = pageWidth / VISUAL_WIDTH_PORTRAIT;
-            scaleY = pageHeight / VISUAL_HEIGHT_PORTRAIT;
-        }
+        const pdfLib = await loadPdfLib();
+        const marginPercent = Math.max(0, Math.min(printOverlayOptions.marginPercent, 20));
+        const cropPercent = Math.max(0, Math.min(printOverlayOptions.cropPercent, 20));
+        const cropZoom = getCropZoom(cropPercent);
+        const contentBox = getContentBox(pageWidth, pageHeight, marginPercent);
+        const safeEditorWidth = Math.max(1, editorCanvasWidth);
+        const safeEditorHeight = Math.max(1, editorCanvasHeight);
+        const scaleX = (contentBox.width / safeEditorWidth) * cropZoom;
+        const scaleY = (contentBox.height / safeEditorHeight) * cropZoom;
+        const cropInsetX = (safeEditorWidth * cropPercent) / 100;
+        const cropInsetY = (safeEditorHeight * cropPercent) / 100;
 
         const transformCoords = (x: number, y: number) => {
-            if (rotation === 0) {
-                return { x: x * scaleX, y: pageHeight - (y * scaleY) };
-            }
-            if (rotation === 90) {
-                // Visual x (0..1000) -> PDF y (0..H)
-                // Visual y (0..800) -> PDF x (0..W)
-                return { x: y * scaleY, y: x * scaleX };
-            }
-            if (rotation === 180) {
-                return { x: pageWidth - (x * scaleX), y: y * scaleY };
-            }
-            if (rotation === 270) {
-                return { x: pageWidth - (y * scaleY), y: pageHeight - (x * scaleX) };
-            }
-            return { x: x * scaleX, y: pageHeight - (y * scaleY) };
+            return {
+                x: contentBox.x + ((x - cropInsetX) * scaleX),
+                y: contentBox.y + contentBox.height - ((y - cropInsetY) * scaleY)
+            };
         };
 
-        const getRotationAdjustment = () => {
-            if (rotation === 90) return -90;
-            if (rotation === 180) return -180;
-            if (rotation === 270) return -270;
-            return 0;
+        const getStandardFontName = (data: TextAnnotationData) => {
+            const isSerif = data.fontFamily === 'Times New Roman' || data.fontFamily === 'Georgia';
+            const isMonospace = data.fontFamily === 'Courier New';
+
+            if (isSerif) {
+                if (data.bold && data.italic) return pdfLib.StandardFonts.TimesRomanBoldItalic;
+                if (data.bold) return pdfLib.StandardFonts.TimesRomanBold;
+                if (data.italic) return pdfLib.StandardFonts.TimesRomanItalic;
+                return pdfLib.StandardFonts.TimesRoman;
+            }
+            if (isMonospace) {
+                if (data.bold && data.italic) return pdfLib.StandardFonts.CourierBoldOblique;
+                if (data.bold) return pdfLib.StandardFonts.CourierBold;
+                if (data.italic) return pdfLib.StandardFonts.CourierOblique;
+                return pdfLib.StandardFonts.Courier;
+            }
+            if (data.bold && data.italic) return pdfLib.StandardFonts.HelveticaBoldOblique;
+            if (data.bold) return pdfLib.StandardFonts.HelveticaBold;
+            if (data.italic) return pdfLib.StandardFonts.HelveticaOblique;
+            return pdfLib.StandardFonts.Helvetica;
+        };
+
+        const fontCache = new Map<string, Awaited<ReturnType<typeof pdfPage.doc.embedFont>>>();
+        const getFont = async (data: TextAnnotationData) => {
+            const fontName = getStandardFontName(data);
+            const cached = fontCache.get(fontName);
+            if (cached) return cached;
+            const font = await pdfPage.doc.embedFont(fontName);
+            fontCache.set(fontName, font);
+            return font;
+        };
+
+        const drawRasterizedTextLine = async (
+            line: string,
+            data: TextAnnotationData,
+            x: number,
+            topY: number,
+            lineHeight: number,
+            rotation: number,
+        ) => {
+            const renderScale = 2;
+            const canvas = document.createElement('canvas');
+            const context = canvas.getContext('2d');
+            if (!context) throw new Error('Text fallback canvas is unavailable.');
+
+            context.font = `${data.italic ? 'italic ' : ''}${data.bold ? 'bold ' : ''}${data.fontSize * renderScale}px ${data.fontFamily}`;
+            const measuredWidth = Math.max(1, Math.ceil(context.measureText(line || ' ').width));
+            canvas.width = measuredWidth + 4;
+            canvas.height = Math.max(1, Math.ceil(lineHeight * renderScale));
+            context.scale(renderScale, renderScale);
+            context.font = `${data.italic ? 'italic ' : ''}${data.bold ? 'bold ' : ''}${data.fontSize}px ${data.fontFamily}`;
+            context.fillStyle = data.color || '#000000';
+            context.textBaseline = 'top';
+            context.fillText(line || ' ', 1, 0);
+
+            const image = await pdfPage.doc.embedPng(await canvasToPngBytes(canvas));
+            const imageWidth = (canvas.width / renderScale) * scaleX;
+            const imageHeight = lineHeight * scaleY;
+            pdfPage.drawImage(image, {
+                x,
+                y: topY - imageHeight,
+                width: imageWidth,
+                height: imageHeight,
+                rotate: pdfLib.degrees(-rotation),
+            });
         };
 
         for (const ann of annotations) {
-            try {
-                const { x, y } = transformCoords(ann.x, ann.y);
-                const width = isLandscape ? ann.height * scaleX : ann.width * scaleX;
-                const height = isLandscape ? ann.width * scaleY : ann.height * scaleY;
-                const rotAdj = getRotationAdjustment();
+            const { x, y } = transformCoords(ann.x, ann.y);
+            const width = ann.width * scaleX;
+            const height = ann.height * scaleY;
 
-                if (ann.type === 'text') {
-                    const data = ann.data as TextAnnotationData;
-                    let font = fontHelvetica;
-                    if (data.bold && data.italic) font = fontHelveticaBoldOblique;
-                    else if (data.bold) font = fontHelveticaBold;
-                    else if (data.italic) font = fontHelveticaOblique;
+            if (ann.type === 'text') {
+                const data = ann.data as TextAnnotationData;
+                const font = await getFont(data);
 
-                    const renderedLines = data.text.split(/\r?\n/);
-                    const lines = renderedLines.length > 0 ? renderedLines : [''];
-                    const scaledFontSize = data.fontSize * (isLandscape ? scaleX : scaleY);
-                    const lineHeight = scaledFontSize * 1.25;
-                    const startY = y - (rotation === 0 ? scaledFontSize : 0);
+                const renderedLines = data.text.split(/\r?\n/);
+                const lines = renderedLines.length > 0 ? renderedLines : [''];
+                const scaledFontSize = data.fontSize * scaleY;
+                const lineHeight = scaledFontSize * 1.25;
+                const editorLineHeight = data.fontSize * 1.25;
 
-                    lines.forEach((line, index) => {
-                        pdfPage.drawText(line.length > 0 ? line : ' ', {
+                for (const [index, line] of lines.entries()) {
+                    const lineTopY = y - (index * lineHeight);
+                    try {
+                        font.encodeText(line.length > 0 ? line : ' ');
+                    } catch {
+                        await drawRasterizedTextLine(
+                            line,
+                            data,
                             x,
-                            y: startY - (index * lineHeight),
-                            size: scaledFontSize,
-                            font,
-                            color: hexToRgb(data.color || '#000000'),
-                            rotate: degrees(rotAdj - ann.rotation),
-                        });
-                    });
-                } else if (ann.type === 'drawing') {
-                    const data = ann.data as DrawingAnnotationData;
-                    const points = data.points;
-                    if (points.length < 2) continue;
-
-                    for (let i = 0; i < points.length - 1; i++) {
-                        const p1 = transformCoords(points[i].x, points[i].y);
-                        const p2 = transformCoords(points[i + 1].x, points[i + 1].y);
-                        pdfPage.drawLine({
-                            start: p1,
-                            end: p2,
-                            thickness: data.strokeWidth * (isLandscape ? scaleX : scaleY),
-                            color: hexToRgb(data.strokeColor),
-                        });
+                            lineTopY,
+                            editorLineHeight,
+                            ann.rotation,
+                        );
+                        continue;
                     }
-                } else if (ann.type === 'shape') {
-                    const data = ann.data as ShapeAnnotationData;
-                    const color = hexToRgb(data.strokeColor);
-                    const thickness = data.strokeWidth * (isLandscape ? scaleX : scaleY);
 
-                    if (data.shapeType === 'rectangle') {
+                    pdfPage.drawText(line.length > 0 ? line : ' ', {
+                        x,
+                        y: lineTopY - scaledFontSize,
+                        size: scaledFontSize,
+                        font,
+                        color: hexToRgb(data.color || '#000000', pdfLib.rgb),
+                        rotate: pdfLib.degrees(-ann.rotation),
+                    });
+                }
+            } else if (ann.type === 'drawing') {
+                const data = ann.data as DrawingAnnotationData;
+                const points = data.points;
+                if (points.length < 2) continue;
+
+                for (let i = 0; i < points.length - 1; i++) {
+                    const p1 = transformCoords(points[i].x, points[i].y);
+                    const p2 = transformCoords(points[i + 1].x, points[i + 1].y);
+                    pdfPage.drawLine({
+                        start: p1,
+                        end: p2,
+                        thickness: data.strokeWidth * Math.min(scaleX, scaleY),
+                        color: hexToRgb(data.strokeColor, pdfLib.rgb),
+                    });
+                }
+            } else if (ann.type === 'shape') {
+                const data = ann.data as ShapeAnnotationData;
+                const color = hexToRgb(data.strokeColor, pdfLib.rgb);
+                const thickness = data.strokeWidth * Math.min(scaleX, scaleY);
+
+                if (data.shapeType === 'rectangle') {
                         const p1 = transformCoords(ann.x, ann.y);
                         const p2 = transformCoords(ann.x + ann.width, ann.y);
                         const p3 = transformCoords(ann.x + ann.width, ann.y + ann.height);
@@ -946,12 +1446,12 @@ export const usePdfEditor = () => {
                         drawLine(p3, p4);
                         drawLine(p4, p1);
 
-                    } else if (data.shapeType === 'circle') {
+                } else if (data.shapeType === 'circle') {
                         const cx = ann.x + ann.width / 2;
                         const cy = ann.y + ann.height / 2;
                         const center = transformCoords(cx, cy);
-                        const rx = (ann.width / 2) * (isLandscape ? scaleY : scaleX);
-                        const ry = (ann.height / 2) * (isLandscape ? scaleX : scaleY);
+                    const rx = (ann.width / 2) * scaleX;
+                    const ry = (ann.height / 2) * scaleY;
 
                         pdfPage.drawEllipse({
                             x: center.x,
@@ -960,7 +1460,7 @@ export const usePdfEditor = () => {
                             yScale: ry,
                             borderColor: color, borderWidth: thickness,
                         });
-                    } else if (data.shapeType === 'line') {
+                } else if (data.shapeType === 'line') {
                         const x1 = ann.x + (data.x1 ?? 0) * ann.width;
                         const y1 = ann.y + (data.y1 ?? 0) * ann.height;
                         const x2 = ann.x + (data.x2 ?? 1) * ann.width;
@@ -971,91 +1471,176 @@ export const usePdfEditor = () => {
                             end: transformCoords(x2, y2),
                             thickness, color,
                         });
-                    }
-                } else if (ann.type === 'image') {
-                    const data = ann.data as ImageAnnotationData;
-                    let image;
-                    try {
-                        const imageBytes = await fetch(data.dataUrl).then(res => res.arrayBuffer());
-                        if (data.dataUrl.includes('image/png')) {
-                            image = await pdfPage.doc.embedPng(imageBytes);
-                        } else {
-                            image = await pdfPage.doc.embedJpg(imageBytes);
-                        }
-
-                        pdfPage.drawImage(image, {
-                            x: x,
-                            y: y - height,
-                            width,
-                            height,
-                            rotate: degrees(-ann.rotation + rotAdj),
-                        });
-                    } catch (e) {
-                        console.error("Failed to embed image", e);
-                    }
                 }
-            } catch (err) {
-                console.error("Error drawing annotation:", err);
+            } else if (isImageLikeAnnotation(ann)) {
+                const dataUrl = ann.data.dataUrl;
+                const imageKind = getDataUrlImageKind(dataUrl);
+                if (!imageKind) {
+                    throw new Error('An annotation contains an unsupported image format.');
+                }
+                const response = await fetch(dataUrl);
+                if (!response.ok) {
+                    throw new Error('An annotation image could not be read.');
+                }
+                const imageBytes = await response.arrayBuffer();
+                const dimensions = readImageDimensions(imageBytes);
+                if (!dimensions || dimensions.width * dimensions.height > MAX_IMAGE_PIXELS) {
+                    throw new Error('An annotation image is invalid or too large.');
+                }
+                const image = imageKind === 'png'
+                    ? await pdfPage.doc.embedPng(imageBytes)
+                    : await pdfPage.doc.embedJpg(imageBytes);
+
+                pdfPage.drawImage(image, {
+                    x,
+                    y: y - height,
+                    width,
+                    height,
+                    rotate: pdfLib.degrees(-ann.rotation),
+                });
             }
         }
-    };
+    }, [printOverlayOptions]);
 
-    const buildCurrentPdfBytes = useCallback(async () => {
-        const newPdf = await PDFDocument.create();
+    const applyPrintOverlays = useCallback(async (
+        pdfPage: PDFPage,
+        pageNumber: number,
+        totalPages: number,
+    ) => {
+        const pdfLib = await loadPdfLib();
+        const { width, height } = pdfPage.getSize();
+        const overlayFont = await pdfPage.doc.embedFont(pdfLib.StandardFonts.Helvetica);
+        const normalizedWatermark = printOverlayOptions.watermarkText.trim();
+        const normalizedHeader = printOverlayOptions.headerText.trim();
+        const normalizedFooter = printOverlayOptions.footerText.trim();
 
-        for (const page of pages) {
+        if (normalizedWatermark) {
+            const watermarkSize = Math.max(36, Math.min(width, height) * 0.08);
+            const watermarkWidth = overlayFont.widthOfTextAtSize(normalizedWatermark, watermarkSize);
+
+            pdfPage.drawText(normalizedWatermark, {
+                x: (width - watermarkWidth) / 2,
+                y: height / 2,
+                size: watermarkSize,
+                font: overlayFont,
+                color: pdfLib.rgb(0.72, 0.72, 0.72),
+                opacity: 0.22,
+                rotate: pdfLib.degrees(35),
+            });
+        }
+
+        if (printOverlayOptions.includePageNumbers) {
+            const label = `${pageNumber} / ${totalPages}`;
+            const labelSize = Math.max(9, Math.min(width, height) * 0.018);
+            const labelWidth = overlayFont.widthOfTextAtSize(label, labelSize);
+
+            pdfPage.drawText(label, {
+                x: width - labelWidth - 24,
+                y: 18,
+                size: labelSize,
+                font: overlayFont,
+                color: pdfLib.rgb(0.35, 0.35, 0.35),
+            });
+        }
+
+        if (normalizedHeader) {
+            const headerSize = Math.max(10, Math.min(width, height) * 0.018);
+            pdfPage.drawText(normalizedHeader, {
+                x: 24,
+                y: height - headerSize - 18,
+                size: headerSize,
+                font: overlayFont,
+                color: pdfLib.rgb(0.35, 0.35, 0.35),
+            });
+        }
+
+        if (normalizedFooter) {
+            const footerSize = Math.max(10, Math.min(width, height) * 0.018);
+            pdfPage.drawText(normalizedFooter, {
+                x: 24,
+                y: 18,
+                size: footerSize,
+                font: overlayFont,
+                color: pdfLib.rgb(0.35, 0.35, 0.35),
+            });
+        }
+    }, [printOverlayOptions]);
+
+    const buildPdfBytes = useCallback(async (sourcePages: EditorPage[]) => {
+        const pdfLib = await loadPdfLib();
+        const newPdf = await pdfLib.PDFDocument.create();
+        const marginPercent = Math.max(0, Math.min(printOverlayOptions.marginPercent, 20));
+        const cropZoom = getCropZoom(Math.max(0, Math.min(printOverlayOptions.cropPercent, 20)));
+        const sourcePdfCache = new Map<string, Promise<PDFDocument>>();
+
+        const loadSourcePdf = (fileData: EditorFile) => {
+            const cachedPdf = sourcePdfCache.get(fileData.id);
+            if (cachedPdf) {
+                return cachedPdf;
+            }
+
+            const pdfPromise = fileData.file.arrayBuffer().then((fileBuffer) => pdfLib.PDFDocument.load(fileBuffer));
+            sourcePdfCache.set(fileData.id, pdfPromise);
+            return pdfPromise;
+        };
+
+        for (const [pagePosition, page] of sourcePages.entries()) {
             const fileData = files[page.fileId];
             if (!fileData) {
                 continue;
             }
 
-            const fileBuffer = await fileData.file.arrayBuffer();
-            const srcPdf = await PDFDocument.load(fileBuffer);
-
-            if (pageSize === 'Original') {
-                const [copiedPage] = await newPdf.copyPages(srcPdf, [page.pageIndex - 1]);
-                const existingRotation = copiedPage.getRotation()?.angle ?? 0;
-                const newRotation = (existingRotation + page.rotation) % 360;
-                copiedPage.setRotation(degrees(newRotation));
-                newPdf.addPage(copiedPage);
-
-                if (page.annotations.length > 0) {
-                    const { width, height } = copiedPage.getSize();
-                    await applyAnnotationsToPage(copiedPage, page.annotations, height, width, newRotation);
-                }
-                continue;
-            }
-
-            const targetDims = PAGE_SIZES[pageSize];
-            if (!targetDims) {
-                throw new Error('Invalid page size');
-            }
-
-            const embeddedPage = await newPdf.embedPage(srcPdf.getPages()[page.pageIndex - 1]);
+            const srcPdf = await loadSourcePdf(fileData);
             const srcPage = srcPdf.getPage(page.pageIndex - 1);
             const srcRotation = srcPage.getRotation().angle;
             const totalRotation = (srcRotation + page.rotation) % 360;
+            let pageToEmbed = srcPage;
+
+            if (page.contentEdits.length > 0) {
+                const isolatedPdf = await pdfLib.PDFDocument.create();
+                const [isolatedPage] = await isolatedPdf.copyPages(srcPdf, [page.pageIndex - 1]);
+                isolatedPdf.addPage(isolatedPage);
+                const { applyContentEditsToPdfPage } = await loadContentEditExporter();
+                await applyContentEditsToPdfPage(isolatedPdf, isolatedPage, page.contentEdits);
+                pageToEmbed = isolatedPage;
+            }
+
+            const embeddedPage = await newPdf.embedPage(pageToEmbed);
 
             const { width: srcWidth, height: srcHeight } = embeddedPage;
             const isRotatedSides = totalRotation === 90 || totalRotation === 270;
             const effectiveWidth = isRotatedSides ? srcHeight : srcWidth;
             const effectiveHeight = isRotatedSides ? srcWidth : srcHeight;
 
-            let [targetWidth, targetHeight] = targetDims;
-            if (effectiveWidth > effectiveHeight) {
-                [targetWidth, targetHeight] = [targetHeight, targetWidth];
+            let targetWidth = effectiveWidth;
+            let targetHeight = effectiveHeight;
+
+            if (pageSize !== 'Original') {
+                const targetDims = PAGE_SIZES[pageSize];
+                if (!targetDims) {
+                    throw new Error('Invalid page size');
+                }
+
+                [targetWidth, targetHeight] = targetDims;
+                if (effectiveWidth > effectiveHeight) {
+                    [targetWidth, targetHeight] = [targetHeight, targetWidth];
+                }
             }
 
             const newPage = newPdf.addPage([targetWidth, targetHeight]);
-            const scale = Math.min(targetWidth / effectiveWidth, targetHeight / effectiveHeight);
-            const destWidth = effectiveWidth * scale;
-            const destHeight = effectiveHeight * scale;
-            const x = (targetWidth - destWidth) / 2;
-            const y = (targetHeight - destHeight) / 2;
+            const contentBox = getContentBox(targetWidth, targetHeight, marginPercent);
+            const scale = Math.min(contentBox.width / effectiveWidth, contentBox.height / effectiveHeight);
+            const destWidth = effectiveWidth * scale * cropZoom;
+            const destHeight = effectiveHeight * scale * cropZoom;
+            const x = contentBox.x + ((contentBox.width - destWidth) / 2);
+            const y = contentBox.y + ((contentBox.height - destHeight) / 2);
 
             const dims = { w: srcWidth * scale, h: srcHeight * scale };
             let drawX = x;
             let drawY = y;
+
+            dims.w *= cropZoom;
+            dims.h *= cropZoom;
 
             if (totalRotation === 90) {
                 drawX += dims.h;
@@ -1071,16 +1656,123 @@ export const usePdfEditor = () => {
                 y: drawY,
                 width: dims.w,
                 height: dims.h,
-                rotate: degrees(totalRotation),
+                rotate: pdfLib.degrees(totalRotation),
             });
 
             if (page.annotations.length > 0) {
-                await applyAnnotationsToPage(newPage, page.annotations, targetHeight, targetWidth, totalRotation);
+                const legacyCanvasSize = getLegacyEditorCanvasSize(totalRotation);
+                await applyAnnotationsToPage(
+                    newPage,
+                    page.annotations,
+                    targetHeight,
+                    targetWidth,
+                    page.annotationCanvasWidth ?? legacyCanvasSize.width,
+                    page.annotationCanvasHeight ?? legacyCanvasSize.height,
+                );
             }
+            await applyPrintOverlays(newPage, pagePosition + 1, sourcePages.length);
         }
 
         return newPdf.save();
-    }, [pages, files, pageSize]);
+    }, [files, pageSize, printOverlayOptions, applyAnnotationsToPage, applyPrintOverlays]);
+
+    const exportPdf = useCallback(async (labels?: ExportLabels, pageIds?: string[]) => {
+        const sourcePages = pageIds?.length
+            ? pages.filter(page => pageIds.includes(page.id))
+            : pages;
+
+        if (sourcePages.length === 0) {
+            return;
+        }
+
+        setIsProcessing(true);
+        try {
+            const pdfBytes = await buildPdfBytes(sourcePages);
+            const prefix = labels?.downloadPrefix ?? 'edited_document';
+            const originalName = labels?.originalName ?? 'original';
+            const filename = `${prefix}_${pageSize === 'Original' ? originalName : pageSize}.pdf`;
+            downloadPdfBytes(pdfBytes, filename);
+            recordExport(filename, sourcePages.length, pageIds?.length ? 'selection' : 'all');
+        } catch (error) {
+            console.error('Error exporting PDF:', error);
+            notifyError(labels?.failed ?? 'Failed to export PDF.');
+        } finally {
+            setIsProcessing(false);
+        }
+    }, [pages, buildPdfBytes, pageSize, recordExport, notifyError]);
+
+    const exportPageRange = useCallback(async (
+        startPage: number,
+        endPage: number,
+        labels?: ExportLabels,
+    ) => {
+        const rangeStart = Math.max(1, Math.min(startPage, endPage));
+        const rangeEnd = Math.min(pages.length, Math.max(startPage, endPage));
+        const sourcePages = pages.slice(rangeStart - 1, rangeEnd);
+
+        if (sourcePages.length === 0) {
+            return false;
+        }
+
+        setIsProcessing(true);
+        try {
+            const pdfBytes = await buildPdfBytes(sourcePages);
+            const prefix = labels?.downloadPrefix ?? 'edited_document';
+            const originalName = labels?.originalName ?? 'original';
+            const sizeLabel = pageSize === 'Original' ? originalName : pageSize;
+            const filename = `${prefix}_${rangeStart}-${rangeEnd}_${sizeLabel}.pdf`;
+            downloadPdfBytes(pdfBytes, filename);
+            recordExport(filename, sourcePages.length, 'range');
+            return true;
+        } catch (error) {
+            console.error('Error exporting PDF range:', error);
+            notifyError(labels?.failed ?? 'Failed to export PDF.');
+            return false;
+        } finally {
+            setIsProcessing(false);
+        }
+    }, [pages, buildPdfBytes, pageSize, recordExport, notifyError]);
+
+    const splitPdf = useCallback(async (
+        mode: 'single' | 'odd-even',
+        labels?: SplitPdfLabels,
+    ) => {
+        if (pages.length === 0) {
+            return false;
+        }
+
+        const groups = mode === 'single'
+            ? pages.map((page, index) => ({
+                pages: [page],
+                filename: `${labels?.splitDownloadPrefix ?? 'split_document'}_${labels?.pageSuffix ?? 'page'}-${index + 1}.pdf`
+            }))
+            : [
+                {
+                    pages: pages.filter((_, index) => index % 2 === 0),
+                    filename: `${labels?.splitDownloadPrefix ?? 'split_document'}_${labels?.oddSuffix ?? 'odd'}.pdf`
+                },
+                {
+                    pages: pages.filter((_, index) => index % 2 === 1),
+                    filename: `${labels?.splitDownloadPrefix ?? 'split_document'}_${labels?.evenSuffix ?? 'even'}.pdf`
+                }
+            ].filter(group => group.pages.length > 0);
+
+        setIsProcessing(true);
+        try {
+            for (const group of groups) {
+                const pdfBytes = await buildPdfBytes(group.pages);
+                downloadPdfBytes(pdfBytes, group.filename);
+                recordExport(group.filename, group.pages.length, mode === 'single' ? 'split-single' : 'split-odd-even');
+            }
+            return true;
+        } catch (error) {
+            console.error('Error splitting PDF:', error);
+            notifyError(labels?.failed ?? 'Failed to export PDF.');
+            return false;
+        } finally {
+            setIsProcessing(false);
+        }
+    }, [pages, buildPdfBytes, recordExport, notifyError]);
 
     const exportProtectedPdf = useCallback(async (
         password: string,
@@ -1090,20 +1782,19 @@ export const usePdfEditor = () => {
             return false;
         }
 
-        const normalizedPassword = password.trim();
-        if (!normalizedPassword) {
-            alert(labels?.invalidPassword ?? 'Please provide a valid password.');
+        if (password.length === 0) {
+            notifyError(labels?.invalidPassword ?? 'Please provide a valid password.');
             return false;
         }
 
         setIsProcessing(true);
         try {
-            const rawBytes = await buildCurrentPdfBytes();
+            const rawBytes = await buildPdfBytes(pages);
             const { PDF: SecurePDF } = await import('@libpdf/core');
             const securePdf = await SecurePDF.load(rawBytes);
             securePdf.setProtection({
-                userPassword: normalizedPassword,
-                ownerPassword: normalizedPassword,
+                userPassword: password,
+                ownerPassword: createId(),
                 algorithm: 'AES-256',
             });
 
@@ -1111,16 +1802,18 @@ export const usePdfEditor = () => {
             const prefix = labels?.downloadPrefix ?? 'protected_document';
             const originalName = labels?.originalName ?? 'original';
             const sizeLabel = pageSize === 'Original' ? originalName : pageSize;
-            downloadPdfBytes(protectedBytes, `${prefix}_${sizeLabel}.pdf`);
+            const filename = `${prefix}_${sizeLabel}.pdf`;
+            downloadPdfBytes(protectedBytes, filename);
+            recordExport(filename, pages.length, 'protected');
             return true;
         } catch (error) {
             console.error('Error protecting PDF:', error);
-            alert(labels?.failed ?? 'Failed to protect PDF.');
+            notifyError(labels?.failed ?? 'Failed to protect PDF.');
             return false;
         } finally {
             setIsProcessing(false);
         }
-    }, [pages.length, buildCurrentPdfBytes, pageSize]);
+    }, [pages, buildPdfBytes, pageSize, recordExport, notifyError]);
 
     const unlockPdfFile = useCallback(async (
         file: File | null,
@@ -1128,13 +1821,17 @@ export const usePdfEditor = () => {
         labels?: UnlockPdfLabels
     ): Promise<boolean> => {
         if (!file) {
-            alert(labels?.invalidFile ?? 'Please select a PDF file.');
+            notifyError(labels?.invalidFile ?? 'Please select a PDF file.');
             return false;
         }
 
         const isPdfFile = file.type === 'application/pdf' || /\.pdf$/i.test(file.name);
         if (!isPdfFile) {
-            alert(labels?.invalidFile ?? 'Please select a PDF file.');
+            notifyError(labels?.invalidFile ?? 'Please select a PDF file.');
+            return false;
+        }
+        if (!isAcceptedUnlockPdf(file)) {
+            notifyError(labels?.invalidFile ?? 'The selected PDF is invalid or too large.');
             return false;
         }
 
@@ -1151,25 +1848,38 @@ export const usePdfEditor = () => {
             const unlockedBytes = await securePdf.save();
             const prefix = labels?.downloadPrefix ?? 'unlocked_document';
             const baseName = file.name.replace(/\.pdf$/i, '');
-            downloadPdfBytes(unlockedBytes, `${prefix}_${baseName}.pdf`);
+            const filename = `${prefix}_${baseName}.pdf`;
+            downloadPdfBytes(unlockedBytes, filename);
+            recordExport(filename, 0, 'unlocked');
             return true;
         } catch (error) {
             console.error('Error unlocking PDF:', error);
             if (isLikelyInvalidPasswordError(error)) {
-                alert(labels?.invalidPassword ?? 'Invalid password.');
+                notifyError(labels?.invalidPassword ?? 'Invalid password.');
             } else {
-                alert(labels?.failed ?? 'Failed to unlock PDF.');
+                notifyError(labels?.failed ?? 'Failed to unlock PDF.');
             }
             return false;
         } finally {
             setIsProcessing(false);
         }
-    }, []);
+    }, [recordExport, notifyError]);
 
-    const updatePageAnnotations = useCallback((pageId: string, annotations: Annotation[]) => {
+    const updatePageAnnotations = useCallback((
+        pageId: string,
+        annotations: Annotation[],
+        contentEdits: ContentEdit[],
+        canvasSize?: { width: number; height: number },
+    ) => {
         setPages(prev => prev.map(page => {
             if (page.id === pageId) {
-                return { ...page, annotations };
+                return {
+                    ...page,
+                    annotations,
+                    contentEdits,
+                    annotationCanvasWidth: canvasSize?.width ?? page.annotationCanvasWidth,
+                    annotationCanvasHeight: canvasSize?.height ?? page.annotationCanvasHeight,
+                };
             }
             return page;
         }));
@@ -1179,8 +1889,17 @@ export const usePdfEditor = () => {
         files,
         pages,
         isProcessing,
+        notification,
+        dismissNotification,
+        isSessionReady,
+        hasSavedSession,
+        isSessionPersistenceEnabled,
+        setSessionPersistenceEnabled,
+        exportHistory,
         pageSize,
         setPageSize,
+        printOverlayOptions,
+        setPrintOverlayOptions,
         addFiles,
         movePage,
         rotatePage,
@@ -1190,6 +1909,8 @@ export const usePdfEditor = () => {
         duplicatePages,
         clearAll,
         exportPdf,
+        exportPageRange,
+        splitPdf,
         exportProtectedPdf,
         unlockPdfFile,
         undo,
