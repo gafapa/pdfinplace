@@ -10,7 +10,9 @@ const appendTrailingSlash = (url: string) => url.endsWith('/') ? url : `${url}/`
 
 const resolvePdfJsAssetBaseUrl = () => {
     const configuredBaseUrl = `${appendTrailingSlash(import.meta.env.BASE_URL)}pdfjs/`;
-    const documentBaseUrl = typeof document === 'undefined' ? globalThis.location?.href : document.baseURI;
+    const documentBaseUrl = typeof document === 'undefined'
+        ? globalThis.location?.href ?? 'http://localhost/'
+        : document.baseURI;
     return new URL(configuredBaseUrl, documentBaseUrl).href;
 };
 

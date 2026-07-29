@@ -8,12 +8,15 @@ import type {
 } from '../types/annotations';
 import { useI18n } from '../i18n';
 import { getPdfDocument } from '../utils/pdfjs';
+import { drawContentEditsPreview } from '../features/content-editor/drawContentEditsPreview';
+import type { ContentEdit } from '../features/content-editor/types';
 
 type PdfDocumentProxy = import('pdfjs-dist').PDFDocumentProxy;
 type PdfRenderTask = import('pdfjs-dist').RenderTask;
 type PdfLoadingTask = import('pdfjs-dist').PDFDocumentLoadingTask;
 
 const cloneArrayBuffer = (buffer: ArrayBuffer) => buffer.slice(0);
+const EMPTY_CONTENT_EDITS: ContentEdit[] = [];
 
 interface PdfPreviewProps {
     file?: File;
@@ -24,9 +27,24 @@ interface PdfPreviewProps {
     rotation?: number;
     className?: string;
     annotations?: Annotation[];
+    contentEdits?: ContentEdit[];
+    annotationCanvasWidth?: number;
+    annotationCanvasHeight?: number;
 }
 
-export const PdfPreview = ({ file, pdfDocument, pageIndex = 1, width = 200, height, rotation = 0, className = "", annotations = [] }: PdfPreviewProps) => {
+export const PdfPreview = ({
+    file,
+    pdfDocument,
+    pageIndex = 1,
+    width = 200,
+    height,
+    rotation = 0,
+    className = "",
+    annotations = [],
+    contentEdits = EMPTY_CONTENT_EDITS,
+    annotationCanvasWidth,
+    annotationCanvasHeight,
+}: PdfPreviewProps) => {
     const { t } = useI18n();
     const canvasRef = useRef<HTMLCanvasElement>(null);
     const imageCacheRef = useRef<Map<string, HTMLImageElement>>(new Map());
@@ -88,14 +106,29 @@ export const PdfPreview = ({ file, pdfDocument, pageIndex = 1, width = 200, heig
                         renderTask = page.render(renderContext);
                         await renderTask.promise;
 
+                        if (contentEdits.length > 0) {
+                            await drawContentEditsPreview(
+                                context,
+                                [...scaledViewport.transform],
+                                contentEdits,
+                            );
+                        }
+
                         // Draw annotations on top if provided
                         if (annotations && annotations.length > 0) {
-                            const editorBaseWidth = totalRotation % 180 === 0 ? 800 : 1000;
-                            const annotationScale = canvas.width / editorBaseWidth;
+                            const editorBaseWidth = annotationCanvasWidth ?? (totalRotation % 180 === 0 ? 800 : 1000);
+                            const editorBaseHeight = annotationCanvasHeight ?? (totalRotation % 180 === 0 ? 1000 : 800);
+                            const annotationScaleX = canvas.width / editorBaseWidth;
+                            const annotationScaleY = canvas.height / editorBaseHeight;
 
                             annotations.forEach(ann => {
                                 context.save();
-                                context.scale(annotationScale, annotationScale);
+                                context.scale(annotationScaleX, annotationScaleY);
+                                const centerX = ann.x + (ann.width / 2);
+                                const centerY = ann.y + (ann.height / 2);
+                                context.translate(centerX, centerY);
+                                context.rotate((ann.rotation * Math.PI) / 180);
+                                context.translate(-centerX, -centerY);
                                 
                                 if (ann.type === 'drawing') {
                                     const data = ann.data as DrawingAnnotationData;
@@ -157,7 +190,7 @@ export const PdfPreview = ({ file, pdfDocument, pageIndex = 1, width = 200, heig
                                         img.onload = () => {
                                             if (!isMounted) return;
                                             context.save();
-                                            context.scale(annotationScale, annotationScale);
+                                            context.scale(annotationScaleX, annotationScaleY);
                                             context.drawImage(img, ann.x, ann.y, ann.width, ann.height);
                                             context.restore();
                                         };
@@ -191,7 +224,18 @@ export const PdfPreview = ({ file, pdfDocument, pageIndex = 1, width = 200, heig
                 void loadingTask.destroy();
             }
         };
-    }, [file, pdfDocument, pageIndex, width, height, rotation, annotations]);
+    }, [
+        file,
+        pdfDocument,
+        pageIndex,
+        width,
+        height,
+        rotation,
+        annotations,
+        contentEdits,
+        annotationCanvasWidth,
+        annotationCanvasHeight,
+    ]);
 
     return (
         <div className={`relative bg-white shadow-sm overflow-hidden flex items-center justify-center ${className}`} style={{ width, height: height || 'auto' }}>

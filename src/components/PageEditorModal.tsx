@@ -16,14 +16,20 @@ import {
     ZoomOut,
     MousePointer2,
     ChevronLeft,
-    ChevronRight
+    ChevronRight,
+    FilePenLine
 } from 'lucide-react';
 import type { PDFDocumentProxy } from 'pdfjs-dist';
 import type { Annotation, TextAnnotationData, DrawingAnnotationData, ShapeAnnotationData, ImageAnnotationData } from '../types/annotations';
 import { useI18n } from '../i18n';
 import { createId } from '../utils/createId';
+import { getEditorCanvasSize, getLegacyEditorCanvasSize, scaleAnnotations, type EditorCanvasSize } from '../utils/pageGeometry';
+import { readImageDimensions } from '../utils/imageValidation';
+import { useDialogFocus } from '../hooks/useDialogFocus';
+import { ContentEditLayer } from '../features/content-editor/ContentEditLayer';
+import type { ContentEdit } from '../features/content-editor/types';
 
-type Tool = 'select' | 'text' | 'draw' | 'rectangle' | 'circle' | 'line' | 'image';
+type Tool = 'content' | 'select' | 'text' | 'draw' | 'rectangle' | 'circle' | 'line' | 'image';
 type InteractionMode = 'idle' | 'drawing' | 'moving' | 'resizing';
 type ResizeHandle = 'tl' | 'tr' | 'bl' | 'br' | null;
 type ShapeTool = Extract<Tool, 'rectangle' | 'circle' | 'line'>;
@@ -39,11 +45,18 @@ const MAX_SAVED_ASSETS = 30;
 interface PageEditorModalProps {
     isOpen: boolean;
     onClose: () => void;
-    onSave: (annotations: Annotation[]) => void;
+    onSave: (
+        annotations: Annotation[],
+        contentEdits: ContentEdit[],
+        canvasSize: EditorCanvasSize,
+    ) => void;
     pdfDocument?: PDFDocumentProxy;
     pageIndex: number;
     pageRotation: number;
     initialAnnotations: Annotation[];
+    initialContentEdits: ContentEdit[];
+    initialCanvasWidth?: number;
+    initialCanvasHeight?: number;
 }
 
 interface SavedAsset {
@@ -82,11 +95,15 @@ export const PageEditorModal = ({
     pdfDocument,
     pageIndex,
     pageRotation,
-    initialAnnotations
+    initialAnnotations,
+    initialContentEdits,
+    initialCanvasWidth,
+    initialCanvasHeight,
 }: PageEditorModalProps) => {
     const { t } = useI18n();
     const [activeTool, setActiveTool] = useState<Tool>('select');
     const [annotations, setAnnotations] = useState<Annotation[]>(initialAnnotations);
+    const [contentEdits, setContentEdits] = useState<ContentEdit[]>(initialContentEdits);
     const [selectedAnnotationId, setSelectedAnnotationId] = useState<string | null>(null);
     const [interactionMode, setInteractionMode] = useState<InteractionMode>('idle');
     const [resizeHandle, setResizeHandle] = useState<ResizeHandle>(null);
@@ -103,6 +120,10 @@ export const PageEditorModal = ({
     const [textItalic, setTextItalic] = useState(false);
     const [imageRenderTick, setImageRenderTick] = useState(0);
     const [nativeRotation, setNativeRotation] = useState(0);
+    const [pageViewportSize, setPageViewportSize] = useState<EditorCanvasSize>(
+        () => getLegacyEditorCanvasSize(pageRotation)
+    );
+    const [isGeometryReady, setIsGeometryReady] = useState(!pdfDocument);
     const [fitScale, setFitScale] = useState(1);
     const [editorZoom, setEditorZoom] = useState(1);
     const [savedAssets, setSavedAssets] = useState<SavedAsset[]>(() => {
@@ -126,9 +147,9 @@ export const PageEditorModal = ({
     });
     const [uploadTarget, setUploadTarget] = useState<'canvas' | 'signature' | 'stamp'>('canvas');
     const [isAssetsPanelOpen, setIsAssetsPanelOpen] = useState(getInitialAssetsPanelOpen);
+    const [errorMessage, setErrorMessage] = useState('');
 
     const canvasRef = useRef<HTMLCanvasElement>(null);
-    const overlayRef = useRef<HTMLDivElement>(null);
     const editorViewportRef = useRef<HTMLDivElement>(null);
     const fileInputRef = useRef<HTMLInputElement>(null);
     const textareaRef = useRef<HTMLTextAreaElement>(null);
@@ -137,13 +158,16 @@ export const PageEditorModal = ({
     const canvasBoundsRef = useRef<DOMRect | null>(null);
     const pointerMoveFrameRef = useRef<number | null>(null);
     const pendingPointerCoordsRef = useRef<{ x: number; y: number } | null>(null);
+    const annotationsInitializedRef = useRef(false);
 
     const totalRotation = (nativeRotation + pageRotation) % 360;
-    const isLandscape = (totalRotation % 180) !== 0;
-    const canvasWidth = isLandscape ? 1000 : 800;
-    const canvasHeight = isLandscape ? 800 : 1000;
+    const { width: canvasWidth, height: canvasHeight } = getEditorCanvasSize(
+        pageViewportSize.width,
+        pageViewportSize.height,
+    );
     const editorScale = fitScale * editorZoom;
     const editorZoomPercent = Math.round(editorZoom * 100);
+    const dialogRef = useDialogFocus<HTMLDivElement>(isOpen, onClose);
 
     // Sync ref with state for event handlers
     useEffect(() => {
@@ -216,17 +240,28 @@ export const PageEditorModal = ({
         const loadNativeRotation = async () => {
             if (!isOpen || !pdfDocument) {
                 setNativeRotation(0);
+                setPageViewportSize(getLegacyEditorCanvasSize(pageRotation));
+                setIsGeometryReady(true);
                 return;
             }
 
             try {
                 const page = await pdfDocument.getPage(pageIndex);
                 if (!isCancelled) {
-                    setNativeRotation(page.rotate ?? 0);
+                    const nativePageRotation = page.rotate ?? 0;
+                    const viewport = page.getViewport({
+                        scale: 1,
+                        rotation: (nativePageRotation + pageRotation) % 360,
+                    });
+                    setNativeRotation(nativePageRotation);
+                    setPageViewportSize({ width: viewport.width, height: viewport.height });
+                    setIsGeometryReady(true);
                 }
             } catch {
                 if (!isCancelled) {
                     setNativeRotation(0);
+                    setPageViewportSize(getLegacyEditorCanvasSize(pageRotation));
+                    setIsGeometryReady(true);
                 }
             }
         };
@@ -236,7 +271,27 @@ export const PageEditorModal = ({
         return () => {
             isCancelled = true;
         };
-    }, [isOpen, pdfDocument, pageIndex]);
+    }, [isOpen, pdfDocument, pageIndex, pageRotation]);
+
+    useEffect(() => {
+        if (!isOpen || !isGeometryReady || annotationsInitializedRef.current) return;
+
+        const sourceSize = initialCanvasWidth && initialCanvasHeight
+            ? { width: initialCanvasWidth, height: initialCanvasHeight }
+            : getLegacyEditorCanvasSize(totalRotation);
+        const targetSize = { width: canvasWidth, height: canvasHeight };
+        setAnnotations(scaleAnnotations(initialAnnotations, sourceSize, targetSize));
+        annotationsInitializedRef.current = true;
+    }, [
+        isOpen,
+        isGeometryReady,
+        initialAnnotations,
+        initialCanvasWidth,
+        initialCanvasHeight,
+        totalRotation,
+        canvasWidth,
+        canvasHeight,
+    ]);
 
     useEffect(() => {
         if (!isOpen) return;
@@ -811,12 +866,24 @@ export const PageEditorModal = ({
         canvasBoundsRef.current = null;
     };
 
-    const handleImageUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const handleImageUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
         const file = e.target.files?.[0];
         if (!file) return;
+        setErrorMessage('');
 
-        if (!file.type.startsWith('image/') || file.size > MAX_UPLOAD_IMAGE_BYTES) {
-            alert(t('modal.imageFileTooLarge'));
+        const normalizedName = file.name.toLowerCase();
+        const isSupportedImage = ['image/png', 'image/jpeg'].includes(file.type) ||
+            /\.(png|jpe?g)$/.test(normalizedName);
+        if (!isSupportedImage || file.size > MAX_UPLOAD_IMAGE_BYTES) {
+            setErrorMessage(t('modal.imageFileTooLarge'));
+            e.target.value = '';
+            return;
+        }
+
+        const imageBuffer = await file.arrayBuffer();
+        const dimensions = readImageDimensions(imageBuffer);
+        if (!dimensions || dimensions.width * dimensions.height > MAX_UPLOAD_IMAGE_PIXELS) {
+            setErrorMessage(t('modal.imagePixelsTooLarge'));
             e.target.value = '';
             return;
         }
@@ -830,7 +897,7 @@ export const PageEditorModal = ({
             const img = new Image();
             img.onload = () => {
                 if (img.width * img.height > MAX_UPLOAD_IMAGE_PIXELS) {
-                    alert(t('modal.imagePixelsTooLarge'));
+                    setErrorMessage(t('modal.imagePixelsTooLarge'));
                     return;
                 }
 
@@ -852,9 +919,13 @@ export const PageEditorModal = ({
                     });
                 }
             };
+            img.onerror = () => setErrorMessage(t('modal.imagePixelsTooLarge'));
             img.src = result;
         };
-        reader.readAsDataURL(file);
+        const normalizedImageBlob = new Blob([imageBuffer], {
+            type: dimensions.kind === 'png' ? 'image/png' : 'image/jpeg',
+        });
+        reader.readAsDataURL(normalizedImageBlob);
         setUploadTarget('canvas');
         e.target.value = '';
     };
@@ -864,7 +935,7 @@ export const PageEditorModal = ({
         setAnnotations(finalizedAnnotations);
         setEditingTextId(null);
         editingTextIdRef.current = null;
-        onSave(finalizedAnnotations);
+        onSave(finalizedAnnotations, contentEdits, { width: canvasWidth, height: canvasHeight });
         onClose();
     };
 
@@ -874,6 +945,7 @@ export const PageEditorModal = ({
     const currentEditingText = currentEditingTextId ? annotations.find(a => a.id === currentEditingTextId) : null;
     const showTextControls = activeTool === 'text';
     const toolItems = [
+        { id: 'content', icon: FilePenLine, label: t('modal.editContent') },
         { id: 'select', icon: MousePointer2, label: t('modal.select') },
         { id: 'text', icon: Type, label: t('modal.text') },
         { id: 'draw', icon: Pencil, label: t('modal.draw') },
@@ -884,10 +956,34 @@ export const PageEditorModal = ({
     ] as const;
 
     return (
-        <div className="fixed inset-0 bg-white/90 z-[50] flex flex-col overflow-hidden">
+        <div
+            ref={dialogRef}
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="page-editor-title"
+            tabIndex={-1}
+            className="fixed inset-0 bg-white/90 z-[50] flex flex-col overflow-hidden"
+        >
+            <div aria-live="assertive" aria-atomic="true">
+                {errorMessage ? (
+                    <div role="alert" className="absolute left-1/2 top-16 z-[80] flex w-[min(92vw,32rem)] -translate-x-1/2 items-start gap-3 rounded-lg border border-red-200 bg-white p-3 text-sm text-red-800 shadow-xl">
+                        <span className="flex-1">{errorMessage}</span>
+                        <button
+                            type="button"
+                            onClick={() => setErrorMessage('')}
+                            className="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-md hover:bg-red-50"
+                            aria-label={t('common.close')}
+                        >
+                            <X aria-hidden="true" className="h-4 w-4" />
+                        </button>
+                    </div>
+                ) : null}
+            </div>
             <div className="bg-white border-b border-gray-200 text-gray-900 px-2 sm:px-3 py-2 shadow-sm z-[60]">
                 <div className="grid grid-cols-[auto_1fr_auto] items-center gap-2">
-                    <span className="font-semibold text-gray-700 shrink-0">{t('common.page')} {pageIndex}</span>
+                    <h2 id="page-editor-title" className="font-semibold text-gray-700 shrink-0">
+                        {t('common.page')} {pageIndex}
+                    </h2>
                     <div className="min-w-0 flex justify-center overflow-x-auto">
                         {showTextControls ? (
                             <div className="flex items-center gap-2 whitespace-nowrap rounded-lg border border-gray-200 bg-white p-1 w-fit">
@@ -917,6 +1013,18 @@ export const PageEditorModal = ({
                                 >
                                     {TEXT_FONTS.map(font => <option key={font} value={font}>{font}</option>)}
                                 </select>
+                            </div>
+                        ) : activeTool === 'content' ? (
+                            <div
+                                role="status"
+                                aria-live="polite"
+                                className="flex h-9 items-center gap-2 whitespace-nowrap rounded-lg border border-amber-200 bg-amber-50 px-3 text-xs font-semibold text-amber-950"
+                            >
+                                <FilePenLine aria-hidden="true" className="h-4 w-4" />
+                                {t('modal.editContent')}
+                                <span className="rounded-full bg-amber-200/70 px-2 py-0.5 tabular-nums">
+                                    {contentEdits.length}
+                                </span>
                             </div>
                         ) : (
                             <div className="h-9" />
@@ -979,16 +1087,26 @@ export const PageEditorModal = ({
                                     fileInputRef.current?.click();
                                     return;
                                 }
+                                if (tool.id === 'content') {
+                                    setIsAssetsPanelOpen(false);
+                                    setSelectedAnnotationId(null);
+                                }
                                 setActiveTool(tool.id as Tool);
                             }}
-                            className={`h-9 w-9 inline-flex items-center justify-center rounded-md border border-gray-200 transition-all shrink-0 ${activeTool === tool.id ? 'bg-blue-600 text-white shadow-inner border-blue-600' : 'bg-white text-gray-700 hover:bg-gray-50'}`}
+                            className={`inline-flex h-11 w-11 shrink-0 items-center justify-center rounded-md border border-gray-200 transition-all focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-600 ${
+                                activeTool === tool.id
+                                    ? tool.id === 'content'
+                                        ? 'border-amber-500 bg-amber-500 text-white shadow-inner'
+                                        : 'border-blue-600 bg-blue-600 text-white shadow-inner'
+                                    : 'bg-white text-gray-700 hover:bg-gray-50'
+                            }`}
                             title={tool.label}
                             aria-label={tool.label}
                         >
                             <tool.icon className="w-4 h-4" />
                         </button>
                     ))}
-                    <div className="h-px bg-gray-200 my-1"></div>
+                    <div className={`h-px bg-gray-200 my-1 ${activeTool === 'content' ? 'hidden' : ''}`}></div>
                     <input
                         type="color"
                         value={toolbarColor}
@@ -1001,9 +1119,9 @@ export const PageEditorModal = ({
                         }}
                         title="Color"
                         aria-label="Color"
-                        className="h-9 w-9 rounded-md cursor-pointer border border-gray-300 p-0 overflow-hidden bg-white shrink-0"
+                        className={`h-9 w-9 rounded-md cursor-pointer border border-gray-300 p-0 overflow-hidden bg-white shrink-0 ${activeTool === 'content' ? 'hidden' : ''}`}
                     />
-                    <div className="w-9 rounded-md border border-gray-300 bg-white p-1">
+                    <div className={`w-9 rounded-md border border-gray-300 bg-white p-1 ${activeTool === 'content' ? 'hidden' : ''}`}>
                         <div className="flex flex-col items-center gap-1">
                             {STROKE_GRAPHIC_OPTIONS.map((w) => (
                                 <button
@@ -1035,7 +1153,7 @@ export const PageEditorModal = ({
                                 applyTextStyleToActive(data => ({ ...data, bold: nextBold }));
                             }
                         }}
-                        className={`h-9 w-9 inline-flex items-center justify-center rounded-md border transition-colors shrink-0 ${toolbarBold ? 'bg-blue-600 text-white border-blue-600' : 'text-gray-700 bg-white border-gray-200 hover:bg-gray-50'}`}
+                        className={`h-9 w-9 items-center justify-center rounded-md border transition-colors shrink-0 ${activeTool === 'content' ? 'hidden' : 'inline-flex'} ${toolbarBold ? 'bg-blue-600 text-white border-blue-600' : 'text-gray-700 bg-white border-gray-200 hover:bg-gray-50'}`}
                         title={t('modal.bold')}
                     >
                         <Bold className="w-4 h-4" />
@@ -1049,16 +1167,16 @@ export const PageEditorModal = ({
                                 applyTextStyleToActive(data => ({ ...data, italic: nextItalic }));
                             }
                         }}
-                        className={`h-9 w-9 inline-flex items-center justify-center rounded-md border transition-colors shrink-0 ${toolbarItalic ? 'bg-blue-600 text-white border-blue-600' : 'text-gray-700 bg-white border-gray-200 hover:bg-gray-50'}`}
+                        className={`h-9 w-9 items-center justify-center rounded-md border transition-colors shrink-0 ${activeTool === 'content' ? 'hidden' : 'inline-flex'} ${toolbarItalic ? 'bg-blue-600 text-white border-blue-600' : 'text-gray-700 bg-white border-gray-200 hover:bg-gray-50'}`}
                         title={t('modal.italic')}
                     >
                         <Italic className="w-4 h-4" />
                     </button>
-                    <div className="h-px bg-gray-200 my-1"></div>
+                    <div className={`h-px bg-gray-200 my-1 ${activeTool === 'content' ? 'hidden' : ''}`}></div>
                     <button
                         onClick={() => { setAnnotations(prev => prev.filter(a => a.id !== selectedAnnotationId)); setSelectedAnnotationId(null); }}
                         disabled={!selectedAnnotationId}
-                        className="h-9 w-9 inline-flex items-center justify-center rounded-md border border-gray-200 transition-colors text-gray-700 bg-white hover:bg-red-100 hover:text-red-600 disabled:opacity-30 disabled:hover:bg-white disabled:hover:text-gray-700"
+                        className={`h-9 w-9 items-center justify-center rounded-md border border-gray-200 transition-colors text-gray-700 bg-white hover:bg-red-100 hover:text-red-600 disabled:opacity-30 disabled:hover:bg-white disabled:hover:text-gray-700 ${activeTool === 'content' ? 'hidden' : 'inline-flex'}`}
                         title={t('modal.deleteSelection')}
                         aria-label={t('modal.deleteSelection')}
                     >
@@ -1192,7 +1310,6 @@ export const PageEditorModal = ({
                         }}
                     >
                         <div
-                            ref={overlayRef}
                             className="relative origin-top-left shadow-2xl bg-white rounded-lg"
                             style={{
                                 width: canvasWidth,
@@ -1200,12 +1317,26 @@ export const PageEditorModal = ({
                                 transform: `scale(${editorScale})`
                             }}
                         >
-                            <PdfPreview pdfDocument={pdfDocument} pageIndex={pageIndex} width={canvasWidth} height={canvasHeight} rotation={pageRotation} className="rounded-lg ring-1 ring-gray-200" />
-                        <canvas
+                            <PdfPreview
+                                pdfDocument={pdfDocument}
+                                pageIndex={pageIndex}
+                                width={canvasWidth}
+                                height={canvasHeight}
+                                rotation={pageRotation}
+                                contentEdits={activeTool === 'content' ? undefined : contentEdits}
+                                className="rounded-lg ring-1 ring-gray-200"
+                            />
+                            <canvas
                                 ref={canvasRef}
                                 width={canvasWidth}
                                 height={canvasHeight}
-                                className={`absolute top-0 left-0 z-[10] ${activeTool === 'select' ? 'touch-auto cursor-default' : 'touch-none cursor-crosshair'}`}
+                                className={`absolute top-0 left-0 z-[10] ${
+                                    activeTool === 'content'
+                                        ? 'pointer-events-none'
+                                        : activeTool === 'select'
+                                            ? 'touch-auto cursor-default'
+                                            : 'touch-none cursor-crosshair'
+                                }`}
                                 onPointerDown={handlePointerDown}
                                 onPointerMove={handlePointerMove}
                                 onPointerUp={handlePointerUp}
@@ -1222,7 +1353,29 @@ export const PageEditorModal = ({
                                 }}
                             />
 
-                            {currentEditingText && (
+                            <ContentEditLayer
+                                isActive={activeTool === 'content'}
+                                pdfDocument={pdfDocument}
+                                pageIndex={pageIndex}
+                                displayRotation={totalRotation}
+                                width={canvasWidth}
+                                height={canvasHeight}
+                                edits={contentEdits}
+                                labels={{
+                                    loading: t('modal.contentLoading'),
+                                    empty: t('modal.contentEmpty'),
+                                    hint: t('modal.contentHint'),
+                                    editText: t('modal.editExistingText'),
+                                    deleteSelection: t('modal.deleteSelection'),
+                                    restoreSelection: t('modal.restoreContent'),
+                                    textElement: t('modal.textElement'),
+                                    imageElement: t('modal.imageElement'),
+                                }}
+                                onChange={setContentEdits}
+                                onError={setErrorMessage}
+                            />
+
+                            {currentEditingText && activeTool !== 'content' && (
                                 <textarea
                                     ref={textareaRef}
                                     className="absolute bg-white border-2 border-blue-500 rounded shadow-[0_0_20px_rgba(59,130,246,0.5)] p-2 outline-none resize-none whitespace-pre-wrap leading-tight text-gray-900 text-left overflow-auto z-[100]"
@@ -1260,7 +1413,7 @@ export const PageEditorModal = ({
                     </div>
                 </div>
             </div>
-            <input ref={fileInputRef} type="file" accept="image/*" className="hidden" onChange={handleImageUpload} />
+            <input ref={fileInputRef} type="file" accept="image/png,image/jpeg,.png,.jpg,.jpeg" className="hidden" onChange={handleImageUpload} />
         </div>
     );
 };

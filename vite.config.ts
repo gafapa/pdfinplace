@@ -5,6 +5,19 @@ import tailwindcss from '@tailwindcss/vite'
 // https://vite.dev/config/
 export default defineConfig({
   base: './',
+  server: {
+    allowedHosts: [
+      'pdfing.gallego.top',
+      'test.pdfing.gallego.top',
+    ],
+  },
+  preview: {
+    host: '0.0.0.0',
+    allowedHosts: [
+      'pdfing.gallego.top',
+      'test.pdfing.gallego.top',
+    ],
+  },
   plugins: [
     react(),
     tailwindcss(),

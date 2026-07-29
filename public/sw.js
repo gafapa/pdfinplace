@@ -1,4 +1,5 @@
-const CACHE_NAME = 'pageforge-cache-v5';
+const CACHE_PREFIX = 'pageforge-cache-';
+const CACHE_NAME = `${CACHE_PREFIX}v7`;
 const BASE_PATH = new URL(self.registration.scope).pathname;
 const MAX_CACHE_ENTRIES = 80;
 const MAX_CACHEABLE_RESPONSE_BYTES = 5 * 1024 * 1024;
@@ -23,20 +24,29 @@ const trimCache = async (cache) => {
 const isCacheableStaticRequest = (request, url) => {
   if (!url.pathname.startsWith(BASE_PATH)) return false;
   if (APP_SHELL_PATHS.has(url.pathname)) return true;
-  if (!url.pathname.startsWith(`${BASE_PATH}assets/`)) return false;
+  const isBuildAsset = url.pathname.startsWith(`${BASE_PATH}assets/`);
+  const isPdfJsAsset = url.pathname.startsWith(`${BASE_PATH}pdfjs/`);
+  if (!isBuildAsset && !isPdfJsAsset) return false;
 
-  return ['script', 'style', 'worker', 'font', 'image'].includes(request.destination);
+  return (
+    ['script', 'style', 'worker', 'font', 'image'].includes(request.destination) ||
+    /\.(?:bcmap|icc|wasm|ttf|pfb)$/i.test(url.pathname)
+  );
 };
 
-const shouldCacheResponse = (response) => {
+const shouldCacheResponse = async (response) => {
   if (!response || response.status !== 200 || response.type !== 'basic') {
     return false;
   }
 
-  const contentLength = Number(response.headers.get('content-length') ?? '0');
-  return !Number.isFinite(contentLength) ||
-    contentLength === 0 ||
-    contentLength <= MAX_CACHEABLE_RESPONSE_BYTES;
+  const contentLengthHeader = response.headers.get('content-length');
+  const contentLength = Number(contentLengthHeader);
+  if (contentLengthHeader && Number.isFinite(contentLength) && contentLength >= 0) {
+    return contentLength <= MAX_CACHEABLE_RESPONSE_BYTES;
+  }
+
+  const responseSize = (await response.clone().blob()).size;
+  return responseSize <= MAX_CACHEABLE_RESPONSE_BYTES;
 };
 
 self.addEventListener('install', (event) => {
@@ -52,7 +62,11 @@ self.addEventListener('activate', (event) => {
   event.waitUntil(
     caches
       .keys()
-      .then((keys) => Promise.all(keys.filter((key) => key !== CACHE_NAME).map((key) => caches.delete(key))))
+      .then((keys) => Promise.all(
+        keys
+          .filter((key) => key.startsWith(CACHE_PREFIX) && key !== CACHE_NAME)
+          .map((key) => caches.delete(key))
+      ))
       .then(() => self.clients.claim())
   );
 });
@@ -67,10 +81,15 @@ self.addEventListener('fetch', (event) => {
   if (request.mode === 'navigate') {
     event.respondWith(
       fetch(request)
-        .then((response) => {
-          if (shouldCacheResponse(response)) {
+        .then(async (response) => {
+          const isAppShellNavigation =
+            url.pathname === BASE_PATH ||
+            url.pathname === `${BASE_PATH}index.html`;
+          const isHtml = response.headers.get('content-type')?.toLowerCase().includes('text/html');
+          if (isAppShellNavigation && isHtml && await shouldCacheResponse(response)) {
             const responseClone = response.clone();
-            caches.open(CACHE_NAME).then((cache) => cache.put(`${BASE_PATH}index.html`, responseClone));
+            const cache = await caches.open(CACHE_NAME);
+            await cache.put(`${BASE_PATH}index.html`, responseClone);
           }
           return response;
         })
@@ -85,13 +104,15 @@ self.addEventListener('fetch', (event) => {
       if (!isCacheableStaticRequest(request, url)) return fetch(request);
 
       return fetch(request)
-        .then((response) => {
-          if (!shouldCacheResponse(response)) {
+        .then(async (response) => {
+          if (!await shouldCacheResponse(response)) {
             return response;
           }
 
           const responseClone = response.clone();
-          caches.open(CACHE_NAME).then((cache) => cache.put(request, responseClone).then(() => trimCache(cache)));
+          const cache = await caches.open(CACHE_NAME);
+          await cache.put(request, responseClone);
+          await trimCache(cache);
           return response;
         })
         .catch(() => cached);

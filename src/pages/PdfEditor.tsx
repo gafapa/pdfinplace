@@ -4,10 +4,11 @@ import { PdfPreview } from '../components/PdfPreview';
 import { DndContext, closestCenter, KeyboardSensor, PointerSensor, useSensor, useSensors, DragOverlay } from '@dnd-kit/core';
 import { SortableContext, sortableKeyboardCoordinates, rectSortingStrategy, useSortable } from '@dnd-kit/sortable';
 import { CSS } from '@dnd-kit/utilities';
-import { Upload, RotateCw, Trash2, Download, Plus, ZoomIn, ZoomOut, Undo, Redo, FileText, Lock, LockOpen, FolderOpen, Check, X, Copy, SplitSquareVertical, CheckSquare2, Square, ChevronLeft, ChevronRight, SlidersHorizontal } from 'lucide-react';
+import { Upload, RotateCw, Trash2, Download, Plus, ZoomIn, ZoomOut, Undo, Redo, FileText, Lock, LockOpen, FolderOpen, Check, X, Copy, SplitSquareVertical, CheckSquare2, Square, ChevronLeft, ChevronRight, SlidersHorizontal, Pencil } from 'lucide-react';
 import type { DragEndEvent, DragStartEvent } from '@dnd-kit/core';
 import { useI18n } from '../i18n';
 import { AVAILABLE_LOCALES, type Locale } from '../i18n/locales';
+import { useDialogFocus } from '../hooks/useDialogFocus';
 
 const LazyPageEditorModal = lazy(() =>
     import('../components/PageEditorModal').then((module) => ({ default: module.PageEditorModal }))
@@ -65,6 +66,7 @@ interface SortablePageProps {
     onToggleSelection: (pageId: string, shouldSelect: boolean) => void;
     selectLabel: string;
     deselectLabel: string;
+    editLabel: string;
 }
 
 // Sortable Item Component
@@ -85,7 +87,8 @@ const SortablePage = ({
     selectionOrder,
     onToggleSelection,
     selectLabel,
-    deselectLabel
+    deselectLabel,
+    editLabel,
 }: SortablePageProps) => {
     const {
         attributes,
@@ -125,6 +128,9 @@ const SortablePage = ({
                         rotation={page.rotation}
                         className="pointer-events-none"
                         annotations={page.annotations}
+                        contentEdits={page.contentEdits}
+                        annotationCanvasWidth={page.annotationCanvasWidth}
+                        annotationCanvasHeight={page.annotationCanvasHeight}
                     />
                 </div>
             </div>
@@ -150,20 +156,36 @@ const SortablePage = ({
             </div>
 
             {/* Overlay Actions */}
-            <div className="absolute top-1 right-1 flex gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
+            <div className="absolute top-1 right-1 flex gap-1 opacity-0 group-hover:opacity-100 group-focus-within:opacity-100 transition-opacity motion-reduce:transition-none">
                 <button
-                    onClick={(e) => { e.stopPropagation(); onRotate(id); }}
-                    className="p-1 bg-white rounded shadow text-gray-700 hover:text-blue-600 hover:bg-blue-50"
-                    title={rotateLabel}
+                    type="button"
+                    onClick={(event) => {
+                        event.stopPropagation();
+                        onOpenEditor(id);
+                    }}
+                    className="inline-flex h-8 w-8 items-center justify-center rounded bg-white text-gray-700 shadow hover:bg-blue-50 hover:text-blue-600 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-600"
+                    title={editLabel}
+                    aria-label={editLabel}
                 >
-                    <RotateCw className="w-4 h-4" />
+                    <Pencil aria-hidden="true" className="h-4 w-4" />
                 </button>
                 <button
-                    onClick={(e) => { e.stopPropagation(); onDelete(id); }}
-                    className="p-1 bg-white rounded shadow text-gray-700 hover:text-red-600 hover:bg-red-50"
-                    title={deleteLabel}
+                    type="button"
+                    onClick={(e) => { e.stopPropagation(); onRotate(id); }}
+                    className="inline-flex h-8 w-8 items-center justify-center rounded bg-white text-gray-700 shadow hover:bg-blue-50 hover:text-blue-600 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-600"
+                    title={rotateLabel}
+                    aria-label={rotateLabel}
                 >
-                    <Trash2 className="w-4 h-4" />
+                    <RotateCw aria-hidden="true" className="w-4 h-4" />
+                </button>
+                <button
+                    type="button"
+                    onClick={(e) => { e.stopPropagation(); onDelete(id); }}
+                    className="inline-flex h-8 w-8 items-center justify-center rounded bg-white text-gray-700 shadow hover:bg-red-50 hover:text-red-600 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-red-600"
+                    title={deleteLabel}
+                    aria-label={deleteLabel}
+                >
+                    <Trash2 aria-hidden="true" className="w-4 h-4" />
                 </button>
             </div>
             {/* Original page number (from source file) */}
@@ -187,6 +209,8 @@ export const PdfEditor = () => {
         files,
         pages,
         isProcessing,
+        notification,
+        dismissNotification,
         isSessionReady,
         hasSavedSession,
         isSessionPersistenceEnabled,
@@ -228,6 +252,7 @@ export const PdfEditor = () => {
     const [protectPasswordConfirm, setProtectPasswordConfirm] = useState('');
     const [unlockPassword, setUnlockPassword] = useState('');
     const [unlockFile, setUnlockFile] = useState<File | null>(null);
+    const [uiError, setUiError] = useState('');
     const addFilesInputRef = useRef<HTMLInputElement>(null);
     const unlockFileInputRef = useRef<HTMLInputElement>(null);
     const selectedPageIdsValid = useMemo(
@@ -236,7 +261,7 @@ export const PdfEditor = () => {
     );
     const selectedPageIdSet = useMemo(() => new Set(selectedPageIdsValid), [selectedPageIdsValid]);
 
-    const toolbarButtonClass = "inline-flex h-8 w-8 items-center justify-center rounded-md border border-gray-200 bg-white hover:bg-gray-50 text-gray-700 text-xs font-medium transition-colors whitespace-nowrap disabled:opacity-40 disabled:cursor-not-allowed";
+    const toolbarButtonClass = "inline-flex h-10 w-10 items-center justify-center rounded-md border border-gray-200 bg-white hover:bg-gray-50 text-gray-700 text-xs font-medium transition-colors motion-reduce:transition-none whitespace-nowrap disabled:opacity-40 disabled:cursor-not-allowed focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-600 focus-visible:ring-offset-1";
     const toolbarIconButtonClass = toolbarButtonClass;
     const canExport = pages.length > 0 && !isProcessing;
     const hasSelectedPages = selectedPageIdsValid.length > 0 && !isProcessing;
@@ -257,8 +282,15 @@ export const PdfEditor = () => {
         if (!filesList || isProcessing) {
             return;
         }
-        addFiles(Array.from(filesList));
-    }, [addFiles, isProcessing]);
+        addFiles(Array.from(filesList), {
+            skippedPrefix: t('editor.importSkipped'),
+            failedPrefix: t('editor.importFailed'),
+            fileCount: t('editor.importFileCount'),
+            unsupported: t('editor.importUnsupported'),
+            fileSize: t('editor.importFileSize'),
+            batchSize: t('editor.importBatchSize'),
+        });
+    }, [addFiles, isProcessing, t]);
 
     const triggerAddFiles = useCallback(() => {
         if (isProcessing) {
@@ -299,8 +331,15 @@ export const PdfEditor = () => {
         const start = Number(rangeStart);
         const end = Number(rangeEnd);
 
-        if (!Number.isFinite(start) || !Number.isFinite(end) || start < 1 || end < 1) {
-            alert(t('editor.invalidRange'));
+        if (
+            !Number.isInteger(start) ||
+            !Number.isInteger(end) ||
+            start < 1 ||
+            end < 1 ||
+            start > pages.length ||
+            end > pages.length
+        ) {
+            setUiError(t('editor.invalidRange'));
             return;
         }
 
@@ -309,7 +348,7 @@ export const PdfEditor = () => {
             downloadPrefix: t('editor.downloadPrefix'),
             originalName: t('editor.originalSizeName'),
         });
-    }, [rangeStart, rangeEnd, exportPageRange, t]);
+    }, [rangeStart, rangeEnd, pages.length, exportPageRange, t]);
 
     const handleSplitSingle = useCallback(() => {
         splitPdf('single', {
@@ -448,7 +487,7 @@ export const PdfEditor = () => {
         }
 
         if (protectPassword.trim() !== protectPasswordConfirm.trim()) {
-            alert(t('editor.passwordMismatch'));
+            setUiError(t('editor.passwordMismatch'));
             return;
         }
 
@@ -494,6 +533,8 @@ export const PdfEditor = () => {
             coordinateGetter: sortableKeyboardCoordinates,
         })
     );
+    const protectDialogRef = useDialogFocus<HTMLDivElement>(isProtectDialogOpen, closeProtectDialog);
+    const unlockDialogRef = useDialogFocus<HTMLDivElement>(isUnlockDialogOpen, closeUnlockDialog);
 
     const handleDragStart = (event: DragStartEvent) => {
         setActiveId(String(event.active.id));
@@ -530,7 +571,14 @@ export const PdfEditor = () => {
                 /\.(pdf|jpg|jpeg|png|docx|odt)$/i.test(file.name)
             );
             if (droppedFiles.length > 0) {
-                addFiles(droppedFiles);
+                addFiles(droppedFiles, {
+                    skippedPrefix: t('editor.importSkipped'),
+                    failedPrefix: t('editor.importFailed'),
+                    fileCount: t('editor.importFileCount'),
+                    unsupported: t('editor.importUnsupported'),
+                    fileSize: t('editor.importFileSize'),
+                    batchSize: t('editor.importBatchSize'),
+                });
             }
         }
     };
@@ -541,6 +589,31 @@ export const PdfEditor = () => {
             onDragOver={handleDragOver}
             onDrop={handleDrop}
         >
+            <div
+                className="pointer-events-none fixed left-1/2 top-3 z-[100] w-[min(92vw,36rem)] -translate-x-1/2"
+                aria-live="assertive"
+                aria-atomic="true"
+            >
+                {(notification || uiError) ? (
+                    <div role="alert" className="pointer-events-auto flex items-start gap-3 whitespace-pre-line rounded-lg border border-red-200 bg-white p-3 text-sm text-red-800 shadow-xl">
+                        <span className="flex-1">{uiError || notification?.message}</span>
+                        <button
+                            type="button"
+                            onClick={() => {
+                                setUiError('');
+                                dismissNotification();
+                            }}
+                            className="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-md hover:bg-red-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-red-600"
+                            aria-label={t('common.close')}
+                        >
+                            <X aria-hidden="true" className="h-4 w-4" />
+                        </button>
+                    </div>
+                ) : null}
+            </div>
+            <div role="status" aria-live="polite" className="sr-only">
+                {isProcessing ? t('common.processing') : ''}
+            </div>
             <input
                 ref={addFilesInputRef}
                 type="file"
@@ -995,6 +1068,7 @@ export const PdfEditor = () => {
                                             onToggleSelection={handleToggleSelection}
                                             selectLabel={t('editor.selectPage')}
                                             deselectLabel={t('editor.deselectPage')}
+                                            editLabel={t('editor.editPage')}
                                         />
                                     ));
                                 })()}
@@ -1017,6 +1091,9 @@ export const PdfEditor = () => {
                                                         height={180 * scale}
                                                         rotation={page.rotation}
                                                         annotations={page.annotations}
+                                                        contentEdits={page.contentEdits}
+                                                        annotationCanvasWidth={page.annotationCanvasWidth}
+                                                        annotationCanvasHeight={page.annotationCanvasHeight}
                                                     />
                                                 </div>
                                             </div>
@@ -1066,13 +1143,16 @@ export const PdfEditor = () => {
                             key={selectedPage.id}
                             isOpen={!!editingPageId}
                             onClose={() => setEditingPageId(null)}
-                            onSave={(annotations) => {
-                                updatePageAnnotations(selectedPage.id, annotations);
+                            onSave={(annotations, contentEdits, canvasSize) => {
+                                updatePageAnnotations(selectedPage.id, annotations, contentEdits, canvasSize);
                             }}
                             pdfDocument={files[selectedPage.fileId]?.pdfDoc}
                             pageIndex={selectedPage.pageIndex}
                             pageRotation={selectedPage.rotation}
                             initialAnnotations={selectedPage.annotations || []}
+                            initialContentEdits={selectedPage.contentEdits || []}
+                            initialCanvasWidth={selectedPage.annotationCanvasWidth}
+                            initialCanvasHeight={selectedPage.annotationCanvasHeight}
                         />
                     </Suspense>
                 );
@@ -1080,25 +1160,38 @@ export const PdfEditor = () => {
 
             {isProtectDialogOpen ? (
                 <div className="fixed inset-0 z-40 flex items-center justify-center bg-black/30 p-4">
-                    <div className="w-full max-w-sm rounded-lg border border-gray-200 bg-white p-4 shadow-xl">
-                        <h3 className="mb-1 text-sm font-semibold text-gray-900">{t('editor.protectPdf')}</h3>
-                        <p className="mb-3 text-xs text-gray-600">{t('editor.protectHint')}</p>
+                    <div
+                        ref={protectDialogRef}
+                        role="dialog"
+                        aria-modal="true"
+                        aria-labelledby="protect-dialog-title"
+                        aria-describedby="protect-dialog-description"
+                        tabIndex={-1}
+                        className="w-full max-w-sm rounded-lg border border-gray-200 bg-white p-4 shadow-xl"
+                    >
+                        <h2 id="protect-dialog-title" className="mb-1 text-sm font-semibold text-gray-900">{t('editor.protectPdf')}</h2>
+                        <p id="protect-dialog-description" className="mb-3 text-xs text-gray-600">{t('editor.protectHint')}</p>
                         <div className="space-y-2">
                             <input
+                                id="protect-password"
+                                data-autofocus
                                 type="password"
                                 autoComplete="new-password"
                                 value={protectPassword}
                                 onChange={(e) => setProtectPassword(e.target.value)}
                                 className="h-9 w-full rounded-md border border-gray-300 px-2.5 text-sm text-gray-800 focus:border-gray-400 focus:outline-none"
                                 placeholder={t('editor.password')}
+                                aria-label={t('editor.password')}
                             />
                             <input
+                                id="protect-password-confirm"
                                 type="password"
                                 autoComplete="new-password"
                                 value={protectPasswordConfirm}
                                 onChange={(e) => setProtectPasswordConfirm(e.target.value)}
                                 className="h-9 w-full rounded-md border border-gray-300 px-2.5 text-sm text-gray-800 focus:border-gray-400 focus:outline-none"
                                 placeholder={t('editor.confirmPassword')}
+                                aria-label={t('editor.confirmPassword')}
                             />
                         </div>
                         <div className="mt-4 flex justify-end gap-2">
@@ -1128,12 +1221,21 @@ export const PdfEditor = () => {
 
             {isUnlockDialogOpen ? (
                 <div className="fixed inset-0 z-40 flex items-center justify-center bg-black/30 p-4">
-                    <div className="w-full max-w-sm rounded-lg border border-gray-200 bg-white p-4 shadow-xl">
-                        <h3 className="mb-1 text-sm font-semibold text-gray-900">{t('editor.unlockPdf')}</h3>
-                        <p className="mb-3 text-xs text-gray-600">{t('editor.unlockHint')}</p>
+                    <div
+                        ref={unlockDialogRef}
+                        role="dialog"
+                        aria-modal="true"
+                        aria-labelledby="unlock-dialog-title"
+                        aria-describedby="unlock-dialog-description"
+                        tabIndex={-1}
+                        className="w-full max-w-sm rounded-lg border border-gray-200 bg-white p-4 shadow-xl"
+                    >
+                        <h2 id="unlock-dialog-title" className="mb-1 text-sm font-semibold text-gray-900">{t('editor.unlockPdf')}</h2>
+                        <p id="unlock-dialog-description" className="mb-3 text-xs text-gray-600">{t('editor.unlockHint')}</p>
                         <div className="mb-2 flex min-h-9 items-center gap-2 rounded-md border border-gray-300 px-2 py-1">
                             <button
                                 type="button"
+                                data-autofocus
                                 onClick={triggerUnlockFilePicker}
                                 className={toolbarIconButtonClass}
                                 title={t('editor.selectFile')}
@@ -1146,12 +1248,14 @@ export const PdfEditor = () => {
                             </span>
                         </div>
                         <input
+                            id="unlock-password"
                             type="password"
                             autoComplete="current-password"
                             value={unlockPassword}
                             onChange={(e) => setUnlockPassword(e.target.value)}
                             className="h-9 w-full rounded-md border border-gray-300 px-2.5 text-sm text-gray-800 focus:border-gray-400 focus:outline-none"
                             placeholder={t('editor.password')}
+                            aria-label={t('editor.password')}
                         />
                         <div className="mt-4 flex justify-end gap-2">
                             <button

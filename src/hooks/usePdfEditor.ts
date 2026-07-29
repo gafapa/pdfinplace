@@ -11,10 +11,27 @@ import type { PDFDocument, PDFPage } from 'pdf-lib';
 import { createId } from '../utils/createId';
 import { clearPersistedSession, loadPersistedSession, savePersistedSession, type PersistedFileRecord } from '../utils/persistedSession';
 import { getPdfDocument, loadPdfDocument } from '../utils/pdfjs';
+import {
+    MAX_ARCHIVE_ENTRIES,
+    MAX_ARCHIVE_ENTRY_BYTES,
+    MAX_ARCHIVE_UNCOMPRESSED_BYTES,
+    MAX_IMAGE_PIXELS,
+    MAX_IMPORT_PAGES,
+    MAX_OFFICE_XML_ELEMENTS,
+    MAX_RENDER_PIXELS,
+    formatMegabytes,
+    getAcceptedImportFiles,
+    getImportFileKind,
+    isAcceptedUnlockPdf,
+} from '../utils/importValidation';
+import { getDataUrlImageKind, readImageDimensions } from '../utils/imageValidation';
+import { getLegacyEditorCanvasSize } from '../utils/pageGeometry';
+import type { ContentEdit } from '../features/content-editor/types';
 
 type PdfLibModule = typeof import('pdf-lib');
 
 let pdfLibPromise: Promise<PdfLibModule> | null = null;
+let contentEditExporterPromise: Promise<typeof import('../features/content-editor/applyContentEdits')> | null = null;
 
 const loadPdfLib = async (): Promise<PdfLibModule> => {
     if (!pdfLibPromise) {
@@ -23,12 +40,22 @@ const loadPdfLib = async (): Promise<PdfLibModule> => {
     return pdfLibPromise;
 };
 
+const loadContentEditExporter = () => {
+    if (!contentEditExporterPromise) {
+        contentEditExporterPromise = import('../features/content-editor/applyContentEdits');
+    }
+    return contentEditExporterPromise;
+};
+
 export interface EditorPage {
     id: string; // Unique ID for dnd (e.g., "fileId-pageIndex")
     fileId: string;
     pageIndex: number; // 1-based index in the source file
     rotation: number; // 0, 90, 180, 270
     annotations: Annotation[]; // Page annotations
+    contentEdits: ContentEdit[];
+    annotationCanvasWidth?: number;
+    annotationCanvasHeight?: number;
 }
 
 export interface EditorFile {
@@ -43,6 +70,21 @@ interface ExportLabels {
     failed: string;
     downloadPrefix: string;
     originalName: string;
+}
+
+interface ImportLabels {
+    skippedPrefix: string;
+    failedPrefix: string;
+    fileCount: string;
+    unsupported: string;
+    fileSize: string;
+    batchSize: string;
+}
+
+export interface EditorNotification {
+    id: string;
+    message: string;
+    tone: 'error' | 'status';
 }
 
 interface SplitPdfLabels extends ExportLabels {
@@ -106,6 +148,68 @@ const isUsableArrayBuffer = (buffer: ArrayBuffer) => {
     }
 };
 
+interface ArchiveEntryMetadata {
+    dir: boolean;
+    _data?: {
+        uncompressedSize?: number;
+    };
+}
+
+const validateArchiveLimits = (files: Record<string, ArchiveEntryMetadata>) => {
+    const entries = Object.values(files);
+    if (entries.length > MAX_ARCHIVE_ENTRIES) {
+        throw new Error(`Archive contains more than ${MAX_ARCHIVE_ENTRIES} entries.`);
+    }
+
+    let totalUncompressedBytes = 0;
+    for (const entry of entries) {
+        if (entry.dir) continue;
+        const entryBytes = entry._data?.uncompressedSize;
+        if (!Number.isFinite(entryBytes) || entryBytes === undefined || entryBytes < 0) {
+            throw new Error('Archive entry size could not be verified.');
+        }
+        if (entryBytes > MAX_ARCHIVE_ENTRY_BYTES) {
+            throw new Error(`Archive entry exceeds ${formatMegabytes(MAX_ARCHIVE_ENTRY_BYTES)}.`);
+        }
+        totalUncompressedBytes += entryBytes;
+        if (totalUncompressedBytes > MAX_ARCHIVE_UNCOMPRESSED_BYTES) {
+            throw new Error(`Archive expands beyond ${formatMegabytes(MAX_ARCHIVE_UNCOMPRESSED_BYTES)}.`);
+        }
+    }
+};
+
+const assertRenderableArea = (width: number, height: number) => {
+    if (!Number.isFinite(width) || !Number.isFinite(height) || width <= 0 || height <= 0) {
+        throw new Error('Document produced invalid render dimensions.');
+    }
+    if (width * height > MAX_RENDER_PIXELS) {
+        throw new Error(`Rendered document exceeds the ${MAX_RENDER_PIXELS.toLocaleString()} pixel limit.`);
+    }
+};
+
+const validateOfficeXmlComplexity = (xml: string) => {
+    let elementCount = 0;
+    for (let index = 0; index < xml.length; index += 1) {
+        if (xml[index] === '<' && !['/', '?', '!'].includes(xml[index + 1] ?? '')) {
+            elementCount += 1;
+            if (elementCount > MAX_OFFICE_XML_ELEMENTS) {
+                throw new Error(`Office XML exceeds the ${MAX_OFFICE_XML_ELEMENTS.toLocaleString()} element limit.`);
+            }
+        }
+    }
+};
+
+const canvasToPngBytes = (canvas: HTMLCanvasElement): Promise<ArrayBuffer> =>
+    new Promise((resolve, reject) => {
+        canvas.toBlob((blob) => {
+            if (!blob) {
+                reject(new Error('Canvas could not be encoded as PNG.'));
+                return;
+            }
+            blob.arrayBuffer().then(resolve, reject);
+        }, 'image/png');
+    });
+
 const downloadPdfBytes = (pdfBytes: Uint8Array<ArrayBufferLike>, filename: string) => {
     const pdfBytesBuffer = new ArrayBuffer(pdfBytes.byteLength);
     new Uint8Array(pdfBytesBuffer).set(pdfBytes);
@@ -127,13 +231,6 @@ const LOCAL_PERSISTENCE_STORAGE_KEY = 'pageforge.local-persistence-enabled';
 const SAVED_ASSETS_STORAGE_KEY = 'pageforge.saved-assets';
 const MAX_HISTORY_ENTRIES = 80;
 const SESSION_PERSIST_DEBOUNCE_MS = 600;
-const MAX_IMPORT_FILES = 20;
-const MAX_IMPORT_FILE_SIZE_BYTES = 75 * 1024 * 1024;
-const MAX_IMPORT_TOTAL_SIZE_BYTES = 250 * 1024 * 1024;
-const MAX_IMPORT_PAGES = 500;
-const MAX_IMAGE_PIXELS = 32_000_000;
-const MAX_CANVAS_HEIGHT_PX = 160_000;
-const SUPPORTED_IMPORT_EXTENSIONS = /\.(pdf|jpe?g|png|docx|odt)$/i;
 
 const isLocalPersistenceEnabled = () => {
     if (typeof window === 'undefined') {
@@ -147,6 +244,7 @@ const clearSensitiveBrowserData = async () => {
     if (typeof window !== 'undefined') {
         localStorage.removeItem(EXPORT_HISTORY_STORAGE_KEY);
         localStorage.removeItem(SAVED_ASSETS_STORAGE_KEY);
+        localStorage.removeItem(OVERLAY_OPTIONS_STORAGE_KEY);
     }
 
     await clearPersistedSession();
@@ -171,29 +269,27 @@ const loadExportHistory = (): ExportHistoryEntry[] => {
     }
 };
 
+const DEFAULT_PRINT_OVERLAY_OPTIONS: PrintOverlayOptions = {
+    watermarkText: '',
+    includePageNumbers: false,
+    headerText: '',
+    footerText: '',
+    cropPercent: 0,
+    marginPercent: 0,
+};
+
 const loadOverlayOptions = (): PrintOverlayOptions => {
-    if (typeof window === 'undefined') {
-        return {
-            watermarkText: '',
-            includePageNumbers: false,
-            headerText: '',
-            footerText: '',
-            cropPercent: 0,
-            marginPercent: 0,
-        };
+    if (typeof window === 'undefined' || !isLocalPersistenceEnabled()) {
+        if (typeof window !== 'undefined') {
+            localStorage.removeItem(OVERLAY_OPTIONS_STORAGE_KEY);
+        }
+        return DEFAULT_PRINT_OVERLAY_OPTIONS;
     }
 
     try {
         const rawOptions = localStorage.getItem(OVERLAY_OPTIONS_STORAGE_KEY);
         if (!rawOptions) {
-            return {
-                watermarkText: '',
-                includePageNumbers: false,
-                headerText: '',
-                footerText: '',
-                cropPercent: 0,
-                marginPercent: 0,
-            };
+            return DEFAULT_PRINT_OVERLAY_OPTIONS;
         }
 
         const parsedOptions = JSON.parse(rawOptions) as Partial<PrintOverlayOptions>;
@@ -207,14 +303,7 @@ const loadOverlayOptions = (): PrintOverlayOptions => {
         };
     } catch (error) {
         console.error('Failed to read overlay options:', error);
-        return {
-            watermarkText: '',
-            includePageNumbers: false,
-            headerText: '',
-            footerText: '',
-            cropPercent: 0,
-            marginPercent: 0,
-        };
+        return DEFAULT_PRINT_OVERLAY_OPTIONS;
     }
 };
 
@@ -250,48 +339,6 @@ const isLikelyInvalidPasswordError = (error: unknown): boolean => {
         content.includes('decrypt');
 };
 
-const formatMegabytes = (bytes: number) => `${Math.round(bytes / (1024 * 1024))} MB`;
-
-const isSupportedImportFile = (file: File) =>
-    file.type === 'application/pdf' ||
-    file.type === 'image/jpeg' ||
-    file.type === 'image/png' ||
-    file.type === 'application/vnd.openxmlformats-officedocument.wordprocessingml.document' ||
-    file.type === 'application/vnd.oasis.opendocument.text' ||
-    SUPPORTED_IMPORT_EXTENSIONS.test(file.name);
-
-const getAcceptedImportFiles = (newFiles: File[]) => {
-    const acceptedFiles: File[] = [];
-    const skippedReasons: string[] = [];
-    let acceptedBytes = 0;
-
-    for (const file of newFiles) {
-        if (acceptedFiles.length >= MAX_IMPORT_FILES) {
-            skippedReasons.push(`${file.name}: import limit is ${MAX_IMPORT_FILES} files at once.`);
-            continue;
-        }
-
-        if (!isSupportedImportFile(file)) {
-            skippedReasons.push(`${file.name}: unsupported file type.`);
-            continue;
-        }
-
-        if (file.size > MAX_IMPORT_FILE_SIZE_BYTES) {
-            skippedReasons.push(`${file.name}: file is larger than ${formatMegabytes(MAX_IMPORT_FILE_SIZE_BYTES)}.`);
-            continue;
-        }
-
-        if (acceptedBytes + file.size > MAX_IMPORT_TOTAL_SIZE_BYTES) {
-            skippedReasons.push(`Batch exceeds ${formatMegabytes(MAX_IMPORT_TOTAL_SIZE_BYTES)}.`);
-            break;
-        }
-
-        acceptedFiles.push(file);
-        acceptedBytes += file.size;
-    }
-
-    return { acceptedFiles, skippedReasons };
-};
 
 // Custom hook for history management
 const useHistory = <T>(initialState: T) => {
@@ -394,13 +441,19 @@ export const usePdfEditor = () => {
     } = useHistory<EditorPage[]>([]);
 
     const [isProcessing, setIsProcessing] = useState(false);
+    const [notification, setNotification] = useState<EditorNotification | null>(null);
     const [pageSize, setPageSize] = useState<PageSize>(getInitialPageSize);
     const [isSessionReady, setIsSessionReady] = useState(false);
     const [hasSavedSession, setHasSavedSession] = useState(false);
     const [isSessionPersistenceEnabled, setIsSessionPersistenceEnabled] = useState(isLocalPersistenceEnabled);
     const persistedFileCacheRef = useRef<Record<string, PersistedFileRecord>>({});
+    const filesRef = useRef<Record<string, EditorFile>>({});
     const [exportHistory, setExportHistory] = useState<ExportHistoryEntry[]>(loadExportHistory);
     const [printOverlayOptions, setPrintOverlayOptions] = useState<PrintOverlayOptions>(loadOverlayOptions);
+    const notifyError = useCallback((message: string) => {
+        setNotification({ id: createId(), message, tone: 'error' });
+    }, []);
+    const dismissNotification = useCallback(() => setNotification(null), []);
 
     const recordExport = useCallback((filename: string, pageCount: number, mode: ExportHistoryEntry['mode']) => {
         setExportHistory(prev => {
@@ -431,6 +484,7 @@ export const usePdfEditor = () => {
             persistedFileCacheRef.current = {};
             setHasSavedSession(false);
             setExportHistory([]);
+            setPrintOverlayOptions(DEFAULT_PRINT_OVERLAY_OPTIONS);
             void clearSensitiveBrowserData();
         }
     }, []);
@@ -482,7 +536,10 @@ export const usePdfEditor = () => {
                 );
 
                 setFiles(Object.fromEntries(restoredFiles));
-                setPagesHistory([persistedSession.pages]);
+                setPagesHistory([persistedSession.pages.map((page) => ({
+                    ...page,
+                    contentEdits: page.contentEdits ?? [],
+                }))]);
                 setPagesCurrentIndex(0);
                 setPageSize(persistedSession.pageSize);
                 setHasSavedSession(true);
@@ -524,8 +581,9 @@ export const usePdfEditor = () => {
 
             try {
                 const nextFileCache: Record<string, PersistedFileRecord> = {};
+                const referencedFileIds = new Set(pages.map((page) => page.fileId));
                 const persistedFiles = await Promise.all(
-                    Object.values(files).map(async (fileData) => {
+                    Object.values(files).filter((fileData) => referencedFileIds.has(fileData.id)).map(async (fileData) => {
                         const cachedFile = persistedFileCacheRef.current[fileData.id];
                         const canReuseCachedFile = cachedFile &&
                             isUsableArrayBuffer(cachedFile.buffer) &&
@@ -571,14 +629,38 @@ export const usePdfEditor = () => {
     }, [files, pages, pageSize, isSessionReady, isSessionPersistenceEnabled]);
 
     useEffect(() => {
-        localStorage.setItem(OVERLAY_OPTIONS_STORAGE_KEY, JSON.stringify(printOverlayOptions));
-    }, [printOverlayOptions]);
+        if (isSessionPersistenceEnabled) {
+            localStorage.setItem(OVERLAY_OPTIONS_STORAGE_KEY, JSON.stringify(printOverlayOptions));
+        } else {
+            localStorage.removeItem(OVERLAY_OPTIONS_STORAGE_KEY);
+        }
+    }, [printOverlayOptions, isSessionPersistenceEnabled]);
 
-    const addFiles = useCallback(async (newFiles: File[]) => {
+    useEffect(() => {
+        filesRef.current = files;
+    }, [files]);
+
+    useEffect(() => () => {
+        Object.values(filesRef.current).forEach((fileData) => {
+            void fileData.pdfDoc?.cleanup();
+        });
+    }, []);
+
+    const addFiles = useCallback(async (newFiles: File[], labels: ImportLabels) => {
         const { acceptedFiles, skippedReasons } = getAcceptedImportFiles(newFiles);
 
         if (skippedReasons.length > 0) {
-            alert(`Some files were skipped:\n${skippedReasons.join('\n')}`);
+            const formattedReasons = skippedReasons.map((reason) => {
+                const label = reason.code === 'file-count'
+                    ? labels.fileCount
+                    : reason.code === 'unsupported'
+                        ? labels.unsupported
+                        : reason.code === 'file-size'
+                            ? labels.fileSize
+                            : labels.batchSize;
+                return reason.fileName ? `${reason.fileName}: ${label}` : label;
+            });
+            notifyError(`${labels.skippedPrefix}\n${formattedReasons.join('\n')}`);
         }
 
         if (acceptedFiles.length === 0) {
@@ -604,7 +686,8 @@ export const usePdfEditor = () => {
                         fileId,
                         pageIndex: i,
                         rotation: 0,
-                        annotations: []
+                        annotations: [],
+                        contentEdits: [],
                     });
                 }
                 importedPageCount += pageCount;
@@ -614,19 +697,24 @@ export const usePdfEditor = () => {
             const fileId = createId();
             try {
                 let arrayBuffer = await file.arrayBuffer();
+                const fileKind = getImportFileKind(file);
 
                 // If image, convert to PDF first
-                if (file.type === 'image/jpeg' || file.type === 'image/png' || file.name.endsWith('.jpg') || file.name.endsWith('.jpeg') || file.name.endsWith('.png')) {
+                if (fileKind === 'jpeg' || fileKind === 'png') {
+                    const imageDimensions = readImageDimensions(arrayBuffer);
+                    if (!imageDimensions || imageDimensions.kind !== fileKind) {
+                        throw new Error('Image contents do not match a supported PNG or JPEG file.');
+                    }
+                    if (imageDimensions.width * imageDimensions.height > MAX_IMAGE_PIXELS) {
+                        throw new Error(`Image exceeds the ${MAX_IMAGE_PIXELS.toLocaleString()} pixel limit.`);
+                    }
+
                     const pdfDoc = await pdfLib.PDFDocument.create();
                     let image;
-                    if (file.type === 'image/jpeg' || file.name.endsWith('.jpg') || file.name.endsWith('.jpeg')) {
+                    if (fileKind === 'jpeg') {
                         image = await pdfDoc.embedJpg(arrayBuffer);
                     } else {
                         image = await pdfDoc.embedPng(arrayBuffer);
-                    }
-
-                    if (image.width * image.height > MAX_IMAGE_PIXELS) {
-                        throw new Error(`Image exceeds the ${MAX_IMAGE_PIXELS.toLocaleString()} pixel limit.`);
                     }
 
                     const page = pdfDoc.addPage([image.width, image.height]);
@@ -655,9 +743,17 @@ export const usePdfEditor = () => {
                 }
 
                 // DOCX Handling
-                if (file.name.endsWith('.docx') || file.type === 'application/vnd.openxmlformats-officedocument.wordprocessingml.document') {
+                if (fileKind === 'docx') {
+                    const JSZip = (await import('jszip')).default;
                     const docxPreview = await import('docx-preview');
                     const html2canvas = (await import('html2canvas')).default;
+                    const archive = await JSZip.loadAsync(arrayBuffer);
+                    validateArchiveLimits(archive.files as Record<string, ArchiveEntryMetadata>);
+                    const documentXml = await archive.file('word/document.xml')?.async('string');
+                    if (!documentXml) {
+                        throw new Error('DOCX document.xml is missing.');
+                    }
+                    validateOfficeXmlComplexity(documentXml);
 
                     // A4 dimensions at 96 DPI
                     const pageWidthPx = 794;
@@ -690,6 +786,13 @@ export const usePdfEditor = () => {
 
                         await new Promise(r => setTimeout(r, 500));
 
+                        const renderHeight = Math.max(container.scrollHeight, container.offsetHeight);
+                        assertRenderableArea(pageWidthPx, renderHeight);
+                        const estimatedPages = Math.max(1, Math.ceil(renderHeight / (pageHeightPx - 120)));
+                        if (importedPageCount + estimatedPages > MAX_IMPORT_PAGES) {
+                            throw new Error(`Import would exceed the ${MAX_IMPORT_PAGES} page limit.`);
+                        }
+
                         canvas = await html2canvas(container, {
                             scale: 1,
                             useCORS: true,
@@ -702,9 +805,7 @@ export const usePdfEditor = () => {
                         container.remove();
                     }
 
-                    if (canvas.height > MAX_CANVAS_HEIGHT_PX) {
-                        throw new Error(`Rendered document exceeds the ${MAX_CANVAS_HEIGHT_PX}px height limit.`);
-                    }
+                    assertRenderableArea(canvas.width, canvas.height);
 
                     // Create PDF with pdf-lib
                     const pdfDoc = await pdfLib.PDFDocument.create();
@@ -797,8 +898,7 @@ export const usePdfEditor = () => {
                             );
                         }
 
-                        const sliceData = sliceCanvas.toDataURL('image/png');
-                        const sliceBytes = await fetch(sliceData).then(r => r.arrayBuffer());
+                        const sliceBytes = await canvasToPngBytes(sliceCanvas);
                         const sliceImage = await pdfDoc.embedPng(sliceBytes);
 
                         const page = pdfDoc.addPage([pageWidthPt, pageHeightPt]);
@@ -831,19 +931,24 @@ export const usePdfEditor = () => {
                 }
 
                 // ODT Handling
-                if (file.name.endsWith('.odt') || file.type === 'application/vnd.oasis.opendocument.text') {
+                if (fileKind === 'odt') {
                     const JSZip = (await import('jszip')).default;
                     const html2canvas = (await import('html2canvas')).default;
 
                     const zip = await JSZip.loadAsync(arrayBuffer);
+                    validateArchiveLimits(zip.files as Record<string, ArchiveEntryMetadata>);
                     const contentXml = await zip.file("content.xml")?.async("string");
 
                     if (contentXml) {
+                        validateOfficeXmlComplexity(contentXml);
                         const parser = new DOMParser();
                         const xmlDoc = parser.parseFromString(contentXml, "text/xml");
 
                         const appendExtractedText = (target: HTMLElement, node: Node) => {
-                            node.childNodes.forEach(child => {
+                            const stack = Array.from(node.childNodes).reverse();
+                            while (stack.length > 0) {
+                                const child = stack.pop();
+                                if (!child) continue;
                                 if (child.nodeType === Node.TEXT_NODE) {
                                     target.appendChild(document.createTextNode(child.textContent ?? ''));
                                 } else if (child.nodeName.endsWith(':s')) {
@@ -853,34 +958,38 @@ export const usePdfEditor = () => {
                                 } else if (child.nodeName.endsWith(':line-break')) {
                                     target.appendChild(document.createElement('br'));
                                 } else {
-                                    appendExtractedText(target, child);
+                                    stack.push(...Array.from(child.childNodes).reverse());
                                 }
-                            });
+                            }
                         };
 
-                        const processNode = (parent: HTMLElement, node: Element): boolean => {
-                            const name = node.nodeName;
-                            if (name.endsWith(':h')) {
-                                const level = node.getAttributeNS("*", "outline-level") || '1';
-                                const hLevel = parseInt(level) || 1;
-                                const heading = document.createElement(`h${Math.min(6, hLevel)}`);
-                                appendExtractedText(heading, node);
-                                parent.appendChild(heading);
-                                return true;
-                            } else if (name.endsWith(':p')) {
-                                const paragraph = document.createElement('p');
-                                appendExtractedText(paragraph, node);
-                                parent.appendChild(paragraph);
-                                return true;
-                            }
-
+                        const processNode = (parent: HTMLElement, root: Element): boolean => {
+                            const stack: Element[] = [root];
                             let appended = false;
-                            for (let i = 0; i < node.children.length; i++) {
-                                appended = processNode(parent, node.children[i]) || appended;
+                            while (stack.length > 0) {
+                                const node = stack.pop();
+                                if (!node) continue;
+                                const name = node.nodeName;
+                                if (name.endsWith(':h')) {
+                                    const level = node.getAttributeNS("*", "outline-level") || '1';
+                                    const hLevel = parseInt(level) || 1;
+                                    const heading = document.createElement(`h${Math.min(6, Math.max(1, hLevel))}`);
+                                    appendExtractedText(heading, node);
+                                    parent.appendChild(heading);
+                                    appended = true;
+                                    continue;
+                                }
+                                if (name.endsWith(':p')) {
+                                    const paragraph = document.createElement('p');
+                                    appendExtractedText(paragraph, node);
+                                    parent.appendChild(paragraph);
+                                    appended = true;
+                                    continue;
+                                }
+                                stack.push(...Array.from(node.children).reverse());
                             }
-
                             return appended;
-                        }
+                        };
 
                         // A4 dimensions at 96 DPI
                         const pageWidthPx = 794;
@@ -919,6 +1028,13 @@ export const usePdfEditor = () => {
 
                             await new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r)));
 
+                            const renderHeight = Math.max(container.scrollHeight, container.offsetHeight);
+                            assertRenderableArea(pageWidthPx, renderHeight);
+                            const estimatedPages = Math.max(1, Math.ceil(renderHeight / (pageHeightPx - 120)));
+                            if (importedPageCount + estimatedPages > MAX_IMPORT_PAGES) {
+                                throw new Error(`Import would exceed the ${MAX_IMPORT_PAGES} page limit.`);
+                            }
+
                             canvas = await html2canvas(container, {
                                 scale: 1,
                                 useCORS: true,
@@ -930,9 +1046,7 @@ export const usePdfEditor = () => {
                             container.remove();
                         }
 
-                        if (canvas.height > MAX_CANVAS_HEIGHT_PX) {
-                            throw new Error(`Rendered document exceeds the ${MAX_CANVAS_HEIGHT_PX}px height limit.`);
-                        }
+                        assertRenderableArea(canvas.width, canvas.height);
 
                         // Create PDF with pdf-lib
                         const pdfDoc = await pdfLib.PDFDocument.create();
@@ -1022,8 +1136,7 @@ export const usePdfEditor = () => {
                                 );
                             }
 
-                            const sliceData = sliceCanvas.toDataURL('image/png');
-                            const sliceBytes = await fetch(sliceData).then(r => r.arrayBuffer());
+                            const sliceBytes = await canvasToPngBytes(sliceCanvas);
                             const sliceImage = await pdfDoc.embedPng(sliceBytes);
 
                             const page = pdfDoc.addPage([pageWidthPt, pageHeightPt]);
@@ -1068,14 +1181,15 @@ export const usePdfEditor = () => {
 
                 appendFilePages(fileId, pdfDoc.numPages);
             } catch (error) {
+                void newFilesMap[fileId]?.pdfDoc?.cleanup();
                 delete newFilesMap[fileId];
-                failedReasons.push(`${file.name}: could not be imported.`);
+                failedReasons.push(file.name);
                 console.error(`Error loading file ${file.name}:`, error);
             }
         }
 
             if (failedReasons.length > 0) {
-                alert(`Some files could not be imported:\n${failedReasons.join('\n')}`);
+                notifyError(`${labels.failedPrefix}\n${failedReasons.join('\n')}`);
             }
             if (Object.keys(newFilesMap).length > 0) {
                 setFiles(prev => ({ ...prev, ...newFilesMap }));
@@ -1086,7 +1200,7 @@ export const usePdfEditor = () => {
         } finally {
             setIsProcessing(false);
         }
-    }, [pages.length, setPages]);
+    }, [pages.length, setPages, notifyError]);
 
     const movePage = useCallback((activeId: string, overId: string) => {
         setPages((items) => {
@@ -1143,7 +1257,8 @@ export const usePdfEditor = () => {
                     next.push({
                         ...page,
                         id: `${page.fileId}-${page.pageIndex}-${createId().slice(0, 8)}`,
-                        annotations: JSON.parse(JSON.stringify(page.annotations)) as Annotation[]
+                        annotations: structuredClone(page.annotations),
+                        contentEdits: structuredClone(page.contentEdits),
                     });
                 }
             }
@@ -1152,6 +1267,10 @@ export const usePdfEditor = () => {
     }, [setPages]);
 
     const clearAll = useCallback(() => {
+        Object.values(filesRef.current).forEach((fileData) => {
+            void fileData.pdfDoc?.cleanup();
+        });
+        filesRef.current = {};
         setFiles({});
         // Reset history completely
         setPagesHistory([[]]);
@@ -1165,133 +1284,156 @@ export const usePdfEditor = () => {
         annotations: Annotation[],
         pageHeight: number,
         pageWidth: number,
-        rotation: number
+        editorCanvasWidth: number,
+        editorCanvasHeight: number,
     ) => {
         const pdfLib = await loadPdfLib();
-        const fontHelvetica = await pdfPage.doc.embedFont(pdfLib.StandardFonts.Helvetica);
-        const fontHelveticaBold = await pdfPage.doc.embedFont(pdfLib.StandardFonts.HelveticaBold);
-        const fontHelveticaOblique = await pdfPage.doc.embedFont(pdfLib.StandardFonts.HelveticaOblique);
-        const fontHelveticaBoldOblique = await pdfPage.doc.embedFont(pdfLib.StandardFonts.HelveticaBoldOblique);
-
-        // Visual Dimensions (Editor Canvas)
-        const VISUAL_WIDTH_PORTRAIT = 800;
-        const VISUAL_HEIGHT_PORTRAIT = 1000;
-        const VISUAL_WIDTH_LANDSCAPE = 1000;
-        const VISUAL_HEIGHT_LANDSCAPE = 800;
-
-        const isLandscape = rotation % 180 !== 0;
-
         const marginPercent = Math.max(0, Math.min(printOverlayOptions.marginPercent, 20));
         const cropPercent = Math.max(0, Math.min(printOverlayOptions.cropPercent, 20));
         const cropZoom = getCropZoom(cropPercent);
         const contentBox = getContentBox(pageWidth, pageHeight, marginPercent);
-
-        // Scale factors: Visual -> PDF Page
-        let scaleX = 1;
-        let scaleY = 1;
-
-        if (isLandscape) {
-            scaleX = (contentBox.height / VISUAL_WIDTH_LANDSCAPE) * cropZoom;
-            scaleY = (contentBox.width / VISUAL_HEIGHT_LANDSCAPE) * cropZoom;
-        } else {
-            scaleX = (contentBox.width / VISUAL_WIDTH_PORTRAIT) * cropZoom;
-            scaleY = (contentBox.height / VISUAL_HEIGHT_PORTRAIT) * cropZoom;
-        }
-
-        const visualWidth = isLandscape ? VISUAL_WIDTH_LANDSCAPE : VISUAL_WIDTH_PORTRAIT;
-        const visualHeight = isLandscape ? VISUAL_HEIGHT_LANDSCAPE : VISUAL_HEIGHT_PORTRAIT;
-        const cropInsetX = (visualWidth * cropPercent) / 100;
-        const cropInsetY = (visualHeight * cropPercent) / 100;
+        const safeEditorWidth = Math.max(1, editorCanvasWidth);
+        const safeEditorHeight = Math.max(1, editorCanvasHeight);
+        const scaleX = (contentBox.width / safeEditorWidth) * cropZoom;
+        const scaleY = (contentBox.height / safeEditorHeight) * cropZoom;
+        const cropInsetX = (safeEditorWidth * cropPercent) / 100;
+        const cropInsetY = (safeEditorHeight * cropPercent) / 100;
 
         const transformCoords = (x: number, y: number) => {
-            if (rotation === 0) {
-                return {
-                    x: contentBox.x + ((x - cropInsetX) * scaleX),
-                    y: contentBox.y + contentBox.height - ((y - cropInsetY) * scaleY)
-                };
-            }
-            if (rotation === 90) {
-                return {
-                    x: contentBox.x + ((y - cropInsetY) * scaleY),
-                    y: contentBox.y + ((x - cropInsetX) * scaleX)
-                };
-            }
-            if (rotation === 180) {
-                return {
-                    x: contentBox.x + contentBox.width - ((x - cropInsetX) * scaleX),
-                    y: contentBox.y + ((y - cropInsetY) * scaleY)
-                };
-            }
-            if (rotation === 270) {
-                return {
-                    x: contentBox.x + contentBox.width - ((y - cropInsetY) * scaleY),
-                    y: contentBox.y + contentBox.height - ((x - cropInsetX) * scaleX)
-                };
-            }
             return {
                 x: contentBox.x + ((x - cropInsetX) * scaleX),
                 y: contentBox.y + contentBox.height - ((y - cropInsetY) * scaleY)
             };
         };
 
-        const getRotationAdjustment = () => {
-            if (rotation === 90) return -90;
-            if (rotation === 180) return -180;
-            if (rotation === 270) return -270;
-            return 0;
+        const getStandardFontName = (data: TextAnnotationData) => {
+            const isSerif = data.fontFamily === 'Times New Roman' || data.fontFamily === 'Georgia';
+            const isMonospace = data.fontFamily === 'Courier New';
+
+            if (isSerif) {
+                if (data.bold && data.italic) return pdfLib.StandardFonts.TimesRomanBoldItalic;
+                if (data.bold) return pdfLib.StandardFonts.TimesRomanBold;
+                if (data.italic) return pdfLib.StandardFonts.TimesRomanItalic;
+                return pdfLib.StandardFonts.TimesRoman;
+            }
+            if (isMonospace) {
+                if (data.bold && data.italic) return pdfLib.StandardFonts.CourierBoldOblique;
+                if (data.bold) return pdfLib.StandardFonts.CourierBold;
+                if (data.italic) return pdfLib.StandardFonts.CourierOblique;
+                return pdfLib.StandardFonts.Courier;
+            }
+            if (data.bold && data.italic) return pdfLib.StandardFonts.HelveticaBoldOblique;
+            if (data.bold) return pdfLib.StandardFonts.HelveticaBold;
+            if (data.italic) return pdfLib.StandardFonts.HelveticaOblique;
+            return pdfLib.StandardFonts.Helvetica;
+        };
+
+        const fontCache = new Map<string, Awaited<ReturnType<typeof pdfPage.doc.embedFont>>>();
+        const getFont = async (data: TextAnnotationData) => {
+            const fontName = getStandardFontName(data);
+            const cached = fontCache.get(fontName);
+            if (cached) return cached;
+            const font = await pdfPage.doc.embedFont(fontName);
+            fontCache.set(fontName, font);
+            return font;
+        };
+
+        const drawRasterizedTextLine = async (
+            line: string,
+            data: TextAnnotationData,
+            x: number,
+            topY: number,
+            lineHeight: number,
+            rotation: number,
+        ) => {
+            const renderScale = 2;
+            const canvas = document.createElement('canvas');
+            const context = canvas.getContext('2d');
+            if (!context) throw new Error('Text fallback canvas is unavailable.');
+
+            context.font = `${data.italic ? 'italic ' : ''}${data.bold ? 'bold ' : ''}${data.fontSize * renderScale}px ${data.fontFamily}`;
+            const measuredWidth = Math.max(1, Math.ceil(context.measureText(line || ' ').width));
+            canvas.width = measuredWidth + 4;
+            canvas.height = Math.max(1, Math.ceil(lineHeight * renderScale));
+            context.scale(renderScale, renderScale);
+            context.font = `${data.italic ? 'italic ' : ''}${data.bold ? 'bold ' : ''}${data.fontSize}px ${data.fontFamily}`;
+            context.fillStyle = data.color || '#000000';
+            context.textBaseline = 'top';
+            context.fillText(line || ' ', 1, 0);
+
+            const image = await pdfPage.doc.embedPng(await canvasToPngBytes(canvas));
+            const imageWidth = (canvas.width / renderScale) * scaleX;
+            const imageHeight = lineHeight * scaleY;
+            pdfPage.drawImage(image, {
+                x,
+                y: topY - imageHeight,
+                width: imageWidth,
+                height: imageHeight,
+                rotate: pdfLib.degrees(-rotation),
+            });
         };
 
         for (const ann of annotations) {
-            try {
-                const { x, y } = transformCoords(ann.x, ann.y);
-                const width = isLandscape ? ann.height * scaleX : ann.width * scaleX;
-                const height = isLandscape ? ann.width * scaleY : ann.height * scaleY;
-                const rotAdj = getRotationAdjustment();
+            const { x, y } = transformCoords(ann.x, ann.y);
+            const width = ann.width * scaleX;
+            const height = ann.height * scaleY;
 
-                if (ann.type === 'text') {
-                    const data = ann.data as TextAnnotationData;
-                    let font = fontHelvetica;
-                    if (data.bold && data.italic) font = fontHelveticaBoldOblique;
-                    else if (data.bold) font = fontHelveticaBold;
-                    else if (data.italic) font = fontHelveticaOblique;
+            if (ann.type === 'text') {
+                const data = ann.data as TextAnnotationData;
+                const font = await getFont(data);
 
-                    const renderedLines = data.text.split(/\r?\n/);
-                    const lines = renderedLines.length > 0 ? renderedLines : [''];
-                    const scaledFontSize = data.fontSize * (isLandscape ? scaleX : scaleY);
-                    const lineHeight = scaledFontSize * 1.25;
-                    const startY = y - (rotation === 0 ? scaledFontSize : 0);
+                const renderedLines = data.text.split(/\r?\n/);
+                const lines = renderedLines.length > 0 ? renderedLines : [''];
+                const scaledFontSize = data.fontSize * scaleY;
+                const lineHeight = scaledFontSize * 1.25;
+                const editorLineHeight = data.fontSize * 1.25;
 
-                    lines.forEach((line, index) => {
-                        pdfPage.drawText(line.length > 0 ? line : ' ', {
+                for (const [index, line] of lines.entries()) {
+                    const lineTopY = y - (index * lineHeight);
+                    try {
+                        font.encodeText(line.length > 0 ? line : ' ');
+                    } catch {
+                        await drawRasterizedTextLine(
+                            line,
+                            data,
                             x,
-                            y: startY - (index * lineHeight),
-                            size: scaledFontSize,
-                            font,
-                            color: hexToRgb(data.color || '#000000', pdfLib.rgb),
-                            rotate: pdfLib.degrees(rotAdj - ann.rotation),
-                        });
-                    });
-                } else if (ann.type === 'drawing') {
-                    const data = ann.data as DrawingAnnotationData;
-                    const points = data.points;
-                    if (points.length < 2) continue;
-
-                    for (let i = 0; i < points.length - 1; i++) {
-                        const p1 = transformCoords(points[i].x, points[i].y);
-                        const p2 = transformCoords(points[i + 1].x, points[i + 1].y);
-                        pdfPage.drawLine({
-                            start: p1,
-                            end: p2,
-                            thickness: data.strokeWidth * (isLandscape ? scaleX : scaleY),
-                            color: hexToRgb(data.strokeColor, pdfLib.rgb),
-                        });
+                            lineTopY,
+                            editorLineHeight,
+                            ann.rotation,
+                        );
+                        continue;
                     }
-                } else if (ann.type === 'shape') {
-                    const data = ann.data as ShapeAnnotationData;
-                    const color = hexToRgb(data.strokeColor, pdfLib.rgb);
-                    const thickness = data.strokeWidth * (isLandscape ? scaleX : scaleY);
 
-                    if (data.shapeType === 'rectangle') {
+                    pdfPage.drawText(line.length > 0 ? line : ' ', {
+                        x,
+                        y: lineTopY - scaledFontSize,
+                        size: scaledFontSize,
+                        font,
+                        color: hexToRgb(data.color || '#000000', pdfLib.rgb),
+                        rotate: pdfLib.degrees(-ann.rotation),
+                    });
+                }
+            } else if (ann.type === 'drawing') {
+                const data = ann.data as DrawingAnnotationData;
+                const points = data.points;
+                if (points.length < 2) continue;
+
+                for (let i = 0; i < points.length - 1; i++) {
+                    const p1 = transformCoords(points[i].x, points[i].y);
+                    const p2 = transformCoords(points[i + 1].x, points[i + 1].y);
+                    pdfPage.drawLine({
+                        start: p1,
+                        end: p2,
+                        thickness: data.strokeWidth * Math.min(scaleX, scaleY),
+                        color: hexToRgb(data.strokeColor, pdfLib.rgb),
+                    });
+                }
+            } else if (ann.type === 'shape') {
+                const data = ann.data as ShapeAnnotationData;
+                const color = hexToRgb(data.strokeColor, pdfLib.rgb);
+                const thickness = data.strokeWidth * Math.min(scaleX, scaleY);
+
+                if (data.shapeType === 'rectangle') {
                         const p1 = transformCoords(ann.x, ann.y);
                         const p2 = transformCoords(ann.x + ann.width, ann.y);
                         const p3 = transformCoords(ann.x + ann.width, ann.y + ann.height);
@@ -1304,12 +1446,12 @@ export const usePdfEditor = () => {
                         drawLine(p3, p4);
                         drawLine(p4, p1);
 
-                    } else if (data.shapeType === 'circle') {
+                } else if (data.shapeType === 'circle') {
                         const cx = ann.x + ann.width / 2;
                         const cy = ann.y + ann.height / 2;
                         const center = transformCoords(cx, cy);
-                        const rx = (ann.width / 2) * (isLandscape ? scaleY : scaleX);
-                        const ry = (ann.height / 2) * (isLandscape ? scaleX : scaleY);
+                    const rx = (ann.width / 2) * scaleX;
+                    const ry = (ann.height / 2) * scaleY;
 
                         pdfPage.drawEllipse({
                             x: center.x,
@@ -1318,7 +1460,7 @@ export const usePdfEditor = () => {
                             yScale: ry,
                             borderColor: color, borderWidth: thickness,
                         });
-                    } else if (data.shapeType === 'line') {
+                } else if (data.shapeType === 'line') {
                         const x1 = ann.x + (data.x1 ?? 0) * ann.width;
                         const y1 = ann.y + (data.y1 ?? 0) * ann.height;
                         const x2 = ann.x + (data.x2 ?? 1) * ann.width;
@@ -1329,31 +1471,33 @@ export const usePdfEditor = () => {
                             end: transformCoords(x2, y2),
                             thickness, color,
                         });
-                    }
-                } else if (isImageLikeAnnotation(ann)) {
-                    const dataUrl = ann.data.dataUrl;
-                    let image;
-                    try {
-                        const imageBytes = await fetch(dataUrl).then(res => res.arrayBuffer());
-                        if (dataUrl.includes('image/png')) {
-                            image = await pdfPage.doc.embedPng(imageBytes);
-                        } else {
-                            image = await pdfPage.doc.embedJpg(imageBytes);
-                        }
-
-                        pdfPage.drawImage(image, {
-                            x: x,
-                            y: y - height,
-                            width,
-                            height,
-                            rotate: pdfLib.degrees(-ann.rotation + rotAdj),
-                        });
-                    } catch (e) {
-                        console.error("Failed to embed image", e);
-                    }
                 }
-            } catch (err) {
-                console.error("Error drawing annotation:", err);
+            } else if (isImageLikeAnnotation(ann)) {
+                const dataUrl = ann.data.dataUrl;
+                const imageKind = getDataUrlImageKind(dataUrl);
+                if (!imageKind) {
+                    throw new Error('An annotation contains an unsupported image format.');
+                }
+                const response = await fetch(dataUrl);
+                if (!response.ok) {
+                    throw new Error('An annotation image could not be read.');
+                }
+                const imageBytes = await response.arrayBuffer();
+                const dimensions = readImageDimensions(imageBytes);
+                if (!dimensions || dimensions.width * dimensions.height > MAX_IMAGE_PIXELS) {
+                    throw new Error('An annotation image is invalid or too large.');
+                }
+                const image = imageKind === 'png'
+                    ? await pdfPage.doc.embedPng(imageBytes)
+                    : await pdfPage.doc.embedJpg(imageBytes);
+
+                pdfPage.drawImage(image, {
+                    x,
+                    y: y - height,
+                    width,
+                    height,
+                    rotate: pdfLib.degrees(-ann.rotation),
+                });
             }
         }
     }, [printOverlayOptions]);
@@ -1450,7 +1594,18 @@ export const usePdfEditor = () => {
             const srcPage = srcPdf.getPage(page.pageIndex - 1);
             const srcRotation = srcPage.getRotation().angle;
             const totalRotation = (srcRotation + page.rotation) % 360;
-            const embeddedPage = await newPdf.embedPage(srcPage);
+            let pageToEmbed = srcPage;
+
+            if (page.contentEdits.length > 0) {
+                const isolatedPdf = await pdfLib.PDFDocument.create();
+                const [isolatedPage] = await isolatedPdf.copyPages(srcPdf, [page.pageIndex - 1]);
+                isolatedPdf.addPage(isolatedPage);
+                const { applyContentEditsToPdfPage } = await loadContentEditExporter();
+                await applyContentEditsToPdfPage(isolatedPdf, isolatedPage, page.contentEdits);
+                pageToEmbed = isolatedPage;
+            }
+
+            const embeddedPage = await newPdf.embedPage(pageToEmbed);
 
             const { width: srcWidth, height: srcHeight } = embeddedPage;
             const isRotatedSides = totalRotation === 90 || totalRotation === 270;
@@ -1505,7 +1660,15 @@ export const usePdfEditor = () => {
             });
 
             if (page.annotations.length > 0) {
-                await applyAnnotationsToPage(newPage, page.annotations, targetHeight, targetWidth, totalRotation);
+                const legacyCanvasSize = getLegacyEditorCanvasSize(totalRotation);
+                await applyAnnotationsToPage(
+                    newPage,
+                    page.annotations,
+                    targetHeight,
+                    targetWidth,
+                    page.annotationCanvasWidth ?? legacyCanvasSize.width,
+                    page.annotationCanvasHeight ?? legacyCanvasSize.height,
+                );
             }
             await applyPrintOverlays(newPage, pagePosition + 1, sourcePages.length);
         }
@@ -1532,11 +1695,11 @@ export const usePdfEditor = () => {
             recordExport(filename, sourcePages.length, pageIds?.length ? 'selection' : 'all');
         } catch (error) {
             console.error('Error exporting PDF:', error);
-            alert(labels?.failed ?? 'Failed to export PDF.');
+            notifyError(labels?.failed ?? 'Failed to export PDF.');
         } finally {
             setIsProcessing(false);
         }
-    }, [pages, buildPdfBytes, pageSize, recordExport]);
+    }, [pages, buildPdfBytes, pageSize, recordExport, notifyError]);
 
     const exportPageRange = useCallback(async (
         startPage: number,
@@ -1563,12 +1726,12 @@ export const usePdfEditor = () => {
             return true;
         } catch (error) {
             console.error('Error exporting PDF range:', error);
-            alert(labels?.failed ?? 'Failed to export PDF.');
+            notifyError(labels?.failed ?? 'Failed to export PDF.');
             return false;
         } finally {
             setIsProcessing(false);
         }
-    }, [pages, buildPdfBytes, pageSize, recordExport]);
+    }, [pages, buildPdfBytes, pageSize, recordExport, notifyError]);
 
     const splitPdf = useCallback(async (
         mode: 'single' | 'odd-even',
@@ -1604,12 +1767,12 @@ export const usePdfEditor = () => {
             return true;
         } catch (error) {
             console.error('Error splitting PDF:', error);
-            alert(labels?.failed ?? 'Failed to export PDF.');
+            notifyError(labels?.failed ?? 'Failed to export PDF.');
             return false;
         } finally {
             setIsProcessing(false);
         }
-    }, [pages, buildPdfBytes, recordExport]);
+    }, [pages, buildPdfBytes, recordExport, notifyError]);
 
     const exportProtectedPdf = useCallback(async (
         password: string,
@@ -1620,7 +1783,7 @@ export const usePdfEditor = () => {
         }
 
         if (password.length === 0) {
-            alert(labels?.invalidPassword ?? 'Please provide a valid password.');
+            notifyError(labels?.invalidPassword ?? 'Please provide a valid password.');
             return false;
         }
 
@@ -1645,12 +1808,12 @@ export const usePdfEditor = () => {
             return true;
         } catch (error) {
             console.error('Error protecting PDF:', error);
-            alert(labels?.failed ?? 'Failed to protect PDF.');
+            notifyError(labels?.failed ?? 'Failed to protect PDF.');
             return false;
         } finally {
             setIsProcessing(false);
         }
-    }, [pages, buildPdfBytes, pageSize, recordExport]);
+    }, [pages, buildPdfBytes, pageSize, recordExport, notifyError]);
 
     const unlockPdfFile = useCallback(async (
         file: File | null,
@@ -1658,13 +1821,17 @@ export const usePdfEditor = () => {
         labels?: UnlockPdfLabels
     ): Promise<boolean> => {
         if (!file) {
-            alert(labels?.invalidFile ?? 'Please select a PDF file.');
+            notifyError(labels?.invalidFile ?? 'Please select a PDF file.');
             return false;
         }
 
         const isPdfFile = file.type === 'application/pdf' || /\.pdf$/i.test(file.name);
         if (!isPdfFile) {
-            alert(labels?.invalidFile ?? 'Please select a PDF file.');
+            notifyError(labels?.invalidFile ?? 'Please select a PDF file.');
+            return false;
+        }
+        if (!isAcceptedUnlockPdf(file)) {
+            notifyError(labels?.invalidFile ?? 'The selected PDF is invalid or too large.');
             return false;
         }
 
@@ -1688,20 +1855,31 @@ export const usePdfEditor = () => {
         } catch (error) {
             console.error('Error unlocking PDF:', error);
             if (isLikelyInvalidPasswordError(error)) {
-                alert(labels?.invalidPassword ?? 'Invalid password.');
+                notifyError(labels?.invalidPassword ?? 'Invalid password.');
             } else {
-                alert(labels?.failed ?? 'Failed to unlock PDF.');
+                notifyError(labels?.failed ?? 'Failed to unlock PDF.');
             }
             return false;
         } finally {
             setIsProcessing(false);
         }
-    }, [recordExport]);
+    }, [recordExport, notifyError]);
 
-    const updatePageAnnotations = useCallback((pageId: string, annotations: Annotation[]) => {
+    const updatePageAnnotations = useCallback((
+        pageId: string,
+        annotations: Annotation[],
+        contentEdits: ContentEdit[],
+        canvasSize?: { width: number; height: number },
+    ) => {
         setPages(prev => prev.map(page => {
             if (page.id === pageId) {
-                return { ...page, annotations };
+                return {
+                    ...page,
+                    annotations,
+                    contentEdits,
+                    annotationCanvasWidth: canvasSize?.width ?? page.annotationCanvasWidth,
+                    annotationCanvasHeight: canvasSize?.height ?? page.annotationCanvasHeight,
+                };
             }
             return page;
         }));
@@ -1711,6 +1889,8 @@ export const usePdfEditor = () => {
         files,
         pages,
         isProcessing,
+        notification,
+        dismissNotification,
         isSessionReady,
         hasSavedSession,
         isSessionPersistenceEnabled,

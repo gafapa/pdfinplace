@@ -1,4 +1,4 @@
-export type AnnotationType = 'text' | 'drawing' | 'shape' | 'signature' | 'image';
+type AnnotationType = 'text' | 'drawing' | 'shape' | 'signature' | 'image';
 
 export interface TextAnnotationData {
     text: string;
@@ -8,7 +8,6 @@ export interface TextAnnotationData {
     bold: boolean;
     italic: boolean;
 }
-
 export interface DrawingAnnotationData {
     points: { x: number; y: number }[];
     strokeColor: string;
@@ -27,7 +26,7 @@ export interface ShapeAnnotationData {
     y2?: number;
 }
 
-export interface SignatureAnnotationData {
+interface SignatureAnnotationData {
     dataUrl: string; // Base64 image of signature
 }
 
@@ -46,8 +45,4 @@ export interface Annotation {
     height: number;
     rotation: number;
     data: TextAnnotationData | DrawingAnnotationData | ShapeAnnotationData | SignatureAnnotationData | ImageAnnotationData;
-}
-
-export interface PageAnnotations {
-    [pageId: string]: Annotation[];
 }
