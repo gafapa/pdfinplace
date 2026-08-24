@@ -790,6 +790,12 @@ export const PdfEditor = () => {
                         </div>
                     </div>
                     <div className="flex items-center gap-2 shrink-0" title={t('common.language')}>
+                        <a
+                            href="./aviso-legal.html"
+                            className="inline-flex h-8 items-center rounded-md border border-gray-200 bg-white px-2.5 text-xs font-medium text-gray-500 hover:bg-gray-50 hover:text-blue-600"
+                        >
+                            {t('common.legal')}
+                        </a>
                         <label
                             className="inline-flex h-8 items-center gap-2 rounded-md border border-gray-200 bg-white px-2.5 text-xs font-medium text-gray-700 hover:bg-gray-50"
                             title={isSessionPersistenceEnabled ? t('editor.disableLocalSession') : t('editor.enableLocalSession')}

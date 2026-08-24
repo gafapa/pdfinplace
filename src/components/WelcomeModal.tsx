@@ -82,6 +82,12 @@ export const WelcomeModal = ({ onClose }: WelcomeModalProps) => {
                         {t('welcome.start')}
                     </button>
                 </div>
+
+                <nav aria-label={t('common.legal')} className="mt-5 flex flex-wrap gap-x-4 gap-y-1 border-t border-gray-100 pt-4 text-xs text-gray-500">
+                    <a href="./aviso-legal.html" className="hover:text-blue-600 hover:underline">Aviso legal</a>
+                    <a href="./privacidad.html" className="hover:text-blue-600 hover:underline">Privacidad</a>
+                    <a href="./terminos.html" className="hover:text-blue-600 hover:underline">Términos de uso</a>
+                </nav>
             </div>
         </div>
     );

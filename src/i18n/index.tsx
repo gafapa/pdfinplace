@@ -22,6 +22,7 @@ const translations: Record<Locale, TranslationNode> = {
             saving: 'Guardando...',
             processing: 'Procesando...',
             close: 'Cerrar',
+            legal: 'Legal',
             add: 'Añadir',
             page: 'Página',
             pagesCount: '{{count}} páginas',
@@ -205,6 +206,7 @@ const translations: Record<Locale, TranslationNode> = {
             saving: 'Saving...',
             processing: 'Processing...',
             close: 'Close',
+            legal: 'Legal',
             add: 'Add',
             page: 'Page',
             pagesCount: '{{count}} pages',
@@ -388,6 +390,7 @@ const translations: Record<Locale, TranslationNode> = {
             saving: 'Gardando...',
             processing: 'Procesando...',
             close: 'Pechar',
+            legal: 'Xurídico',
             add: 'Engadir',
             page: 'Páxina',
             pagesCount: '{{count}} páxinas',
@@ -571,6 +574,7 @@ const translations: Record<Locale, TranslationNode> = {
             saving: 'Enregistrement...',
             processing: 'Traitement...',
             close: 'Fermer',
+            legal: 'Mentions légales',
             add: 'Ajouter',
             page: 'Page',
             pagesCount: '{{count}} pages',
@@ -754,6 +758,7 @@ const translations: Record<Locale, TranslationNode> = {
             saving: 'Speichert...',
             processing: 'Verarbeitung...',
             close: 'Schließen',
+            legal: 'Rechtliches',
             add: 'Hinzufügen',
             page: 'Seite',
             pagesCount: '{{count}} Seiten',
@@ -937,6 +942,7 @@ const translations: Record<Locale, TranslationNode> = {
             saving: 'A guardar...',
             processing: 'A processar...',
             close: 'Fechar',
+            legal: 'Legal',
             add: 'Adicionar',
             page: 'Página',
             pagesCount: '{{count}} páginas',
@@ -1120,6 +1126,7 @@ const translations: Record<Locale, TranslationNode> = {
             saving: 'S’està desant...',
             processing: 'S’està processant...',
             close: 'Tancar',
+            legal: 'Legal',
             add: 'Afegir',
             page: 'Pàgina',
             pagesCount: '{{count}} pàgines',
@@ -1303,6 +1310,7 @@ const translations: Record<Locale, TranslationNode> = {
             saving: 'Gordetzen...',
             processing: 'Prozesatzen...',
             close: 'Itxi',
+            legal: 'Legala',
             add: 'Gehitu',
             page: 'Orria',
             pagesCount: '{{count}} orri',
@@ -1554,3 +1562,4 @@ export const useI18n = () => {
     }
     return context;
 };
+
