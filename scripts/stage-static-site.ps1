@@ -18,12 +18,14 @@ $deployment = switch ($Environment) {
         @{
             BuildScript = "build"
             Domain = "pdfing.gallego.top"
+            ExtraDomains = @("pdfinplace.com")
         }
     }
     "test" {
         @{
             BuildScript = "build:test"
             Domain = "test.pdfing.gallego.top"
+            ExtraDomains = @()
         }
     }
 }
@@ -84,6 +86,23 @@ $robocopyExitCode = $LASTEXITCODE
 
 if ($robocopyExitCode -gt 7) {
     throw "Staging failed with robocopy exit code $robocopyExitCode."
+}
+
+foreach ($extraDomain in $deployment.ExtraDomains) {
+    $extraPath = [System.IO.Path]::GetFullPath((Join-Path $sitesRoot $extraDomain))
+    if (-not (Test-Path -LiteralPath $extraPath -PathType Container)) {
+        throw "Registered site directory does not exist: $extraPath"
+    }
+    $resolvedExtraParent = Split-Path -Parent ((Resolve-Path -LiteralPath $extraPath).Path.TrimEnd("\"))
+    if ($resolvedExtraParent -ne $resolvedSitesRoot) {
+        throw "Refusing to stage outside the registered static sites root."
+    }
+    $resolvedExtraPath = (Resolve-Path -LiteralPath $extraPath).Path.TrimEnd("\")
+    & robocopy $sourcePath $resolvedExtraPath /MIR /COPY:DAT /DCOPY:DAT /R:2 /W:1 /NFL /NDL /NJH /NJS /NP
+    if ($LASTEXITCODE -gt 7) {
+        throw "Staging failed for ${extraDomain} with robocopy exit code $LASTEXITCODE."
+    }
+    Write-Output "Staged $Environment build for $extraDomain at $resolvedExtraPath"
 }
 
 Write-Output "Staged $Environment build for $($deployment.Domain) at $resolvedTargetPath"

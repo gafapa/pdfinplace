@@ -45,7 +45,7 @@ The same checks run automatically in GitHub Actions for pushes to `main` and pul
 npm run build
 ```
 
-The production app is emitted to `dist/` and is configured for `https://pdfing.gallego.top`.
+The production app is emitted to `dist/` and is configured for `https://pdfinplace.com` and mirrored to `https://pdfing.gallego.top`.
 
 Build the test environment with:
 

@@ -6,7 +6,7 @@ PDF in Place is deployed as a static single-page application.
 
 | Environment | URL | Build command | Search indexing |
 | --- | --- | --- | --- |
-| Production | `https://pdfing.gallego.top` | `npm ci && npm run build` | Enabled |
+| Production | `https://pdfinplace.com`, `https://pdfing.gallego.top` | `npm ci && npm run build` | Enabled |
 | Test | `https://test.pdfing.gallego.top` | `npm ci && npm run build:test` | Disabled |
 
 Both commands emit the complete static application to `dist/`. Deploy only the contents of that directory.
