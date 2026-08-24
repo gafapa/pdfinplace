@@ -8,90 +8,369 @@
   <style>
     * { box-sizing: border-box; }
     body { margin: 0; font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; color: #1f2937; background: #f9fafb; line-height: 1.65; }
-    header { background: #ffffff; border-bottom: 1px solid #e5e7eb; padding: 1rem 1.5rem; display: flex; align-items: center; gap: .75rem; }
+    header { background: #ffffff; border-bottom: 1px solid #e5e7eb; padding: .75rem 1.5rem; display: flex; align-items: center; justify-content: space-between; gap: 1rem; flex-wrap: wrap; }
+    .brand { display: flex; align-items: center; gap: .75rem; }
     .logo { width: 34px; height: 34px; border-radius: 10px; background: #2563eb; color: #fff; display: flex; align-items: center; justify-content: center; font-weight: 800; font-size: .8rem; }
     header strong { font-size: 1.05rem; }
+    nav.lang { display: flex; gap: .25rem; flex-wrap: wrap; }
+    nav.lang button { border: 1px solid #e5e7eb; background: #fff; border-radius: 999px; padding: .15rem .6rem; font-size: .78rem; cursor: pointer; color: #374151; }
+    nav.lang button.active { background: #2563eb; border-color: #2563eb; color: #fff; }
     main { max-width: 46rem; margin: 0 auto; padding: 2rem 1.5rem 4rem; }
     h1 { font-size: 1.6rem; margin: 0 0 1.5rem; }
     h2 { font-size: 1.05rem; margin: 2rem 0 .5rem; color: #111827; }
     p, li { font-size: .95rem; color: #374151; }
     a { color: #2563eb; text-decoration: none; }
     a:hover { text-decoration: underline; }
-    ul, ol { padding-left: 1.4rem; }
+    ul { padding-left: 1.4rem; }
     nav.footer { margin-top: 3rem; padding-top: 1rem; border-top: 1px solid #e5e7eb; font-size: .85rem; display: flex; gap: 1.25rem; flex-wrap: wrap; }
-    .notice { background: #eff6ff; border: 1px solid #bfdbfe; border-radius: 10px; padding: .9rem 1rem; font-size: .88rem; margin-bottom: 1.5rem; }
+    section.doc { display: none; }
+    section.doc.active { display: block; }
     .warning { background: #fef2f2; border: 1px solid #fecaca; border-radius: 10px; padding: .9rem 1rem; font-size: .92rem; }
   </style>
 </head>
 <body>
   <header>
-    <div class="logo">PiP</div>
-    <strong>PDF in Place</strong>
+    <div class="brand">
+      <div class="logo">PiP</div>
+      <strong>PDF in Place</strong>
+    </div>
+    <nav class="lang" id="lang-nav" aria-label="Language"></nav>
   </header>
   <main>
-    <h1>Términos de uso</h1>
-
-    <h2>1. Aceptación</h2>
-    <p>El acceso y uso de PDF in Place implica la aceptación plena de estos Términos de uso y de la
-    <a href="./privacidad.html">Política de privacidad</a>. Si no estás de acuerdo, no utilices la aplicación.</p>
-
-    <h2>2. Titularidad del servicio</h2>
-    <p>El servicio es titularidad de Pablo Gallego Falcón
-    (NIF 35320739F), con contacto en
-    <a href="mailto:pablo@gallegofalcon.com">pablo@gallegofalcon.com</a>.</p>
-
-    <h2>3. Descripción del servicio</h2>
-    <p>PDF in Place es una herramienta gratuita que funciona íntegramente en el navegador y permite importar,
-    editar, organizar, proteger y exportar documentos PDF. El procesamiento se realiza localmente en el equipo del
-    usuario: los documentos no se suben a ningún servidor.</p>
-
-    <h2>4. Uso aceptable</h2>
-    <ul>
-      <li>Utilizar el servicio conforme a la legislación aplicable.</li>
-      <li>
-        <strong>Cifrado y descifrado</strong>: solo puedes eliminar la protección de un PDF si eres su legítimo
-        propietario o cuentas con autorización expresa de quien lo sea. El uso para eludir protecciones de documentos
-        ajenos es ilícito y queda expresamente prohibido.
-      </li>
-      <li>No emplear el servicio para tratar contenido cuya posesión o modificación sea ilegal.</li>
-      <li>No intentar alterar, sobrecargar o interferir en la infraestructura del sitio.</li>
-    </ul>
-
-    <h2>5. Propiedad intelectual</h2>
-    <p>Los documentos que tratas con la aplicación son y siguen siendo tuyos. El titular no accede a ellos ni los
-    conserva. El software del sitio se ofrece tal cual está publicado; los componentes de terceros conservan sus
-    licencias originales.</p>
-
-    <div class="warning">
-      <strong>6. Ausencia de garantía.</strong>
-      El servicio se presta «tal cual» («as is») y «según disponibilidad», sin garantías de ningún tipo, expresas ni
-      implícitas. No se garantiza que el resultado del procesamiento sea idéntico al documento original ni que el
-      servicio esté disponible de forma ininterrumpida.
-    </div>
-
-    <h2>7. Limitación de responsabilidad</h2>
-    <p>Dado que todo el procesamiento ocurre en tu navegador, es tu responsabilidad mantener copias de seguridad de
-    tus documentos. En la máxima medida permitida por la ley, el titular no será responsable de:</p>
-    <ul>
-      <li>Pérdida, corrupción o alteración de documentos durante o tras su tratamiento.</li>
-      <li>Pérdida de datos locales almacenados en tu navegador (sesiones, firmas, preferencias).</li>
-      <li>Daños derivados del uso indebido del servicio o de la eliminación de protecciones sobre documentos sin autorización.</li>
-    </ul>
-
-    <h2>8. Modificaciones</h2>
-    <p>El titular puede actualizar estos Términos y las funciones del servicio en cualquier momento. Los cambios se
-    publican en esta página con efectos desde su publicación.</p>
-
-    <h2>9. Ley aplicable y jurisdicción</h2>
-    <p>Estos Términos se rigen por la legislación española. Para cualquier controversia serán competentes los Juzgados
-    y Tribunales del domicilio del consumidor, cuando actúe en tal condición; en su defecto, los de
-    Pontevedra.</p>
-
-    <nav class="footer">
-      <a href="./aviso-legal.html">Aviso legal</a>
-      <a href="./privacidad.html">Privacidad</a>
-      <a href="./terminos.html">Términos de uso</a>
-    </nav>
+    <section class="doc" id="doc"></section>
+    <noscript>
+      <h1>Términos de uso</h1>
+      <p>Titular: Pablo Gallego Falcón (NIF 35320739F) · pablo@gallegofalcon.com.</p>
+      <p>El servicio se presta «tal cual», sin garantías. Prohibido eliminar la protección de documentos sin ser su
+      legítimo propietario o contar con autorización. Todo el procesamiento ocurre en tu navegador: mantén copias de
+      seguridad. Consulta la versión completa activando JavaScript.</p>
+      <p>The service is provided “as is”, without warranties. Removing protection from documents you do not own or are
+      not authorized to unlock is prohibited. All processing happens in your browser: keep backups. Enable JavaScript
+      for the full terms.</p>
+    </noscript>
+    <nav class="footer" id="footer-nav"></nav>
   </main>
+  <script>
+  "use strict";
+  var EMAIL = "pablo@gallegofalcon.com";
+  var L = {
+    es: {
+      htmlLang: "es", docTitle: "Términos de uso - PDF in Place",
+      h1: "Términos de uso",
+      s1h: "1. Aceptación",
+      s1p: "El acceso y uso de PDF in Place implica la aceptación plena de estos Términos de uso y de la <a href='./privacidad.html'>Política de privacidad</a>. Si no estás de acuerdo, no utilices la aplicación.",
+      s2h: "2. Titularidad del servicio",
+      s2p: "El servicio es titularidad de Pablo Gallego Falcón (NIF 35320739F), con contacto en <a href=\"mailto:" + EMAIL + "\">" + EMAIL + "</a>.",
+      s3h: "3. Descripción del servicio",
+      s3p: "PDF in Place es una herramienta gratuita que funciona íntegramente en el navegador y permite importar, editar, organizar, proteger y exportar documentos PDF. El procesamiento se realiza localmente en el equipo del usuario: los documentos no se suben a ningún servidor.",
+      s4h: "4. Uso aceptable",
+      s4items: [
+        "Utilizar el servicio conforme a la legislación aplicable.",
+        "<strong>Cifrado y descifrado</strong>: solo puedes eliminar la protección de un PDF si eres su legítimo propietario o cuentas con autorización expresa de quien lo sea. El uso para eludir protecciones de documentos ajenos es ilícito y queda expresamente prohibido.",
+        "No emplear el servicio para tratar contenido cuya posesión o modificación sea ilegal.",
+        "No intentar alterar, sobrecargar o interferir en la infraestructura del sitio."
+      ],
+      s5h: "5. Propiedad intelectual",
+      s5p: "Los documentos que tratas con la aplicación son y siguen siendo tuyos. El titular no accede a ellos ni los conserva. El software del sitio se ofrece tal cual está publicado; los componentes de terceros conservan sus licencias originales.",
+      wTitle: "6. Ausencia de garantía.",
+      wBody: "El servicio se presta «tal cual» («as is») y «según disponibilidad», sin garantías de ningún tipo, expresas ni implícitas. No se garantiza que el resultado del procesamiento sea idéntico al documento original ni que el servicio esté disponible de forma ininterrumpida.",
+      s7h: "7. Limitación de responsabilidad",
+      s7p: "Dado que todo el procesamiento ocurre en tu navegador, es tu responsabilidad mantener copias de seguridad de tus documentos. En la máxima medida permitida por la ley, el titular no será responsable de:",
+      s7items: [
+        "Pérdida, corrupción o alteración de documentos durante o tras su tratamiento.",
+        "Pérdida de datos locales almacenados en tu navegador (sesiones, firmas, preferencias).",
+        "Daños derivados del uso indebido del servicio o de la eliminación de protecciones sobre documentos sin autorización."
+      ],
+      s8h: "8. Modificaciones",
+      s8p: "El titular puede actualizar estos Términos y las funciones del servicio en cualquier momento. Los cambios se publican en esta página con efectos desde su publicación.",
+      s9h: "9. Ley aplicable y jurisdicción",
+      s9p: "Estos Términos se rigen por la legislación española. Para cualquier controversia serán competentes los Juzgados y Tribunales del domicilio del consumidor, cuando actúe en tal condición; en su defecto, los de Pontevedra.",
+      fLegal: "Aviso legal", fPrivacy: "Privacidad", fTerms: "Términos de uso"
+    },
+    en: {
+      htmlLang: "en", docTitle: "Terms of use - PDF in Place",
+      h1: "Terms of use",
+      s1h: "1. Acceptance",
+      s1p: "Accessing and using PDF in Place implies full acceptance of these Terms of use and of the <a href='./privacidad.html?lang=en'>Privacy Policy</a>. If you do not agree, do not use the application.",
+      s2h: "2. Service ownership",
+      s2p: "The service is owned by Pablo Gallego Falcón (Tax ID 35320739F), contact at <a href=\"mailto:" + EMAIL + "\">" + EMAIL + "</a>.",
+      s3h: "3. Service description",
+      s3p: "PDF in Place is a free tool that runs entirely in the browser and lets you import, edit, organize, protect and export PDF documents. Processing happens locally on the user’s device: documents are not uploaded to any server.",
+      s4h: "4. Acceptable use",
+      s4items: [
+        "Use the service in accordance with applicable law.",
+        "<strong>Encryption and decryption</strong>: you may only remove a PDF’s protection if you are its legitimate owner or have express authorization from whoever is. Using the service to bypass protections on third-party documents is unlawful and expressly prohibited.",
+        "Do not use the service to process content whose possession or modification is illegal.",
+        "Do not attempt to alter, overload or interfere with the site’s infrastructure."
+      ],
+      s5h: "5. Intellectual property",
+      s5p: "The documents you treat with the application are and remain yours. The owner does not access them nor keeps them. The site’s software is offered as published; third-party components retain their original licenses.",
+      wTitle: "6. Disclaimer of warranty.",
+      wBody: "The service is provided “as is” and “as available”, without warranties of any kind, express or implied. There is no guarantee that processing results will be identical to the original document or that the service will be available uninterrupted.",
+      s7h: "7. Limitation of liability",
+      s7p: "Since all processing happens in your browser, it is your responsibility to keep backups of your documents. To the maximum extent permitted by law, the owner shall not be liable for:",
+      s7items: [
+        "Loss, corruption or alteration of documents during or after their processing.",
+        "Loss of local data stored in your browser (sessions, signatures, preferences).",
+        "Damage arising from misuse of the service or from removing protections on documents without authorization."
+      ],
+      s8h: "8. Changes",
+      s8p: "The owner may update these Terms and the service features at any time. Changes take effect upon publication on this page.",
+      s9h: "9. Governing law and jurisdiction",
+      s9p: "These Terms are governed by Spanish law. For any dispute, the courts of the consumer’s domicile shall have jurisdiction where applicable; otherwise, the courts of Pontevedra (Spain).",
+      fLegal: "Legal notice", fPrivacy: "Privacy", fTerms: "Terms of use"
+    },
+    gl: {
+      htmlLang: "gl", docTitle: "Termos de uso - PDF in Place",
+      h1: "Termos de uso",
+      s1h: "1. Aceptación",
+      s1p: "O acceso e uso de PDF in Place implica a aceptación plena destes Termos de uso e da <a href='./privacidad.html?lang=gl'>Política de privacidade</a>. Se non estás de acordo, non utilices a aplicación.",
+      s2h: "2. Titularidade do servizo",
+      s2p: "O servizo é titularidade de Pablo Gallego Falcón (NIF 35320739F), con contacto en <a href=\"mailto:" + EMAIL + "\">" + EMAIL + "</a>.",
+      s3h: "3. Descrición do servizo",
+      s3p: "PDF in Place é unha ferramenta gratuíta que funciona íntegramente no navegador e permite importar, editar, organizar, protexer e exportar documentos PDF. O procesamento realízase localmente no equipo do usuario: os documentos non se soben a ningún servidor.",
+      s4h: "4. Uso aceptable",
+      s4items: [
+        "Utilizar o servizo conforme á lexislación aplicable.",
+        "<strong>Cifrado e descifrado</strong>: só podes eliminar a protección dun PDF se es o seu lexítimo propietario ou contas con autorización expresa de quen o sexa. O uso para eludir proteccións de documentos alleos é ilícito e queda expresamente prohibido.",
+        "Non empregar o servizo para tratar contido cuxa posesión ou modificación sexa ilegal.",
+        "Non intentar alterar, sobrecargar nin interferir na infraestrutura do sitio."
+      ],
+      s5h: "5. Propiedade intelectual",
+      s5p: "Os documentos que tratas coa aplicación son e seguen sendo teus. O titular non accede a eles nin os conserva. O software do sitio ofrécese tal como está publicado; os compoñentes de terceiros conservan as súas licenzas orixinais.",
+      wTitle: "6. Ausencia de garantía.",
+      wBody: "O servizo préstase «tal cal» («as is») e «segundo dispoñibilidade», sen garantías de ningún tipo, expresas nin implícitas. Non se garante que o resultado do procesamento sexa idéntico ao documento orixinal nin que o servizo estea dispoñible de forma ininterrompida.",
+      s7h: "7. Limitación de responsabilidade",
+      s7p: "Dado que todo o procesamento ocorre no teu navegador, é túa a responsabilidade de manter copias de seguridade dos teus documentos. Na máxima medida permitida pola lei, o titular non será responsable de:",
+      s7items: [
+        "Perda, corrupción ou alteración de documentos durante ou tras o seu tratamento.",
+        "Perda de datos locais almacenados no teu navegador (sesións, sinaturas, preferencias).",
+        "Danos derivados do uso indebido do servizo ou da eliminación de proteccións sobre documentos sen autorización."
+      ],
+      s8h: "8. Modificacións",
+      s8p: "O titular pode actualizar estes Termos e as funcións do servizo en calquera momento. Os cambios publícanse nesta páxina con efectos dende a súa publicación.",
+      s9h: "9. Lei aplicable e xurisdición",
+      s9p: "Estes Termos rexense pola lexislación española. Para calquera controversia serán competentes os Xulgados e Tribunais do domicilio do consumidor, cando actúe nesa condición; na súa falta, os de Pontevedra.",
+      fLegal: "Aviso legal", fPrivacy: "Privacidade", fTerms: "Termos de uso"
+    },
+    fr: {
+      htmlLang: "fr", docTitle: "Conditions d’utilisation - PDF in Place",
+      h1: "Conditions d’utilisation",
+      s1h: "1. Acceptation",
+      s1p: "L’accès et l’utilisation de PDF in Place impliquent l’acceptation pleine et entière des présentes Conditions d’utilisation et de la <a href='./privacidad.html?lang=fr'>Politique de confidentialité</a>. Si vous n’êtes pas d’accord, n’utilisez pas l’application.",
+      s2h: "2. Titularité du service",
+      s2p: "Le service est la propriété de Pablo Gallego Falcón (NIF 35320739F), contact : <a href=\"mailto:" + EMAIL + "\">" + EMAIL + "</a>.",
+      s3h: "3. Description du service",
+      s3p: "PDF in Place est un outil gratuit qui fonctionne entièrement dans le navigateur et permet d’importer, modifier, organiser, protéger et exporter des documents PDF. Le traitement s’effectue localement sur l’appareil de l’utilisateur : les documents ne sont téléversés sur aucun serveur.",
+      s4h: "4. Utilisation acceptable",
+      s4items: [
+        "Utiliser le service conformément à la législation applicable.",
+        "<strong>Chiffrement et déchiffrement</strong> : vous ne pouvez supprimer la protection d’un PDF que si vous en êtes le légitime propriétaire ou si vous disposez de l’autorisation expresse de celui qui l’est. L’usage du service pour contourner des protections de documents tiers est illicite et expressément interdit.",
+        "Ne pas utiliser le service pour traiter un contenu dont la possession ou la modification serait illégale.",
+        "Ne pas tenter d’altérer, de surcharger ni d’interférer avec l’infrastructure du site."
+      ],
+      s5h: "5. Propriété intellectuelle",
+      s5p: "Les documents que vous traitez avec l’application sont et restent les vôtres. Le titulaire n’y accède pas et ne les conserve pas. Le logiciel du site est offert tel que publié ; les composants tiers conservent leurs licences d’origine.",
+      wTitle: "6. Absence de garantie.",
+      wBody: "Le service est fourni « en l’état » (« as is ») et « selon disponibilité », sans aucune garantie, expresse ou implicite. Rien ne garantit que le résultat du traitement sera identique au document original ni que le service sera disponible sans interruption.",
+      s7h: "7. Limitation de responsabilité",
+      s7p: "Tout le traitement ayant lieu dans votre navigateur, il vous appartient de conserver des copies de sécurité de vos documents. Dans la mesure maximale permise par la loi, le titulaire ne saurait être tenu responsable de :",
+      s7items: [
+        "La perte, la corruption ou l’altération de documents pendant ou après leur traitement.",
+        "La perte de données locales stockées dans votre navigateur (sessions, signatures, préférences).",
+        "Dommages résultant d’un usage abusif du service ou de la suppression de protections sur des documents sans autorisation."
+      ],
+      s8h: "8. Modifications",
+      s8p: "Le titulaire peut mettre à jour ces Conditions et les fonctionnalités du service à tout moment. Les changements prennent effet dès leur publication sur cette page.",
+      s9h: "9. Droit applicable et juridiction",
+      s9p: "Les présentes Conditions sont régies par le droit espagnol. Tout litige relève des tribunaux du domicile du consommateur, lorsqu’il agit en cette qualité ; à défaut, ceux de Pontevedra (Espagne).",
+      fLegal: "Mentions légales", fPrivacy: "Confidentialité", fTerms: "Conditions d’utilisation"
+    },
+    de: {
+      htmlLang: "de", docTitle: "Nutzungsbedingungen - PDF in Place",
+      h1: "Nutzungsbedingungen",
+      s1h: "1. Zustimmung",
+      s1p: "Der Zugriff auf und die Nutzung von PDF in Place impliziert die vollständige Zustimmung zu diesen Nutzungsbedingungen und zur <a href='./privacidad.html?lang=de'>Datenschutzerklärung</a>. Wenn Sie nicht einverstanden sind, nutzen Sie die Anwendung nicht.",
+      s2h: "2. Inhaberschaft des Dienstes",
+      s2p: "Der Dienst wird von Pablo Gallego Falcón (Steuernummer 35320739F) betrieben, Kontakt: <a href=\"mailto:" + EMAIL + "\">" + EMAIL + "</a>.",
+      s3h: "3. Beschreibung des Dienstes",
+      s3p: "PDF in Place ist ein kostenloses Werkzeug, das vollständig im Browser läuft und den Import, die Bearbeitung, Organisation, den Schutz und Export von PDF-Dokumenten ermöglicht. Die Verarbeitung erfolgt lokal auf dem Gerät des Nutzers: Dokumente werden auf keinen Server hochgeladen.",
+      s4h: "4. Zulässige Nutzung",
+      s4items: [
+        "Den Dienst gemäß den geltenden Gesetzen verwenden.",
+        "<strong>Verschlüsselung und Entschlüsselung</strong>: Sie dürfen den Schutz eines PDF nur entfernen, wenn Sie dessen rechtmäßiger Eigentümer sind oder eine ausdrückliche Genehmigung des Eigentümers vorliegt. Die Verwendung des Dienstes zum Umgehen von Schutzmaßnahmen fremder Dokumente ist rechtswidrig und ausdrücklich untersagt.",
+        "Den Dienst nicht zur Verarbeitung von Inhalten verwenden, deren Besitz oder Änderung rechtswidrig ist.",
+        "Keine Versuche, die Infrastruktur der Website zu verändern, zu überlasten oder zu stören."
+      ],
+      s5h: "5. Geistiges Eigentum",
+      s5p: "Die Dokumente, die Sie mit der Anwendung bearbeiten, sind und bleiben Ihre eigenen. Der Inhaber greift nicht darauf zu und bewahrt sie nicht auf. Die Software der Website wird so, wie sie veröffentlicht ist, angeboten; Komponenten Dritter behalten ihre ursprünglichen Lizenzen.",
+      wTitle: "6. Keine Garantie.",
+      wBody: "Der Dienst wird „wie besehen“ („as is“) und „nach Verfügbarkeit“ ohne jegliche Garantie, ausdrücklich oder stillschweigend, bereitgestellt. Es wird weder zugesichert, dass das Verarbeitungsergebnis dem Originaldokument entspricht, noch dass der Dienst unterbrechungsfrei verfügbar ist.",
+      s7h: "7. Haftungsbeschränkung",
+      s7p: "Da die gesamte Verarbeitung in Ihrem Browser erfolgt, liegt es in Ihrer Verantwortung, Sicherungskopien Ihrer Dokumente aufzubewahren. Im gesetzlich zulässigen Höchstumfang haftet der Inhaber nicht für:",
+      s7items: [
+        "Verlust, Beschädigung oder Veränderung von Dokumenten während oder nach ihrer Verarbeitung.",
+        "Verlust lokaler Daten, die in Ihrem Browser gespeichert sind (Sitzungen, Unterschriften, Einstellungen).",
+        "Schäden aus missbräuchlicher Nutzung des Dienstes oder aus dem Entfernen von Schutzmaßnahmen ohne Autorisierung."
+      ],
+      s8h: "8. Änderungen",
+      s8p: "Der Inhaber kann diese Bedingungen und die Funktionen des Dienstes jederzeit aktualisieren. Änderungen werden auf dieser Seite mit sofortiger Wirkung veröffentlicht.",
+      s9h: "9. Anwendbares Recht und Gerichtsstand",
+      s9p: "Diese Bedingungen unterliegen spanischem Recht. Für Streitigkeiten sind die Gerichte am Wohnsitz des Verbrauchers zuständig, sofern er als solcher handelt; andernfalls die Gerichte von Pontevedra (Spanien).",
+      fLegal: "Impressum", fPrivacy: "Datenschutz", fTerms: "Nutzungsbedingungen"
+    },
+    pt: {
+      htmlLang: "pt", docTitle: "Termos de utilização - PDF in Place",
+      h1: "Termos de utilização",
+      s1h: "1. Aceitação",
+      s1p: "O acesso e a utilização do PDF in Place implicam a aceitação plena destes Termos de utilização e da <a href='./privacidad.html?lang=pt'>Política de privacidade</a>. Se não concordar, não utilize a aplicação.",
+      s2h: "2. Titularidade do serviço",
+      s2p: "O serviço é titularidade de Pablo Gallego Falcón (NIF 35320739F), com contacto em <a href=\"mailto:" + EMAIL + "\">" + EMAIL + "</a>.",
+      s3h: "3. Descrição do serviço",
+      s3p: "O PDF in Place é uma ferramenta gratuita que funciona inteiramente no navegador e permite importar, editar, organizar, proteger e exportar documentos PDF. O processamento realiza-se localmente no equipamento do utilizador: os documentos não são carregados para nenhum servidor.",
+      s4h: "4. Utilização aceitável",
+      s4items: [
+        "Utilizar o serviço em conformidade com a legislação aplicável.",
+        "<strong>Cifragem e decifragem</strong>: só pode remover a proteção de um PDF se for o seu legítimo proprietário ou tiver autorização expressa de quem o seja. A utilização do serviço para contornar proteções de documentos alheios é ilícita e está expressamente proibida.",
+        "Não utilizar o serviço para tratar conteúdo cuja posse ou modificação seja ilegal.",
+        "Não tentar alterar, sobrecarregar ou interferir com a infraestrutura do sítio."
+      ],
+      s5h: "5. Propriedade intelectual",
+      s5p: "Os documentos que trata com a aplicação são e continuam a ser seus. O titular não acede a eles nem os conserva. O software do sítio é oferecido tal como foi publicado; os componentes de terceiros conservam as suas licenças originais.",
+      wTitle: "6. Ausência de garantia.",
+      wBody: "O serviço é prestado «tal como está» («as is») e «conforme disponibilidade», sem garantias de qualquer tipo, expressas ou implícitas. Não se garante que o resultado do processamento seja idêntico ao documento original nem que o serviço esteja disponível de forma ininterrupta.",
+      s7h: "7. Limitação de responsabilidade",
+      s7p: "Uma vez que todo o processamento ocorre no seu navegador, é sua responsabilidade manter cópias de segurança dos seus documentos. Na medida máxima permitida por lei, o titular não será responsável por:",
+      s7items: [
+        "Perda, corrupção ou alteração de documentos durante ou após o seu tratamento.",
+        "Perda de dados locais armazenados no seu navegador (sessões, assinaturas, preferências).",
+        "Danos decorrentes da utilização indevida do serviço ou da remoção de proteções sobre documentos sem autorização."
+      ],
+      s8h: "8. Modificações",
+      s8p: "O titular pode atualizar estes Termos e as funcionalidades do serviço a qualquer momento. As alterações são publicadas nesta página com efeitos desde a sua publicação.",
+      s9h: "9. Lei aplicável e jurisdição",
+      s9p: "Estes Termos regem-se pela legislação espanhola. Para qualquer litígio são competentes os Juízos e Tribunais do domicílio do consumidor, quando atue nessa qualidade; na sua falta, os de Pontevedra (Espanha).",
+      fLegal: "Aviso legal", fPrivacy: "Privacidade", fTerms: "Termos de utilização"
+    },
+    ca: {
+      htmlLang: "ca", docTitle: "Condicions d’ús - PDF in Place",
+      h1: "Condicions d’ús",
+      s1h: "1. Acceptació",
+      s1p: "L’accés i l’ús de PDF in Place impliquen l’acceptació plena d’aquestes Condicions d’ús i de la <a href='./privacidad.html?lang=ca'>Política de privadesa</a>. Si no hi estàs d’acord, no facis servir l’aplicació.",
+      s2h: "2. Titularitat del servei",
+      s2p: "El servei és titularitat de Pablo Gallego Falcón (NIF 35320739F), amb contacte a <a href=\"mailto:" + EMAIL + "\">" + EMAIL + "</a>.",
+      s3h: "3. Descripció del servei",
+      s3p: "PDF in Place és una eina gratuïta que funciona íntegrament al navegador i permet importar, editar, organitzar, protegir i exportar documents PDF. El processament es fa localment a l’equip de l’usuari: els documents no es pugen a cap servidor.",
+      s4h: "4. Ús acceptable",
+      s4items: [
+        "Fer servir el servei d’acord amb la legislació aplicable.",
+        "<strong>Xifratge i desxifratge</strong>: només pots eliminar la protecció d’un PDF si n’ets el legítim propietari o tens autorització expressa de qui ho sigui. Fer servir el servei per evitar proteccions de documents aliens és il·lícit i queda expressament prohibit.",
+        "No empris el servei per tractar contingut la possessió o modificació del qual sigui il·legal.",
+        "No intentis alterar, sobrecarregar ni interferir en la infraestructura del lloc."
+      ],
+      s5h: "5. Propietat intel·lectual",
+      s5p: "Els documents que tracts amb l’aplicació són i continuen sent teus. El titular no hi accedeix ni els conserva. El programari del lloc s’ofereix tal com està publicat; els components de tercers conserven les seves llicències originals.",
+      wTitle: "6. Absència de garantia.",
+      wBody: "El servei es presta «tal com és» («as is») i «segons disponibilitat», sense garanties de cap mena, expréses ni tàcites. No es garanteix que el resultat del processament sigui idèntic al document original ni que el servei estigui disponible de manera ininterrompuda.",
+      s7h: "7. Limitació de responsabilitat",
+      s7p: "Atès que tot el processament passa al teu navegador, és responsabilitat teva mantenir còpies de seguretat dels teus documents. En la mesura màxima permesa per llei, el titular no serà responsable de:",
+      s7items: [
+        "Pèrdua, corrupció o alteració de documents durant o després del seu tractament.",
+        "Pèrdua de dades locals emmagatzemades al teu navegador (sessions, signatures, preferències).",
+        "Danys derivats de l’ús indegut del servei o de l’eliminació de proteccions sobre documents sense autorització."
+      ],
+      s8h: "8. Modificacions",
+      s8p: "El titular pot actualitzar aquestes Condicions i les funcions del servei en qualsevol moment. Els canvis es publiquen en aquesta pàgina amb efectes des de la seva publicació.",
+      s9h: "9. Llei aplicable i jurisdicció",
+      s9p: "Aquestes Condicions es regeixen per la legislació espanyola. Per a qualsevol controvèrsia seran competents els Jutjats i Tribunals del domicili del consumidor, quan actuï en aquesta condició; en defecte, els de Pontevedra (Espanya).",
+      fLegal: "Avís legal", fPrivacy: "Privadesa", fTerms: "Condicions d’ús"
+    },
+    eu: {
+      htmlLang: "eu", docTitle: "Erabilera baldintzak - PDF in Place",
+      h1: "Erabilera baldintzak",
+      s1h: "1. Onarpena",
+      s1p: "PDF in Place atzitzea eta erabiltzeak Erabilera baldintza hauek eta <a href='./privacidad.html?lang=eu'>Pribatutasun politikaren</a> onarpen osoa dakartza. Ados ez baudude, ez erabili aplikazioa.",
+      s2h: "2. Zerbitzuaren jabetza",
+      s2p: "Zerbitzuaren jabea Pablo Gallego Falcón da (NIF 35320739F), kontaktua: <a href=\"mailto:" + EMAIL + "\">" + EMAIL + "</a>.",
+      s3h: "3. Zerbitzuaren deskribapena",
+      s3p: "PDF in Place nabigatzailean guztiz funtzionatzen duen doako tresna bat da, PDF dokumentuak inportatu, editatu, antolatu, babestu eta esportatzeko aukera ematen duena. Prozesamenda erabiltzailearen gailuan lokalki egiten da: dokumentuak ez dira zerbitzarira kargatzen.",
+      s4h: "4. Onar daitezkeen erabilerak",
+      s4items: [
+        "Zerbitzua indarrean dauden legeen arabera erabili.",
+        "<strong>Zifratzea eta deszifratzea</strong>: PDF baten babesa kendu dezakezu bere jabe legitimoa zarena edo horren baimen esplizitua baduzu soilik. Zerbitzua beste batzuen dokumentuak babestea saihesteko erabiltzea legez kontrakoa da eta debekatuta dago berariaz.",
+        "Zerbitzua ez erabili posizioa edo aldaketa ilegalak diren edukiak prozesatzeko.",
+        "Gunearen azpiegitura aldatu, gainkargatu edo oztopatzen saiatu ez."
+      ],
+      s5h: "5. Jabetza intelektuala",
+      s5p: "Aplikazioarekin prozesatzen dituzun dokumentuak zureak dira eta izaten jarraituko dute. Jabeak ez die sarbiderik ematen eta ez ditu gordetzen. Gunearen softwarea argitaratua izan den bezala eskaintzen da; hirugarrenen osagaiek jatorrizko lizentziak gordetzen dituzte.",
+      wTitle: "6. Bermerik eza.",
+      wBody: "Zerbitzua «dagoen bezala» («as is») eta «eskuragarri dagoen neurrian» ematen da, inolako bermerik gabe, adierazirik nahiz inplikaturik. Ez da bermatzen prozesamenduaren emaitza jatorrizko dokumentuaren berdina izango denik edo zerbitzua etengabe eskuragarri egongo denik.",
+      s7h: "7. Erantzukizunaren muga",
+      s7p: "Prozesamenda osoa zure nabigatzailean gertatzen denez, zure erantzukizuna da zure dokumentuen babeskopiak gordetzea. Legeek ahalbidetzen duten gehienera, jabea ez da arduraduna honako hauengatik:",
+      s7items: [
+        "Dokumentuen galera, hondatzea edo aldaketa haien prozesamenduan zehar edo ostean.",
+        "Nabigatzailean gordetako datu lokalak galtzea (saioak, sinadurak, hobespenak).",
+        "Zerbitzua gaizki erabiltzeagatiko edo baimenik gabe dokumentuen babesa kentzeagatiko kalteak."
+      ],
+      s8h: "8. Aldaketak",
+      s8p: "Jabeak Baldintza hauek eta zerbitzuaren funtzioak edozer unetan eguneratu ditzake. Aldaketak orri honetan argitaratzen diren unetik izango dute indarra.",
+      s9h: "9. Aplika daitekeen legeria eta jurisdikzioa",
+      s9p: "Baldintza hauek Espainiako legeriaren mende daude. Eztabaida bakoitzerako, kontsumitzailearen egoitzako epaitegi eta tribunalak izango dira eskumadun, baldin eta horrelako gisa jarduten badu; bestela, Pontevedrakoak (Espainia).",
+      fLegal: "Ohar legala", fPrivacy: "Pribatutasuna", fTerms: "Erabilera baldintzak"
+    }
+  };
+  var ORDER = ["es", "en", "gl", "fr", "de", "pt", "ca", "eu"];
+  var NAMES = { es: "Español", en: "English", gl: "Galego", fr: "Français", de: "Deutsch", pt: "Português", ca: "Català", eu: "Euskara" };
+
+  function render(lang) {
+    var t = L[lang];
+    document.title = t.docTitle;
+    document.documentElement.lang = t.htmlLang;
+    var html = "<h1>" + t.h1 + "</h1>"
+      + "<h2>" + t.s1h + "</h2><p>" + t.s1p + "</p>"
+      + "<h2>" + t.s2h + "</h2><p>" + t.s2p + "</p>"
+      + "<h2>" + t.s3h + "</h2><p>" + t.s3p + "</p>"
+      + "<h2>" + t.s4h + "</h2><ul>";
+    t.s4items.forEach(function (i) { html += "<li>" + i + "</li>"; });
+    html += "</ul><h2>" + t.s5h + "</h2><p>" + t.s5p + "</p>"
+      + "<div class='warning'><strong>" + t.wTitle + "</strong> " + t.wBody + "</div>"
+      + "<h2>" + t.s7h + "</h2><p>" + t.s7p + "</p><ul>";
+    t.s7items.forEach(function (i) { html += "<li>" + i + "</li>"; });
+    html += "</ul><h2>" + t.s8h + "</h2><p>" + t.s8p + "</p>"
+      + "<h2>" + t.s9h + "</h2><p>" + t.s9p + "</p>";
+    document.getElementById("doc").innerHTML = html;
+    document.getElementById("doc").classList.add("active");
+
+    document.getElementById("footer-nav").innerHTML =
+      "<a href='./aviso-legal.html?lang=" + lang + "'>" + t.fLegal + "</a>"
+      + "<a href='./privacidad.html?lang=" + lang + "'>" + t.fPrivacy + "</a>"
+      + "<a href='./terminos.html?lang=" + lang + "'>" + t.fTerms + "</a>";
+
+    var nav = document.getElementById("lang-nav");
+    nav.innerHTML = "";
+    ORDER.forEach(function (code) {
+      var b = document.createElement("button");
+      b.type = "button";
+      b.textContent = NAMES[code];
+      if (code === lang) b.className = "active";
+      b.addEventListener("click", function () { render(code); });
+      nav.appendChild(b);
+    });
+  }
+
+  (function init() {
+    var params = new URLSearchParams(window.location.search);
+    var requested = params.get("lang");
+    var stored = null;
+    try { stored = localStorage.getItem("pageforge.locale"); } catch (e) { /* ignore */ }
+    var browser = (navigator.languages && navigator.languages.length ? navigator.languages : [navigator.language])
+      .map(function (l) { return String(l).toLowerCase().slice(0, 2); });
+    var lang = ORDER.find(function (c) { return c === requested; })
+      || ORDER.find(function (c) { return c === stored; })
+      || ORDER.find(function (c) { return browser.indexOf(c) !== -1; })
+      || "es";
+    render(lang);
+  })();
+  </script>
 </body>
 </html>

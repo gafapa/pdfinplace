@@ -8,9 +8,13 @@
   <style>
     * { box-sizing: border-box; }
     body { margin: 0; font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; color: #1f2937; background: #f9fafb; line-height: 1.65; }
-    header { background: #ffffff; border-bottom: 1px solid #e5e7eb; padding: 1rem 1.5rem; display: flex; align-items: center; gap: .75rem; }
+    header { background: #ffffff; border-bottom: 1px solid #e5e7eb; padding: .75rem 1.5rem; display: flex; align-items: center; justify-content: space-between; gap: 1rem; flex-wrap: wrap; }
+    .brand { display: flex; align-items: center; gap: .75rem; }
     .logo { width: 34px; height: 34px; border-radius: 10px; background: #2563eb; color: #fff; display: flex; align-items: center; justify-content: center; font-weight: 800; font-size: .8rem; }
     header strong { font-size: 1.05rem; }
+    nav.lang { display: flex; gap: .25rem; flex-wrap: wrap; }
+    nav.lang button { border: 1px solid #e5e7eb; background: #fff; border-radius: 999px; padding: .15rem .6rem; font-size: .78rem; cursor: pointer; color: #374151; }
+    nav.lang button.active { background: #2563eb; border-color: #2563eb; color: #fff; }
     main { max-width: 46rem; margin: 0 auto; padding: 2rem 1.5rem 4rem; }
     h1 { font-size: 1.6rem; margin: 0 0 1.5rem; }
     h2 { font-size: 1.05rem; margin: 2rem 0 .5rem; color: #111827; }
@@ -18,103 +22,377 @@
     a { color: #2563eb; text-decoration: none; }
     a:hover { text-decoration: underline; }
     ul, ol { padding-left: 1.4rem; }
-    nav.footer { margin-top: 3rem; padding-top: 1rem; border-top: 1px solid #e5e7eb; font-size: .85rem; display: flex; gap: 1.25rem; flex-wrap: wrap; }
-    .notice { background: #eff6ff; border: 1px solid #bfdbfe; border-radius: 10px; padding: .9rem 1rem; font-size: .88rem; margin-bottom: 1.5rem; }
     table { width: 100%; border-collapse: collapse; font-size: .88rem; margin: .75rem 0; background: #fff; }
     th, td { border: 1px solid #e5e7eb; padding: .55rem .75rem; text-align: left; vertical-align: top; }
     th { background: #f9fafb; font-weight: 600; color: #111827; }
+    nav.footer { margin-top: 3rem; padding-top: 1rem; border-top: 1px solid #e5e7eb; font-size: .85rem; display: flex; gap: 1.25rem; flex-wrap: wrap; }
+    section.doc { display: none; }
+    section.doc.active { display: block; }
   </style>
 </head>
 <body>
   <header>
-    <div class="logo">PiP</div>
-    <strong>PDF in Place</strong>
+    <div class="brand">
+      <div class="logo">PiP</div>
+      <strong>PDF in Place</strong>
+    </div>
+    <nav class="lang" id="lang-nav" aria-label="Language"></nav>
   </header>
   <main>
-    <h1>Política de privacidad</h1>
-
-    <p>En esta página se describe el tratamiento de datos llevado a cabo a través de este sitio web, en cumplimiento
-    del Reglamento (UE) 2016/679 (RGPD) y de la Ley Orgánica 3/2018 (LOPDGDD).</p>
-
-    <h2>Responsable del tratamiento</h2>
-    <ul>
-      <li><strong>Titular:</strong> Pablo Gallego Falcón</li>
-      <li><strong>NIF:</strong> 35320739F</li>
-      <li><strong>Contacto:</strong> <a href="mailto:pablo@gallegofalcon.com">pablo@gallegofalcon.com</a></li>
-    </ul>
-
-    <h2>Principio fundamental: tus documentos no salen de tu dispositivo</h2>
-    <p>PDF in Place procesa los documentos íntegramente en tu navegador. Los archivos PDF, DOCX, ODT o de imagen que
-    abres con la aplicación <strong>nunca se transmiten ni se almacenan en ningún servidor</strong>. El titular no
-    tiene acceso a ellos en ningún momento.</p>
-
-    <h2>Datos tratados</h2>
-    <table>
-      <thead>
-        <tr><th>Categoría</th><th>Descripción</th><th>Dónde se guarda</th></tr>
-      </thead>
-      <tbody>
-        <tr>
-          <td>Contenido de tus documentos</td>
-          <td>Solo en memoria durante la edición y, si activas la «Sesión local», en tu propio navegador para poder recuperarlos más tarde.</td>
-          <td>Tu navegador (IndexedDB / localStorage)</td>
-        </tr>
-        <tr>
-          <td>Firmas y sellos guardados</td>
-          <td>Únicamente si activas la «Sesión local». Se almacenan cifrados por el propio navegador en tu equipo.</td>
-          <td>Tu navegador (IndexedDB)</td>
-        </tr>
-        <tr>
-          <td>Preferencias de uso</td>
-          <td>Idioma, nivel de zoom, opciones de exportación y preferencia de no volver a ver la página de bienvenida.</td>
-          <td>Tu navegador (localStorage)</td>
-        </tr>
-        <tr>
-          <td>Registros técnicos del servidor web</td>
-          <td>El proveedor de hosting registra la dirección IP y datos técnicos de cada visita con fines de seguridad y operación del servicio.</td>
-          <td>Servidor del proveedor de hosting</td>
-        </tr>
-      </tbody>
-    </table>
-
-    <h2>Cookies y almacenamiento local</h2>
-    <p>Este sitio no utiliza cookies de seguimiento, analítica ni publicidad. Emplea exclusivamente
-    <em>almacenamiento local</em> del navegador (localStorage e IndexedDB), necesario para prestar el servicio:
-    recordar tus preferencias y, si lo activas, conservar tu sesión de edición en tu propio equipo. Puedes eliminar
-    estos datos en cualquier momento desde la propia aplicación (opción de limpiar datos) o desde la configuración
-    de tu navegador.</p>
-
-    <h2>Finalidad y base jurídica</h2>
-    <ol>
-      <li><strong>Prestación del servicio</strong>: mantener tus preferencias y sesión local — base jurídica: ejecución del contrato art. 6.1.b RGPD).</li>
-      <li><strong>Seguridad y operación del sitio</strong>: registros técnicos del hosting — base jurídica: interés legítimo (art. 6.1.f RGPD).</li>
-    </ol>
-
-    <h2>Conservación</h2>
-    <p>Los datos locales permanecen en tu navegador hasta que los eliminas (desde la aplicación o borrando los datos
-    del sitio). Los registros técnicos del hosting se conservan durante el plazo definido por el proveedor, habitualmente
-    limitado a fines de seguridad.</p>
-
-    <h2>Destinatarios y encargados</h2>
-    <p>No se ceden datos a terceros con fines comerciales. El único encargado de tratamiento es el proveedor de hosting,
-    Oracle Cloud, limitado a la prestación del servicio de alojamiento web
-    conforme al art. 28 RGPD.</p>
-
-    <h2>Derechos</h2>
-    <p>Puedes ejercer tus derechos de acceso, rectificación, supresión, oposición, limitación y portabilidad escribiendo a
-    <a href="mailto:pablo@gallegofalcon.com">pablo@gallegofalcon.com</a>. Dado que los contenidos
-    de tus documentos se tratan exclusivamente en tu navegador, la forma más directa de ejercer la supresión es borrar los
-    datos del sitio en tu navegador o usar la opción de limpieza integrada.</p>
-    <p>También puedes reclamar ante la Agencia Española de Protección de Datos (<a href="https://www.aepd.es" rel="noopener noreferrer" target="_blank">www.aepd.es</a>).</p>
-
-    <h2>Menores</h2>
-    <p>El servicio no está dirigido a menores de 14 años.</p>
-
-    <nav class="footer">
-      <a href="./aviso-legal.html">Aviso legal</a>
-      <a href="./privacidad.html">Privacidad</a>
-      <a href="./terminos.html">Términos de uso</a>
-    </nav>
+    <section class="doc" id="doc"></section>
+    <noscript>
+      <h1>Política de privacidad</h1>
+      <p>Responsable: Pablo Gallego Falcón (NIF 35320739F) · Contacto: pablo@gallegofalcon.com.</p>
+      <p>Este sitio procesa los documentos íntegramente en tu navegador; no se transmiten a ningún servidor.
+      Solo se usan almacenamiento técnico local (preferencias y sesión local) y los registros técnicos del hosting.
+      Consulta la versión completa activando JavaScript o escribiendo a pablo@gallegofalcon.com.</p>
+      <p>This website processes documents entirely in your browser; they are never uploaded. Only technical local
+      storage and hosting logs are used. For the full policy contact pablo@gallegofalcon.com.</p>
+    </noscript>
+    <nav class="footer" id="footer-nav"></nav>
   </main>
+  <script>
+  "use strict";
+  var EMAIL = "pablo@gallegofalcon.com";
+  var L = {
+    es: {
+      htmlLang: "es", docTitle: "Política de privacidad - PDF in Place",
+      h1: "Política de privacidad",
+      intro: "En esta página se describe el tratamiento de datos llevado a cabo a través de este sitio web, en cumplimiento del Reglamento (UE) 2016/679 (RGPD) y de la Ley Orgánica 3/2018 (LOPDGDD).",
+      hResp: "Responsable del tratamiento",
+      lOwner: "Titular", lNif: "NIF", lContact: "Contacto",
+      hLocal: "Principio fundamental: tus documentos no salen de tu dispositivo",
+      pLocal: "PDF in Place procesa los documentos íntegramente en tu navegador. Los archivos PDF, DOCX, ODT o de imagen que abres con la aplicación <strong>nunca se transmiten ni se almacenan en ningún servidor</strong>. El titular no tiene acceso a ellos en ningún momento.",
+      hData: "Datos tratados",
+      thCat: "Categoría", thDesc: "Descripción", thWhere: "Dónde se guarda",
+      rows: [
+        ["Contenido de tus documentos", "Solo en memoria durante la edición y, si activas la «Sesión local», en tu propio navegador para poder recuperarlos más tarde.", "Tu navegador (IndexedDB / localStorage)"],
+        ["Firmas y sellos guardados", "Únicamente si activas la «Sesión local». Se almacenan cifrados por el propio navegador en tu equipo.", "Tu navegador (IndexedDB)"],
+        ["Preferencias de uso", "Idioma, nivel de zoom, opciones de exportación y preferencia de no volver a ver la página de bienvenida.", "Tu navegador (localStorage)"],
+        ["Registros técnicos del servidor web", "El proveedor de hosting registra la dirección IP y datos técnicos de cada visita con fines de seguridad y operación del servicio.", "Servidor del proveedor de hosting"]
+      ],
+      hStorage: "Cookies y almacenamiento local",
+      pStorage: "Este sitio no utiliza cookies de seguimiento, analítica ni publicidad. Emplea exclusivamente <em>almacenamiento local</em> del navegador (localStorage e IndexedDB), necesario para prestar el servicio: recordar tus preferencias y, si lo activas, conservar tu sesión de edición en tu propio equipo. Puedes eliminar estos datos en cualquier momento desde la propia aplicación o desde la configuración de tu navegador.",
+      hPurpose: "Finalidad y base jurídica",
+      purposes: [
+        "<strong>Prestación del servicio</strong>: mantener tus preferencias y sesión local — base jurídica: ejecución de un contrato (art. 6.1.b RGPD).",
+        "<strong>Seguridad y operación del sitio</strong>: registros técnicos del hosting — base jurídica: interés legítimo (art. 6.1.f RGPD)."
+      ],
+      hKeep: "Conservación",
+      pKeep: "Los datos locales permanecen en tu navegador hasta que los eliminas (desde la aplicación o borrando los datos del sitio). Los registros técnicos del hosting se conservan durante el plazo definido por el proveedor, habitualmente limitado a fines de seguridad.",
+      hProc: "Destinatarios y encargados",
+      pProc: "No se ceden datos a terceros con fines comerciales. El único encargado de tratamiento es el proveedor de hosting, Oracle Cloud, limitado a la prestación del servicio de alojamiento web conforme al art. 28 RGPD.",
+      hRights: "Derechos",
+      pRights1: "Puedes ejercer tus derechos de acceso, rectificación, supresión, oposición, limitación y portabilidad escribiendo a " + EMAIL + ". Dado que los contenidos de tus documentos se tratan exclusivamente en tu navegador, la forma más directa de ejercer la supresión es borrar los datos del sitio en tu navegador o usar la opción de limpieza integrada.",
+      pRights2: "También puedes reclamar ante la Agencia Española de Protección de Datos (www.aepd.es).",
+      hMinors: "Menores",
+      pMinors: "El servicio no está dirigido a menores de 14 años.",
+      fLegal: "Aviso legal", fPrivacy: "Privacidad", fTerms: "Términos de uso"
+    },
+    en: {
+      htmlLang: "en", docTitle: "Privacy Policy - PDF in Place",
+      h1: "Privacy Policy",
+      intro: "This page describes how personal data is processed through this website, in compliance with Regulation (EU) 2016/679 (GDPR) and Spanish Organic Act 3/2018 (LOPDGDD).",
+      hResp: "Data controller",
+      lOwner: "Owner", lNif: "Tax ID", lContact: "Contact",
+      hLocal: "Core principle: your documents never leave your device",
+      pLocal: "PDF in Place processes documents entirely inside your browser. The PDF, DOCX, ODT or image files you open with the application are <strong>never transmitted to or stored on any server</strong>. The owner never has access to them.",
+      hData: "Data processed",
+      thCat: "Category", thDesc: "Description", thWhere: "Where it is kept",
+      rows: [
+        ["Your document contents", "Held in memory during editing and, if you enable “Local session”, kept in your own browser so you can resume later.", "Your browser (IndexedDB / localStorage)"],
+        ["Saved signatures and stamps", "Only if you enable “Local session”. Stored encrypted by your own browser on your device.", "Your browser (IndexedDB)"],
+        ["Usage preferences", "Language, zoom level, export options and the preference to hide the welcome page.", "Your browser (localStorage)"],
+        ["Web server technical logs", "The hosting provider records the IP address and technical details of every visit for security and service operation.", "Hosting provider’s server"]
+      ],
+      hStorage: "Cookies and local storage",
+      pStorage: "This site does not use tracking, analytics or advertising cookies. It exclusively uses browser <em>local storage</em> (localStorage and IndexedDB), required to provide the service: remembering your preferences and, if enabled, keeping your editing session on your own device. You can delete this data at any time from the application itself or from your browser settings.",
+      hPurpose: "Purpose and legal basis",
+      purposes: [
+        "<strong>Service provision</strong>: maintaining your preferences and local session — legal basis: performance of a contract (Art. 6.1.b GDPR).",
+        "<strong>Site security and operation</strong>: hosting technical logs — legal basis: legitimate interest (Art. 6.1.f GDPR)."
+      ],
+      hKeep: "Retention",
+      pKeep: "Local data remains in your browser until you delete it (from the application or by clearing site data). Hosting logs are retained for the period defined by the provider, usually limited to security purposes.",
+      hProc: "Recipients and processors",
+      pProc: "Data is not disclosed to third parties for commercial purposes. The only processor is the hosting provider, Oracle Cloud, limited to providing web hosting under Art. 28 GDPR.",
+      hRights: "Your rights",
+      pRights1: "You may exercise your rights of access, rectification, erasure, objection, restriction and portability by writing to " + EMAIL + ". Since your document contents are processed exclusively in your browser, the most direct way to exercise erasure is to clear this site’s data in your browser or use the built-in cleanup option.",
+      pRights2: "You may also lodge a complaint with the Spanish Data Protection Agency (www.aepd.es).",
+      hMinors: "Minors",
+      pMinors: "The service is not directed at children under 14.",
+      fLegal: "Legal notice", fPrivacy: "Privacy", fTerms: "Terms of use"
+    },
+    gl: {
+      htmlLang: "gl", docTitle: "Política de privacidade - PDF in Place",
+      h1: "Política de privacidade",
+      intro: "Nesta páxina descríbese o tratamento de datos levado a cabo a través deste sitio web, en cumprimento do Regulamento (UE) 2016/679 (RXPD) e da Lei Orgánica 3/2018 (LOPDGDD).",
+      hResp: "Responsable do tratamento",
+      lOwner: "Titular", lNif: "NIF", lContact: "Contacto",
+      hLocal: "Principio fundamental: os teus documentos non saen do teu dispositivo",
+      pLocal: "PDF in Place procesa os documentos íntegramente no teu navegador. Os ficheiros PDF, DOCX, ODT ou de imaxe que abres coa aplicación <strong>nunca se transmiten nin se almacenan en ningún servidor</strong>. O titular non ten acceso a eles en ningún momento.",
+      hData: "Datos tratados",
+      thCat: "Categoría", thDesc: "Descrición", thWhere: "Onde se garda",
+      rows: [
+        ["Contido dos teus documentos", "So na memoria durante a edición e, se activas a «Sesión local», no teu propio navegador para poder recuperalos máis tarde.", "O teu navegador (IndexedDB / localStorage)"],
+        ["Sinaturas e selos gardados", "Unicamente se activas a «Sesión local». Almacénanos cifrados polo propio navegador no teu equipo.", "O teu navegador (IndexedDB)"],
+        ["Preferencias de uso", "Idioma, nivel de zoom, opcións de exportación e preferencia de non volver ver a páxina de benvida.", "O teu navegador (localStorage)"],
+        ["Rexistros técnicos do servidor web", "O provedor de hospedaxe rexistra o enderezo IP e datos técnicos de cada visita con fins de seguridade e operación do servizo.", "Servidor do provedor de hospedaxe"]
+      ],
+      hStorage: "Cookies e almacenamento local",
+      pStorage: "Este sitio non utiliza cookies de seguimento, analítica nin publicidade. Emprega exclusivamente <em>almacenamento local</em> do navegador (localStorage e IndexedDB), necesario para prestar o servizo: lembrar as túas preferencias e, se o activates, conservar a túa sesión de edición no teu equipo. Podes eliminar estes datos en calquera momento dende a propia aplicación ou dende a configuración do teu navegador.",
+      hPurpose: "Finalidade e base xurídica",
+      purposes: [
+        "<strong>Prestación do servizo</strong>: manter as túas preferencias e sesión local — base xurídica: execución dun contrato (art. 6.1.b RXPD).",
+        "<strong>Seguridade e operación do sitio</strong>: rexistros técnicos da hospedaxe — base xurídica: interese lexítimo (art. 6.1.f RXPD)."
+      ],
+      hKeep: "Conservación",
+      pKeep: "Os datos locais permanecen no teu navegador ata que os eliminas (dende a aplicación ou borrando os datos do sitio). Os rexistros técnicos da hospedaxe consérvanse durante o prazo definido polo provedor, habitualmente limitado a fins de seguridade.",
+      hProc: "Destinatarios e encargados",
+      pProc: "Non se ceden datos a terceiros con fins comerciais. O único encargado do tratamento é o provedor de hospedaxe, Oracle Cloud, limitado á prestación do servizo de aloxamento web conforme ao art. 28 RXPD.",
+      hRights: "Dereitos",
+      pRights1: "Podes exercer os teus dereitos de acceso, rectificación, supresión, oposición, limitación e portabilidade escribindo a " + EMAIL + ". Dado que os contidos dos teus documentos se tratan exclusivamente no teu navegador, a forma máis directa de exercer a supresión é borrar os datos do sitio no teu navegador ou usar a opción de limpeza integrada.",
+      pRights2: "Tamén podes reclamar ante a Axencia Española de Protección de Datos (www.aepd.es).",
+      hMinors: "Menores",
+      pMinors: "O servizo non está dirixido a menores de 14 anos.",
+      fLegal: "Aviso legal", fPrivacy: "Privacidade", fTerms: "Termos de uso"
+    },
+    fr: {
+      htmlLang: "fr", docTitle: "Politique de confidentialité - PDF in Place",
+      h1: "Politique de confidentialité",
+      intro: "Cette page décrit le traitement des données effectué via ce site web, conformément au Règlement (UE) 2016/679 (RGPD) et à la Loi organique espagnole 3/2018 (LOPDGDD).",
+      hResp: "Responsable du traitement",
+      lOwner: "Titulaire", lNif: "NIF", lContact: "Contact",
+      hLocal: "Principe fondamental : vos documents ne quittent jamais votre appareil",
+      pLocal: "PDF in Place traite les documents entièrement dans votre navigateur. Les fichiers PDF, DOCX, ODT ou images que vous ouvrez avec l’application ne sont <strong>jamais transmis ni stockés sur un serveur</strong>. Le titulaire n’y accède jamais.",
+      hData: "Données traitées",
+      thCat: "Catégorie", thDesc: "Description", thWhere: "Où elles sont conservées",
+      rows: [
+        ["Contenu de vos documents", "En mémoire pendant l’édition et, si vous activez la « Session locale », dans votre propre navigateur pour pouvoir les retrouver ensuite.", "Votre navigateur (IndexedDB / localStorage)"],
+        ["Signatures et tampons enregistrés", "Uniquement si vous activez la « Session locale ». Stockés chiffrés par votre navigateur sur votre appareil.", "Votre navigateur (IndexedDB)"],
+        ["Préférences d’utilisation", "Langue, niveau de zoom, options d’export et préférence de masquage de la page de bienvenue.", "Votre navigateur (localStorage)"],
+        ["Journaux techniques du serveur web", "L’hébergeur enregistre l’adresse IP et les données techniques de chaque visite à des fins de sécurité et d’exploitation.", "Serveur de l’hébergeur"]
+      ],
+      hStorage: "Cookies et stockage local",
+      pStorage: "Ce site n’utilise aucun cookie de suivi, d’analyse ni de publicité. Il emploie exclusivement le <em>stockage local</em> du navigateur (localStorage et IndexedDB), nécessaire pour fournir le service : mémoriser vos préférences et, si vous l’activez, conserver votre session d’édition sur votre propre appareil. Vous pouvez supprimer ces données à tout moment depuis l’application ou depuis les réglages de votre navigateur.",
+      hPurpose: "Finalités et base juridique",
+      purposes: [
+        "<strong>Fourniture du service</strong> : conservation de vos préférences et de la session locale — base juridique : exécution d’un contrat (art. 6.1.b RGPD).",
+        "<strong>Sécurité et exploitation du site</strong> : journaux techniques de l’hébergeur — base juridique : intérêt légitime (art. 6.1.f RGPD)."
+      ],
+      hKeep: "Conservation",
+      pKeep: "Les données locales restent dans votre navigateur jusqu’à leur suppression (depuis l’application ou en effaçant les données du site). Les journaux techniques de l’hébergeur sont conservés pendant la durée définie par celui-ci, généralement limitée à des fins de sécurité.",
+      hProc: "Destinataires et sous-traitants",
+      pProc: "Aucune donnée n’est cédée à des tiers à des fins commerciales. Le seul sous-traitant est l’hébergeur, Oracle Cloud, limité à la fourniture de l’hébergement web conformément à l’art. 28 du RGPD.",
+      hRights: "Vos droits",
+      pRights1: "Vous pouvez exercer vos droits d’accès, de rectification, d’effacement, d’opposition, de limitation et de portabilité en écrivant à " + EMAIL + ". Les contenus de vos documents étant traités exclusivement dans votre navigateur, le moyen le plus direct d’exercer le droit à l’effacement consiste à effacer les données du site dans votre navigateur ou à utiliser l’option de nettoyage intégrée.",
+      pRights2: "Vous pouvez également introduire une réclamation auprès de l’Agence espagnole de protection des données (www.aepd.es).",
+      hMinors: "Mineurs",
+      pMinors: "Le service ne s’adresse pas aux moins de 14 ans.",
+      fLegal: "Mentions légales", fPrivacy: "Confidentialité", fTerms: "Conditions d’utilisation"
+    },
+    de: {
+      htmlLang: "de", docTitle: "Datenschutzerklärung - PDF in Place",
+      h1: "Datenschutzerklärung",
+      intro: "Auf dieser Seite wird die Datenverarbeitung über diese Website gemäß der Verordnung (EU) 2016/679 (DSGVO) und dem spanischen Organgesetz 3/2018 (LOPDGDD) beschrieben.",
+      hResp: "Verantwortlicher",
+      lOwner: "Inhaber", lNif: "Steuernummer", lContact: "Kontakt",
+      hLocal: "Grundprinzip: Ihre Dokumente verlassen Ihr Gerät nie",
+      pLocal: "PDF in Place verarbeitet Dokumente vollständig in Ihrem Browser. Die PDF-, DOCX-, ODT- oder Bilddateien, die Sie mit der Anwendung öffnen, werden <strong>niemals an einen Server übertragen oder dort gespeichert</strong>. Der Inhaber hat zu keiner Zeit Zugriff darauf.",
+      hData: "Verarbeitete Daten",
+      thCat: "Kategorie", thDesc: "Beschreibung", thWhere: "Speicherort",
+      rows: [
+        ["Inhalte Ihrer Dokumente", "Nur im Arbeitsspeicher während der Bearbeitung und, wenn Sie die „Lokale Sitzung“ aktivieren, in Ihrem eigenen Browser, um sie später fortzusetzen.", "Ihr Browser (IndexedDB / localStorage)"],
+        ["Gespeicherte Unterschriften und Stempel", "Nur bei aktivierter „Lokaler Sitzung“. Verschlüsselt von Ihrem eigenen Browser auf Ihrem Gerät gespeichert.", "Ihr Browser (IndexedDB)"],
+        ["Nutzungseinstellungen", "Sprache, Zoomstufe, Exportoptionen und die Einstellung, die Willkommensseite nicht mehr anzuzeigen.", "Ihr Browser (localStorage)"],
+        ["Technische Serverprotokolle", "Der Hosting-Anbieter zeichnet IP-Adresse und technische Daten jedes Besuchs zu Sicherheits- und Betriebszwecken auf.", "Server des Hosting-Anbieters"]
+      ],
+      hStorage: "Cookies und lokale Speicherung",
+      pStorage: "Diese Website verwendet keine Tracking-, Analyse- oder Werbe-Cookies. Es wird ausschließlich der <em>lokale Speicher</em> des Browsers verwendet (localStorage und IndexedDB), der zur Bereitstellung des Dienstes erforderlich ist: Speichern Ihrer Einstellungen und, falls aktiviert, Ihrer Bearbeitungssitzung auf Ihrem eigenen Gerät. Sie können diese Daten jederzeit über die Anwendung selbst oder über die Einstellungen Ihres Browsers löschen.",
+      hPurpose: "Zwecke und Rechtsgrundlage",
+      purposes: [
+        "<strong>Dienstbereitstellung</strong>: Speicherung Ihrer Einstellungen und der lokalen Sitzung — Rechtsgrundlage: Vertragserfüllung (Art. 6.1.b DSGVO).",
+        "<strong>Sicherheit und Betrieb der Website</strong>: technische Protokolle des Hostings — Rechtsgrundlage: berechtigtes Interesse (Art. 6.1.f DSGVO)."
+      ],
+      hKeep: "Speicherdauer",
+      pKeep: "Lokale Daten bleiben in Ihrem Browser, bis Sie sie löschen (über die Anwendung oder durch Löschen der Websitedaten). Technische Hosting-Protokolle werden für den vom Anbieter festgelegten Zeitraum aufbewahrt, in der Regel nur zu Sicherheitszwecken.",
+      hProc: "Empfänger und Auftragsverarbeiter",
+      pProc: "Es werden keine Daten zu kommerziellen Zwecken an Dritte weitergegeben. Einziger Auftragsverarbeiter ist der Hosting-Anbieter Oracle Cloud, beschränkt auf die Bereitstellung des Webhostings gemäß Art. 28 DSGVO.",
+      hRights: "Ihre Rechte",
+      pRights1: "Sie können Ihre Rechte auf Auskunft, Berichtigung, Löschung, Widerspruch, Einschränkung und Übertragbarkeit schreiben an " + EMAIL + " ausüben. Da die Inhalte Ihrer Dokumente ausschließlich in Ihrem Browser verarbeitet werden, üben Sie das Recht auf Löschung am direktesten aus, indem Sie die Websitedaten in Ihrem Browser löschen oder die integrierte Bereinigungsfunktion verwenden.",
+      pRights2: "Sie können sich auch bei der spanischen Datenschutzbehörde beschweren (www.aepd.es).",
+      hMinors: "Minderjährige",
+      pMinors: "Der Dienst richtet sich nicht an Kinder unter 14 Jahren.",
+      fLegal: "Impressum", fPrivacy: "Datenschutz", fTerms: "Nutzungsbedingungen"
+    },
+    pt: {
+      htmlLang: "pt", docTitle: "Política de privacidade - PDF in Place",
+      h1: "Política de privacidade",
+      intro: "Esta página descreve o tratamento de dados realizado através deste sítio web, em cumprimento do Regulamento (UE) 2016/679 (RGPD) e da Lei Orgânica espanhola 3/2018 (LOPDGDD).",
+      hResp: "Responsável pelo tratamento",
+      lOwner: "Titular", lNif: "NIF", lContact: "Contacto",
+      hLocal: "Princípio fundamental: os seus documentos nunca saem do seu dispositivo",
+      pLocal: "O PDF in Place processa os documentos inteiramente no seu navegador. Os ficheiros PDF, DOCX, ODT ou de imagem que abre com a aplicação <strong>nunca são transmitidos nem armazenados em nenhum servidor</strong>. O titular nunca tem acesso a eles.",
+      hData: "Dados tratados",
+      thCat: "Categoria", thDesc: "Descrição", thWhere: "Onde são guardados",
+      rows: [
+        ["Conteúdo dos seus documentos", "Apenas em memória durante a edição e, se ativar a «Sessão local», no seu próprio navegador para poder retomá-los mais tarde.", "O seu navegador (IndexedDB / localStorage)"],
+        ["Assinaturas e carimbos guardados", "Somente se ativar a «Sessão local». Armazenados de forma cifrada pelo seu próprio navegador no seu dispositivo.", "O seu navegador (IndexedDB)"],
+        ["Preferências de utilização", "Idioma, nível de zoom, opções de exportação e preferência de não voltar a ver a página de boas-vindas.", "O seu navegador (localStorage)"],
+        ["Registos técnicos do servidor web", "O fornecedor de alojamento regista o endereço IP e dados técnicos de cada visita para fins de segurança e operação do serviço.", "Servidor do fornecedor de alojamento"]
+      ],
+      hStorage: "Cookies e armazenamento local",
+      pStorage: "Este sítio não utiliza cookies de rastreio, análise nem publicidade. Utiliza exclusivamente o <em>armazenamento local</em> do navegador (localStorage e IndexedDB), necessário para prestar o serviço: memorizar as suas preferências e, se ativar, manter a sua sessão de edição no seu próprio dispositivo. Pode eliminar estes dados a qualquer momento a partir da própria aplicação ou das configurações do seu navegador.",
+      hPurpose: "Finalidades e base jurídica",
+      purposes: [
+        "<strong>Prestação do serviço</strong>: manter as suas preferências e a sessão local — base jurídica: execução de contrato (art. 6.1.b RGPD).",
+        "<strong>Segurança e operação do sítio</strong>: registos técnicos do alojamento — base jurídica: interesse legítimo (art. 6.1.f RGPD)."
+      ],
+      hKeep: "Conservação",
+      pKeep: "Os dados locais permanecem no seu navegador até que os elimine (a partir da aplicação ou limpando os dados do sítio). Os registos técnicos do alojamento conservam-se durante o prazo definido pelo fornecedor, normalmente limitado a fins de segurança.",
+      hProc: "Destinatários e encarregados",
+      pProc: "Não são cedidos dados a terceiros para fins comerciais. O único encarregado do tratamento é o fornecedor de alojamento, a Oracle Cloud, limitado à prestação do serviço de alojamento web nos termos do art. 28 do RGPD.",
+      hRights: "Direitos",
+      pRights1: "Pode exercer os seus direitos de acesso, retificação, eliminação, oposição, limitação e portabilidade escrevendo para " + EMAIL + ". Uma vez que o conteúdo dos seus documentos é processado exclusivamente no seu navegador, a forma mais direta de exercer a eliminação é limpar os dados do sítio no seu navegador ou utilizar a opção de limpeza integrada.",
+      pRights2: "Também pode reclamar junto da Agência Espanhola de Proteção de Dados (www.aepd.es).",
+      hMinors: "Menores",
+      pMinors: "O serviço não se dirige a menores de 14 anos.",
+      fLegal: "Aviso legal", fPrivacy: "Privacidade", fTerms: "Termos de utilização"
+    },
+    ca: {
+      htmlLang: "ca", docTitle: "Política de privadesa - PDF in Place",
+      h1: "Política de privadesa",
+      intro: "En aquesta pàgina es descriu el tractament de dades dut a terme a través d’aquest lloc web, en compliment del Reglament (UE) 2016/679 (RGPD) i de la Llei orgànica espanyola 3/2018 (LOPDGDD).",
+      hResp: "Responsable del tractament",
+      lOwner: "Titular", lNif: "NIF", lContact: "Contacte",
+      hLocal: "Principi fonamental: els teus documents mai surten del dispositiu",
+      pLocal: "PDF in Place processa els documents íntegrament al teu navegador. Els fitxers PDF, DOCX, ODT o d’imatge que obres amb l’aplicació <strong>mai es transmeten ni s’emmagatzemen a cap servidor</strong>. El titular no hi té accés en cap moment.",
+      hData: "Dades tractades",
+      thCat: "Categoria", thDesc: "Descripció", thWhere: "On es desen",
+      rows: [
+        ["Contingut dels teus documents", "Només a memòria durant l’edició i, si actives la «Sessió local», al teu propi navegador per poder-los recuperar més tard.", "El teu navegador (IndexedDB / localStorage)"],
+        ["Signatures i segells desats", "Únicament si actives la «Sessió local». Es desen xifrats pel mateix navegador al teu equip.", "El teu navegador (IndexedDB)"],
+        ["Preferències d’ús", "Idioma, nivell de zoom, opcions d’exportació i preferència de no tornar a veure la pàgina de benvinguda.", "El teu navegador (localStorage)"],
+        ["Registres tècnics del servidor web", "El proveïdor d’allotjament registra l’adreça IP i dades tècniques de cada visita amb finalitats de seguretat i operació del servei.", "Servidor del proveïdor d’allotjament"]
+      ],
+      hStorage: "Galetes i emmagatzematge local",
+      pStorage: "Aquest lloc no utilitza galetes de seguiment, analítica ni publicitat. Empra exclusivament l’<em>emmagatzematge local</em> del navegador (localStorage i IndexedDB), necessari per prestar el servei: recordar les teves preferències i, si ho actives, conservar la sessió d’edició al teu propi equip. Pots eliminar aquestes dades en qualsevol moment des de la pròpia aplicació o des de la configuració del navegador.",
+      hPurpose: "Finalitats i base jurídica",
+      purposes: [
+        "<strong>Prestació del servei</strong>: mantenir les teves preferències i la sessió local — base jurídica: execució d’un contracte (art. 6.1.b RGPD).",
+        "<strong>Seguretat i operació del lloc</strong>: registres tècnics de l’allotjament — base jurídica: interès legítim (art. 6.1.f RGPD)."
+      ],
+      hKeep: "Conservació",
+      pKeep: "Les dades locals romanen al teu navegador fins que les eliminis (des de l’aplicació o esborrant les dades del lloc). Els registres tècnics de l’allotjament es conserven durant el termini definit pel proveïdor, normalment limitat a finalitats de seguretat.",
+      hProc: "Destinataris i encarregats",
+      pProc: "No es cedeixen dades a tercers amb fins comercials. L’únic encarregat del tractament és el proveïdor d’allotjament, Oracle Cloud, limitat a la prestació del servei d’allotjament web conforme a l’art. 28 del RGPD.",
+      hRights: "Drets",
+      pRights1: "Pots exercir els teus drets d’accés, rectificació, supressió, oposició, limitació i portabilitat escrivint a " + EMAIL + ". Atès que els continguts dels teus documents es tracten exclusivament al teu navegador, la manera més directa d’exercer la supressió és esborrar les dades del lloc al navegador o fer servir l’opció de neteja integrada.",
+      pRights2: "També pots reclamar davant l’Agència Espanyola de Protecció de Dades (www.aepd.es).",
+      hMinors: "Menors",
+      pMinors: "El servei no va dirigit a menors de 14 anys.",
+      fLegal: "Avís legal", fPrivacy: "Privadesa", fTerms: "Condicions d’ús"
+    },
+    eu: {
+      htmlLang: "eu", docTitle: "Pribatutasun politika - PDF in Place",
+      h1: "Pribatutasun politika",
+      intro: "Orri honetan webgune honek egindako datuen prozesamenda deskribatzen da, 2016/679 EB Erregelamendua (RGPD) eta 3/2018 Espainiako Lege Organikoa (LOPDGDD) betez.",
+      hResp: "Prozesamenduaren arduraduna",
+      lOwner: "Jabea", lNif: "NIF", lContact: "Kontaktua",
+      hLocal: "Oinarrizko printzipioa: zure dokumentuek ez dute inoiz gailua uzten",
+      pLocal: "PDF in Place aplikazioak dokumentuak zeharo nabigatzailean prozesatzen ditu. Aplikazioarekin irekitzen dituzun PDF, DOCX, ODT edo irudi fitxategiak <strong>ez dira inoiz zerbitzarira bidaltzen edo han gordetzen</strong>. Jabeak ez du haietara sarbiderik inoiz.",
+      hData: "Prozesatutako datuak",
+      thCat: "Kategoria", thDesc: "Azalpena", thWhere: "Non gordetzen den",
+      rows: [
+        ["Zure dokumentuen edukia", "Edizioan zehar memorian soilik eta, «Saio lokala» aktibatzen baduzu, zure nabigatzailean beranduago berreskuratzeko.", "Zure nabigatzailea (IndexedDB / localStorage)"],
+        ["Gordetako sinadurak eta zigiluak", "«Saio lokala» aktibatzen baduzu bakarrik. Nabigatzaileak bertan zifratuta gordeta zure gailuan.", "Zure nabigatzailea (IndexedDB)"],
+        ["Erabilerako hobespenak", "Hizkuntza, zoom maila, esportazio aukerak eta ongietorri orria berriro ez ikustearen hobespena.", "Zure nabigatzailea (localStorage)"],
+        ["Web zerbitzariaren erregistro teknikoak", "Hosting hornitzaileak bisita bakoitzaren IP helbidea eta datu teknikoak erregistratzen ditu segurtasun eta zerbitzu funtzionamendu helburuetarako.", "Hosting hornitzailearen zerbitzaria"]
+      ],
+      hStorage: "Cookieak eta tokiko biltegiratzea",
+      pStorage: "Gune honek ez du jarraipen, analisi eta publizitate kookierik erabiltzen. Nabigatzailearen <em>biltegiratze lokala</em> soilik erabiltzen du (localStorage eta IndexedDB), zerbitzua emateko beharrezkoa dena: zure hobespenak gogoratzea eta, aktibatuz gero, zure edizio saioa zure gailuan gordetea. Datu hauek edozein unetan ezaba ditzakezu aplikaziotik bertatik edo nabigatzailearen ezarpenetatik.",
+      hPurpose: "Helburuak eta oinarri juridikoa",
+      purposes: [
+        "<strong>Zerbitzua eskaintzea</strong>: zure hobespenak eta saio lokala gordetzea — oinarri juridikoa: kontratu bat betetzea (6.1.b art. RGPD).",
+        "<strong>Gunearen segurtasuna eta funtzionamendua</strong>: hosting erregistro teknikoak — oinarri juridikoa: interes legitimoa (6.1.f art. RGPD)."
+      ],
+      hKeep: "Gordetzea",
+      pKeep: "Datu lokalak zure nabigatzailean gordetzen dira zuk ezabatu arte (aplikaziotik edo guneko datuak garbituz). Hosting erregistro teknikak hornitzaileak zehaztutako epean gordetzen dira, normalean segurtasun helburuetara mugatua.",
+      hProc: "Hartzaileak eta eskuordunak",
+      pProc: "Ez dira datuak hirugarrenei eman merkataritza helburuetarako. Prozesamenduaren eskuordun bakarra hosting hornitzailea da, Oracle Cloud, web ostatu zerbitzua ematera mugatua RGPDren 28. artikuluaren arabera.",
+      hRights: "Eskubideak",
+      pRights1: "Sarbide, zuzenketa, ezabapen, aurkakotasun, murrizketa eta garraio eskubideak baliatu ditzakezu " + EMAIL + " helbidera idatziz. Zure dokumentuen edukia nabigatzailean prozesatzen dela eta, ezabapen eskubidea baliatzeko modurik zuzena guneko datuak nabigatzailetik ezabatzea edo integratutako garbiketa aukera erabiltzea da.",
+      pRights2: "Espainiako Datuen Babes Agentziaren aurrean ere kexa eman dezakezu (www.aepd.es).",
+      hMinors: "Adingabeak",
+      pMinors: "Zerbitzua ez zaie 14 urtetik beherakoei zuzentzen.",
+      fLegal: "Ohar legala", fPrivacy: "Pribatutasuna", fTerms: "Erabilera baldintzak"
+    }
+  };
+  var ORDER = ["es", "en", "gl", "fr", "de", "pt", "ca", "eu"];
+  var NAMES = { es: "Español", en: "English", gl: "Galego", fr: "Français", de: "Deutsch", pt: "Português", ca: "Català", eu: "Euskara" };
+
+  function esc(s) {
+    var div = document.createElement("div");
+    div.textContent = s;
+    return div.innerHTML;
+  }
+
+  function render(lang) {
+    var t = L[lang];
+    document.title = t.docTitle;
+    document.documentElement.lang = t.htmlLang;
+    var doc = document.getElementById("doc");
+    var html = "<h1>" + t.h1 + "</h1>"
+      + "<p>" + t.intro + "</p>"
+      + "<h2>" + t.hResp + "</h2><ul>"
+      + "<li><strong>" + t.lOwner + ":</strong> Pablo Gallego Falcón</li>"
+      + "<li><strong>" + t.lNif + ":</strong> 35320739F</li>"
+      + "<li><strong>" + t.lContact + ":</strong> <a href=\"mailto:" + EMAIL + "\">" + EMAIL + "</a></li></ul>"
+      + "<h2>" + t.hLocal + "</h2><p>" + t.pLocal + "</p>"
+      + "<h2>" + t.hData + "</h2><table><thead><tr><th>" + t.thCat + "</th><th>" + t.thDesc + "</th><th>" + t.thWhere + "</th></tr></thead><tbody>";
+    t.rows.forEach(function (r) {
+      html += "<tr><td>" + r[0] + "</td><td>" + r[1] + "</td><td>" + r[2] + "</td></tr>";
+    });
+    html += "</tbody></table><h2>" + t.hStorage + "</h2><p>" + t.pStorage + "</p>"
+      + "<h2>" + t.hPurpose + "</h2><ol>";
+    t.purposes.forEach(function (p) { html += "<li>" + p + "</li>"; });
+    html += "</ol><h2>" + t.hKeep + "</h2><p>" + t.pKeep + "</p>"
+      + "<h2>" + t.hProc + "</h2><p>" + t.pProc + "</p>"
+      + "<h2>" + t.hRights + "</h2><p>" + t.pRights1 + "</p><p>" + t.pRights2 + "</p>"
+      + "<h2>" + t.hMinors + "</h2><p>" + t.pMinors + "</p>";
+    doc.innerHTML = html;
+    doc.classList.add("active");
+
+    document.getElementById("footer-nav").innerHTML =
+      "<a href='./aviso-legal.html?lang=" + lang + "'>" + t.fLegal + "</a>"
+      + "<a href='./privacidad.html?lang=" + lang + "'>" + t.fPrivacy + "</a>"
+      + "<a href='./terminos.html?lang=" + lang + "'>" + t.fTerms + "</a>";
+
+    var nav = document.getElementById("lang-nav");
+    nav.innerHTML = "";
+    ORDER.forEach(function (code) {
+      var b = document.createElement("button");
+      b.type = "button";
+      b.textContent = NAMES[code];
+      if (code === lang) b.className = "active";
+      b.addEventListener("click", function () { render(code); });
+      nav.appendChild(b);
+    });
+  }
+
+  (function init() {
+    var params = new URLSearchParams(window.location.search);
+    var requested = params.get("lang");
+    var stored = null;
+    try { stored = localStorage.getItem("pageforge.locale"); } catch (e) { /* ignore */ }
+    var browser = (navigator.languages && navigator.languages.length ? navigator.languages : [navigator.language])
+      .map(function (l) { return String(l).toLowerCase().slice(0, 2); });
+    var lang = ORDER.find(function (c) { return c === requested; })
+      || ORDER.find(function (c) { return c === stored; })
+      || ORDER.find(function (c) { return browser.indexOf(c) !== -1; })
+      || "es";
+    render(lang);
+  })();
+  </script>
 </body>
 </html>

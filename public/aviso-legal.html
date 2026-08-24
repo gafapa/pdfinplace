@@ -8,77 +8,244 @@
   <style>
     * { box-sizing: border-box; }
     body { margin: 0; font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; color: #1f2937; background: #f9fafb; line-height: 1.65; }
-    header { background: #ffffff; border-bottom: 1px solid #e5e7eb; padding: 1rem 1.5rem; display: flex; align-items: center; gap: .75rem; }
+    header { background: #ffffff; border-bottom: 1px solid #e5e7eb; padding: .75rem 1.5rem; display: flex; align-items: center; justify-content: space-between; gap: 1rem; flex-wrap: wrap; }
+    .brand { display: flex; align-items: center; gap: .75rem; }
     .logo { width: 34px; height: 34px; border-radius: 10px; background: #2563eb; color: #fff; display: flex; align-items: center; justify-content: center; font-weight: 800; font-size: .8rem; }
     header strong { font-size: 1.05rem; }
+    nav.lang { display: flex; gap: .25rem; flex-wrap: wrap; }
+    nav.lang button { border: 1px solid #e5e7eb; background: #fff; border-radius: 999px; padding: .15rem .6rem; font-size: .78rem; cursor: pointer; color: #374151; }
+    nav.lang button.active { background: #2563eb; border-color: #2563eb; color: #fff; }
     main { max-width: 46rem; margin: 0 auto; padding: 2rem 1.5rem 4rem; }
     h1 { font-size: 1.6rem; margin: 0 0 1.5rem; }
     h2 { font-size: 1.05rem; margin: 2rem 0 .5rem; color: #111827; }
     p, li { font-size: .95rem; color: #374151; }
     a { color: #2563eb; text-decoration: none; }
     a:hover { text-decoration: underline; }
-    nav.footer { margin-top: 3rem; padding-top: 1rem; border-top: 1px solid #e5e7eb; font-size: .85rem; display: flex; gap: 1.25rem; flex-wrap: wrap; }
-    .notice { background: #eff6ff; border: 1px solid #bfdbfe; border-radius: 10px; padding: .9rem 1rem; font-size: .88rem; margin-bottom: 1.5rem; }
     dl dt { font-weight: 600; color: #111827; font-size: .95rem; margin-top: .9rem; }
     dl dd { margin: .15rem 0 0; font-size: .95rem; color: #374151; }
+    nav.footer { margin-top: 3rem; padding-top: 1rem; border-top: 1px solid #e5e7eb; font-size: .85rem; display: flex; gap: 1.25rem; flex-wrap: wrap; }
+    section.doc { display: none; }
+    section.doc.active { display: block; }
   </style>
 </head>
 <body>
   <header>
-    <div class="logo">PiP</div>
-    <strong>PDF in Place</strong>
+    <div class="brand">
+      <div class="logo">PiP</div>
+      <strong>PDF in Place</strong>
+    </div>
+    <nav class="lang" id="lang-nav" aria-label="Language"></nav>
   </header>
   <main>
-    <h1>Aviso legal</h1>
-
-    <p>En cumplimiento del artículo 10 de la Ley 34/2002, de 11 de julio, de Servicios de la Sociedad de la Información
-    y de Comercio Electrónico (LSSI-CE), se informan a continuación los datos identificativos del titular de este sitio web.</p>
-
-    <dl>
-      <dt>Titular</dt>
-      <dd>Pablo Gallego Falcón</dd>
-
-      <dt>NIF / CIF</dt>
-      <dd>35320739F</dd>
-
-      <dt>Domicilio</dt>
-      <dd>Conchidos, Cerponzóns nº 8, C.P. 36152 Pontevedra, España</dd>
-
-      <dt>Correo electrónico</dt>
-      <dd><a href="mailto:pablo@gallegofalcon.com">pablo@gallegofalcon.com</a></dd>
-
-      <dt>Sitio web</dt>
-      <dd>PDF in Place — editor de documentos PDF que funciona íntegramente en el navegador del usuario.</dd>
-    </dl>
-
-    <h2>Objeto</h2>
-    <p>Este sitio web pone a disposición de los usuarios una herramienta de edición, organización, protección y
-    exportación de documentos PDF. Todo el procesamiento de documentos se realiza localmente en el navegador del
-    usuario; los archivos no se transmiten ni se almacenan en servidores del titular.</p>
-
-    <h2>Condiciones de uso</h2>
-    <p>El acceso y la utilización de este sitio web atribuyen la condición de usuario e implican la aceptación plena
-    y sin reservas de todas las disposiciones incluidas en estos
-    <a href="./terminos.html">Términos de uso</a>, en la versión vigente en el momento del acceso.</p>
-    <p>El usuario se compromete a hacer un uso adecuado de los contenidos y servicios que se ofrecen y a no emplearlos
-    para actividades ilícitas o contrarias a la legislación aplicable.</p>
-
-    <h2>Propiedad intelectual e industrial</h2>
-    <p>Los derechos de propiedad intelectual del software, diseño y contenidos propios de este sitio pertenecen a su
-    titular, salvo que se indique lo contrario. El software de terceros empleado por la aplicación se distribuye bajo
-    las licencias correspondientes (véase el repositorio público del proyecto).</p>
-    <p>Los documentos que el usuario trata con la aplicación permanecen bajo su exclusiva propiedad. El titular no
-    accede a ellos, no los almacena y no los utiliza para finalidad alguna.</p>
-
-    <h2>Responsabilidad</h2>
-    <p>El titular no responde de los daños o pérdidas derivados del uso de la herramienta, incluyendo la alteración,
-    pérdida o corrupción de documentos, según se detalla en los <a href="./terminos.html">Términos de uso</a>.</p>
-
-    <nav class="footer">
-      <a href="./aviso-legal.html">Aviso legal</a>
-      <a href="./privacidad.html">Privacidad</a>
-      <a href="./terminos.html">Términos de uso</a>
-    </nav>
+    <section class="doc" id="doc"></section>
+    <noscript>
+      <h1>Aviso legal</h1>
+      <p>Titular: Pablo Gallego Falcón · NIF 35320739F · Conchidos, Cerponzóns nº 8, 36152 Pontevedra (España) ·
+      pablo@gallegofalcon.com.</p>
+      <p>Editor de PDF que funciona íntegramente en el navegador. Activa JavaScript para consultar la versión
+      completa del aviso legal.</p>
+    </noscript>
+    <nav class="footer" id="footer-nav"></nav>
   </main>
+  <script>
+  "use strict";
+  var EMAIL = "pablo@gallegofalcon.com";
+  var L = {
+    es: {
+      htmlLang: "es", docTitle: "Aviso legal - PDF in Place",
+      h1: "Aviso legal",
+      intro: "En cumplimiento del artículo 10 de la Ley 34/2002, de 11 de julio, de Servicios de la Sociedad de la Información y de Comercio Electrónico (LSSI-CE), se informan a continuación los datos identificativos del titular de este sitio web.",
+      dOwner: "Titular", dNif: "NIF / CIF", dAddress: "Domicilio", dEmail: "Correo electrónico", dSite: "Sitio web",
+      vSite: "PDF in Place — editor de documentos PDF que funciona íntegramente en el navegador del usuario.",
+      hObject: "Objeto",
+      pObject: "Este sitio web pone a disposición de los usuarios una herramienta de edición, organización, protección y exportación de documentos PDF. Todo el procesamiento de documentos se realiza localmente en el navegador del usuario; los archivos no se transmiten ni se almacenan en servidores del titular.",
+      hUse: "Condiciones de uso",
+      pUse1: "El acceso y la utilización de este sitio web atribuyen la condición de usuario e implican la aceptación plena y sin reservas de todas las disposiciones incluidas en estos <a href='./terminos.html?lang=es'>Términos de uso</a>, en la versión vigente en el momento del acceso.",
+      pUse2: "El usuario se compromete a hacer un uso adecuado de los contenidos y servicios que se ofrecen y a no emplearlos para actividades ilícitas o contrarias a la legislación aplicable.",
+      hIp: "Propiedad intelectual e industrial",
+      pIp1: "Los derechos de propiedad intelectual del software, diseño y contenidos propios de este sitio pertenecen a su titular, salvo que se indique lo contrario. El software de terceros empleado por la aplicación se distribuye bajo las licencias correspondientes (véase el repositorio público del proyecto).",
+      pIp2: "Los documentos que el usuario trata con la aplicación permanecen bajo su exclusiva propiedad. El titular no accede a ellos, no los almacena y no los utiliza para finalidad alguna.",
+      hLiab: "Responsabilidad",
+      pLiab: "El titular no responde de los daños o pérdidas derivados del uso de la herramienta, incluyendo la alteración, pérdida o corrupción de documentos, según se detalla en los <a href='./terminos.html?lang=es'>Términos de uso</a>.",
+      fLegal: "Aviso legal", fPrivacy: "Privacidad", fTerms: "Términos de uso"
+    },
+    en: {
+      htmlLang: "en", docTitle: "Legal notice - PDF in Place",
+      h1: "Legal notice",
+      intro: "In compliance with Article 10 of Spanish Act 34/2002 of 11 July on Information Society Services and Electronic Commerce (LSSI-CE), the identifying details of the owner of this website are set out below.",
+      dOwner: "Owner", dNif: "Tax ID", dAddress: "Address", dEmail: "Email", dSite: "Website",
+      vSite: "PDF in Place — a PDF document editor that runs entirely in the user’s browser.",
+      hObject: "Purpose",
+      pObject: "This website provides users with a tool for editing, organizing, protecting and exporting PDF documents. All document processing takes place locally in the user’s browser; files are not transmitted to or stored on the owner’s servers.",
+      hUse: "Conditions of use",
+      pUse1: "Accessing and using this website confers the status of user and implies full, unreserved acceptance of all provisions contained in these <a href='./terminos.html?lang=en'>Terms of use</a>, in the version in force at the time of access.",
+      pUse2: "The user undertakes to make appropriate use of the contents and services offered and not to employ them for unlawful activities or activities contrary to applicable legislation.",
+      hIp: "Intellectual and industrial property",
+      pIp1: "The intellectual property rights to the software, design and contents of this site belong to its owner unless otherwise stated. Third-party software used by the application is distributed under the corresponding licenses (see the project’s public repository).",
+      pIp2: "Documents processed by the user with the application remain under their exclusive ownership. The owner does not access them, does not store them and does not use them for any purpose.",
+      hLiab: "Liability",
+      pLiab: "The owner is not liable for damage or loss arising from use of the tool, including alteration, loss or corruption of documents, as detailed in the <a href='./terminos.html?lang=en'>Terms of use</a>.",
+      fLegal: "Legal notice", fPrivacy: "Privacy", fTerms: "Terms of use"
+    },
+    gl: {
+      htmlLang: "gl", docTitle: "Aviso legal - PDF in Place",
+      h1: "Aviso legal",
+      intro: "En cumprimento do artigo 10 da Lei 34/2002, do 11 de xullo, de Servizos da Sociedade da Información e de Comercio Electrónico (LSSI-CE), infórmase a continuación dos datos identificativos do titular deste sitio web.",
+      dOwner: "Titular", dNif: "NIF / CIF", dAddress: "Domicilio", dEmail: "Correo electrónico", dSite: "Sitio web",
+      vSite: "PDF in Place — editor de documentos PDF que funciona íntegramente no navegador do usuario.",
+      hObject: "Obxecto",
+      pObject: "Este sitio web pon á disposición dos usuarios unha ferramenta de edición, organización, protección e exportación de documentos PDF. Todo o procesamento de documentos realízase localmente no navegador do usuario; os ficheiros non se transmiten nin se almacenan en servidores do titular.",
+      hUse: "Condicións de uso",
+      pUse1: "O acceso e a utilización deste sitio web atribúen a condición de usuario e implican a aceptación plena e sen reservas de todas as disposicións incluídas nestes <a href='./terminos.html?lang=gl'>Termos de uso</a>, na versión vixente no momento do acceso.",
+      pUse2: "O usuario comprométese a facer un uso adecuado dos contidos e servizos que se ofrecen e a non empregalos para actividades ilícitas ou contrarias á lexislación aplicable.",
+      hIp: "Propiedade intelectual e industrial",
+      pIp1: "Os dereitos de propiedade intelectual do software, deseño e contidos propios deste sitio pertencen ao seu titular, salvo que se indique o contrario. O software de terceiros empleado pola aplicación distribúese baixo as licenzas correspondentes (véxase o repositorio público do proxecto).",
+      pIp2: "Os documentos que o usuario trata coa aplicación permanecen baixo a súa exclusiva propiedade. O titular non accede a eles, non os almacena e non os utiliza para finalidade algunha.",
+      hLiab: "Responsabilidade",
+      pLiab: "O titular non responde dos danos ou perdas derivados do uso da ferramenta, incluída a alteración, perda ou corrupción de documentos, segundo se detalla nos <a href='./terminos.html?lang=gl'>Termos de uso</a>.",
+      fLegal: "Aviso legal", fPrivacy: "Privacidade", fTerms: "Termos de uso"
+    },
+    fr: {
+      htmlLang: "fr", docTitle: "Mentions légales - PDF in Place",
+      h1: "Mentions légales",
+      intro: "En conformité avec l’article 10 de la Loi espagnole 34/2002 du 11 juillet relative aux services de la société de l’information et au commerce électronique (LSSI-CE), les données identificatives du titulaire de ce site sont indiquées ci-dessous.",
+      dOwner: "Titulaire", dNif: "NIF", dAddress: "Adresse", dEmail: "Courriel", dSite: "Site web",
+      vSite: "PDF in Place — éditeur de documents PDF fonctionnant entièrement dans le navigateur de l’utilisateur.",
+      hObject: "Objet",
+      pObject: "Ce site met à la disposition des utilisateurs un outil d’édition, d’organisation, de protection et d’exportation de documents PDF. Tout le traitement des documents s’effectue localement dans le navigateur de l’utilisateur ; les fichiers ne sont ni transmis ni stockés sur les serveurs du titulaire.",
+      hUse: "Conditions d’utilisation",
+      pUse1: "L’accès et l’utilisation de ce site confèrent la qualité d’utilisateur et impliquent l’acceptation pleine et sans réserve de toutes les dispositions figurant dans les présentes <a href='./terminos.html?lang=fr'>Conditions d’utilisation</a>, dans leur version en vigueur au moment de l’accès.",
+      pUse2: "L’utilisateur s’engage à faire un usage approprié des contenus et services proposés et à ne pas les employer à des fins illicites ou contraires à la législation applicable.",
+      hIp: "Propriété intellectuelle et industrielle",
+      pIp1: "Les droits de propriété intellectuelle sur le logiciel, le design et les contenus propres à ce site appartiennent à son titulaire, sauf indication contraire. Les logiciels tiers utilisés par l’application sont distribués selon les licences correspondantes (voir le dépôt public du projet).",
+      pIp2: "Les documents traités par l’utilisateur avec l’application demeurent sous sa propriété exclusive. Le titulaire n’y accède pas, ne les stocke pas et ne les utilise à aucune fin.",
+      hLiab: "Responsabilité",
+      pLiab: "Le titulaire ne répond pas des dommages ou pertes résultant de l’utilisation de l’outil, y compris l’altération, la perte ou la corruption de documents, comme détaillé dans les <a href='./terminos.html?lang=fr'>Conditions d’utilisation</a>.",
+      fLegal: "Mentions légales", fPrivacy: "Confidentialité", fTerms: "Conditions d’utilisation"
+    },
+    de: {
+      htmlLang: "de", docTitle: "Impressum - PDF in Place",
+      h1: "Impressum",
+      intro: "Gemäß Artikel 10 des spanischen Gesetzes 34/2002 vom 11. Juli über Dienste der Informationsgesellschaft und den elektronischen Geschäftsverkehr (LSSI-CE) werden nachfolgend die identifizierenden Angaben des Betreibers dieser Website mitgeteilt.",
+      dOwner: "Betreiber", dNif: "Steuernummer", dAddress: "Anschrift", dEmail: "E-Mail", dSite: "Website",
+      vSite: "PDF in Place — ein PDF-Dokumenteneditor, der vollständig im Browser des Nutzers läuft.",
+      hObject: "Zweck",
+      pObject: "Diese Website stellt den Nutzern ein Werkzeug zum Bearbeiten, Organisieren, Schützen und Exportieren von PDF-Dokumenten bereit. Die gesamte Dokumentenverarbeitung erfolgt lokal im Browser des Nutzers; Dateien werden nicht an Server des Betreibers übertragen oder dort gespeichert.",
+      hUse: "Nutzungsbedingungen",
+      pUse1: "Der Zugriff auf und die Nutzung dieser Website verleihen die Eigenschaft als Nutzer und implizieren die vollständige und vorbehaltlose Zustimmung zu allen Bestimmungen dieser <a href='./terminos.html?lang=de'>Nutzungsbedingungen</a> in der jeweils gültigen Fassung.",
+      pUse2: "Der Nutzer verpflichtet sich, die angebotenen Inhalte und Dienstleistungen angemessen zu nutzen und sie nicht für rechtswidrige Aktivitäten oder Handlungen zu verwenden, die gegen geltendes Recht verstoßen.",
+      hIp: "Geistiges und gewerbliches Eigentum",
+      pIp1: "Die Rechte am geistigen Eigentum der Software, des Designs und der eigenen Inhalte dieser Website liegen bei ihrem Betreiber, sofern nichts anderes angegeben ist. Von der Anwendung verwendete Software Dritter wird unter den entsprechenden Lizenzen vertrieben (siehe das öffentliche Projektarchiv).",
+      pIp2: "Dokumente, die der Nutzer mit der Anwendung bearbeitet, bleiben dessen alleiniges Eigentum. Der Betreiber greift nicht darauf zu, speichert sie nicht und verwendet sie nicht für irgendeinen Zweck.",
+      hLiab: "Haftung",
+      pLiab: "Der Betreiber haftet nicht für Schäden oder Verluste aus der Nutzung des Werkzeugs, einschließlich Veränderung, Verlust oder Beschädigung von Dokumenten, wie in den <a href='./terminos.html?lang=de'>Nutzungsbedingungen</a> im Einzelnen dargelegt.",
+      fLegal: "Impressum", fPrivacy: "Datenschutz", fTerms: "Nutzungsbedingungen"
+    },
+    pt: {
+      htmlLang: "pt", docTitle: "Aviso legal - PDF in Place",
+      h1: "Aviso legal",
+      intro: "Em cumprimento do artigo 10.º da Lei espanhola 34/2002, de 11 de julho, relativa aos Serviços da Sociedade da Informação e do Comércio Eletrónico (LSSI-CE), informam-se seguidamente os dados identificativos do titular deste sítio web.",
+      dOwner: "Titular", dNif: "NIF / CIF", dAddress: "Domicílio", dEmail: "Correio eletrónico", dSite: "Sítio web",
+      vSite: "PDF in Place — editor de documentos PDF que funciona inteiramente no navegador do utilizador.",
+      hObject: "Objeto",
+      pObject: "Este sítio web disponibiliza aos utilizadores uma ferramenta de edição, organização, proteção e exportação de documentos PDF. Todo o processamento de documentos realiza-se localmente no navegador do utilizador; os ficheiros não são transmitidos nem armazenados em servidores do titular.",
+      hUse: "Condições de utilização",
+      pUse1: "O acesso e a utilização deste sítio web atribuem a condição de utilizador e implicam a aceitação plena e sem reservas de todas as disposições incluídas nestes <a href='./terminos.html?lang=pt'>Termos de utilização</a>, na versão vigente no momento do acesso.",
+      pUse2: "O utilizador compromete-se a fazer um uso adequado dos conteúdos e serviços oferecidos e a não os empregar em atividades ilícitas ou contrárias à legislação aplicável.",
+      hIp: "Propriedade intelectual e industrial",
+      pIp1: "Os direitos de propriedade intelectual do software, desenho e conteúdos próprios deste sítio pertencem ao seu titular, salvo indicação em contrário. O software de terceiros utilizado pela aplicação distribui-se ao abrigo das licenças correspondentes (ver o repositório público do projeto).",
+      pIp2: "Os documentos que o utilizador trata com a aplicação permanecem sob a sua exclusiva propriedade. O titular não acede a eles, não os armazena e não os utiliza para qualquer finalidade.",
+      hLiab: "Responsabilidade",
+      pLiab: "O titular não responde por danos ou perdas decorrentes do uso da ferramenta, incluindo a alteração, perda ou corrupção de documentos, conforme detalhado nos <a href='./terminos.html?lang=pt'>Termos de utilização</a>.",
+      fLegal: "Aviso legal", fPrivacy: "Privacidade", fTerms: "Termos de utilização"
+    },
+    ca: {
+      htmlLang: "ca", docTitle: "Avís legal - PDF in Place",
+      h1: "Avís legal",
+      intro: "En compliment de l’article 10 de la Llei espanyola 34/2002, d’11 de juliol, de Serveis de la Societat de la Informació i de Comerç Electrònic (LSSI-CE), s’informen a continuació les dades identificatives del titular d’aquest lloc web.",
+      dOwner: "Titular", dNif: "NIF / CIF", dAddress: "Domicili", dEmail: "Correu electrònic", dSite: "Lloc web",
+      vSite: "PDF in Place — editor de documents PDF que funciona íntegrament al navegador de l’usuari.",
+      hObject: "Objecte",
+      pObject: "Aquest lloc web posa a disposició dels usuaris una eina d’edició, organització, protecció i exportació de documents PDF. Tot el processament de documents es fa localment al navegador de l’usuari; els fitxers no es transmeten ni s’emmagatzemen a servidors del titular.",
+      hUse: "Condicions d’ús",
+      pUse1: "L’accés i la utilització d’aquest lloc web atribueixen la condició d’usuari i impliquen l’acceptació plena i sense reserves de totes les disposicions incloses en aquestes <a href='./terminos.html?lang=ca'>Condicions d’ús</a>, en la versió vigent en el moment de l’accés.",
+      pUse2: "L’usuari es compromet a fer un ús adequat dels continguts i serveis que s’ofereixen i a no emprar-los per a activitats il·lícites o contràries a la legislació aplicable.",
+      hIp: "Propietat intel·lectual i industrial",
+      pIp1: "Els drets de propietat intel·lectual del programari, disseny i continguts propis d’aquest lloc pertanyen al seu titular, tret que s’indiqui el contrari. El programari de tercers emprat per l’aplicació es distribueix sota les llicències corresponents (vegeu el repositori públic del projecte).",
+      pIp2: "Els documents que l’usuari tracta amb l’aplicació romanen sota la seva exclusiva propietat. El titular no hi accedeix, no els emmagatzema i no els utilitza per a cap finalitat.",
+      hLiab: "Responsabilitat",
+      pLiab: "El titular no respon dels danys o pèrdues derivats de l’ús de l’eina, inclosa l’alteració, pèrdua o corrupció de documents, segons es detalla a les <a href='./terminos.html?lang=ca'>Condicions d’ús</a>.",
+      fLegal: "Avís legal", fPrivacy: "Privadesa", fTerms: "Condicions d’ús"
+    },
+    eu: {
+      htmlLang: "eu", docTitle: "Ohar legala - PDF in Place",
+      h1: "Ohar legala",
+      intro: "Espainiako 34/2002 Legearen, uztailak 11koa, Informazio Elkarteko Zerbitzuei eta Merkataritza Elektronikoari buruzkoaren (LSSI-CE) 10. artikuluaren betebeharrrez, jarraian webgune honen jabearen identifikazio-datuak ematen dira.",
+      dOwner: "Jabea", dNif: "NIF / CIF", dAddress: "Helbidea", dEmail: "Posta elektronikoa", dSite: "Webgunea",
+      vSite: "PDF in Place — erabiltzailearen nabigatzailean guztiz funtzionatzen duen PDF dokumentu editorea.",
+      hObject: "Xedea",
+      pObject: "Webgune honek PDF dokumentuak editatzeko, antolatzeko, babesteko eta esportatzeko tresna bat jartzen dio erabiltzailearen eskura. Dokumentuen prozesamendu osoa lokalki egiten da erabiltzailearen nabigatzailean; fitxategiak ez dira jabearen zerbitzuetara bidaltzen edo han gordetzen.",
+      hUse: "Erabilera baldintzak",
+      pUse1: "Webgune hau atzitzeak eta erabiltzeak erabiltzaile izatea dakar eta <a href='./terminos.html?lang=eu'>Erabilera baldintza</a> hauetako xedapen guztiak erabat eta baldintzarik gabe onartzea, sarbide unean indarrean dagoen bertsioan.",
+      pUse2: "Erabiltzaileak eskainitako eduki eta zerbitzuak behar bezala erabiltzea konpromisitzen du, eta horiek legez kanpoko jardueretarako edo aplikagarria den legediaren aurkakoetarako ez erabiltzea.",
+      hIp: "Jabetza intelektual eta industriala",
+      pIp1: "Gune honen softwarearen, diseinuaren eta bertako edukien jabetza intelektualeko eskubideak bere jabearenak dira, besterik adierazi ezean. Aplikazioak erabilitako hirugarrenen softwarea dagokien lizentzien pean banatzen da (ikusi proiektuaren biltegia publikoa).",
+      pIp2: "Erabiltzaileak aplikazioarekin prozesatutako dokumentuak bere jabetza esklusiboan jarraitzen dute. Jabeak ez die sarbiderik ematen, ez ditu gordetzen eta ez ditu helburu batekin ere erabiltzen.",
+      hLiab: "Erantzukizuna",
+      pLiab: "Jabea ez da tresna erabiltzetik eratorritako kalte edo galderen arduraduna, dokumentuen aldaketa, galera edo hondatzea barne, <a href='./terminos.html?lang=eu'>Erabilera baldintzetan</a> zehazten den bezala.",
+      fLegal: "Ohar legala", fPrivacy: "Pribatutasuna", fTerms: "Erabilera baldintzak"
+    }
+  };
+  var ORDER = ["es", "en", "gl", "fr", "de", "pt", "ca", "eu"];
+  var NAMES = { es: "Español", en: "English", gl: "Galego", fr: "Français", de: "Deutsch", pt: "Português", ca: "Català", eu: "Euskara" };
+
+  function render(lang) {
+    var t = L[lang];
+    document.title = t.docTitle;
+    document.documentElement.lang = t.htmlLang;
+    var html = "<h1>" + t.h1 + "</h1><p>" + t.intro + "</p><dl>"
+      + "<dt>" + t.dOwner + "</dt><dd>Pablo Gallego Falcón</dd>"
+      + "<dt>" + t.dNif + "</dt><dd>35320739F</dd>"
+      + "<dt>" + t.dAddress + "</dt><dd>Conchidos, Cerponzóns nº 8, C.P. 36152 Pontevedra, España</dd>"
+      + "<dt>" + t.dEmail + "</dt><dd><a href=\"mailto:" + EMAIL + "\">" + EMAIL + "</a></dd>"
+      + "<dt>" + t.dSite + "</dt><dd>" + t.vSite + "</dd></dl>"
+      + "<h2>" + t.hObject + "</h2><p>" + t.pObject + "</p>"
+      + "<h2>" + t.hUse + "</h2><p>" + t.pUse1 + "</p><p>" + t.pUse2 + "</p>"
+      + "<h2>" + t.hIp + "</h2><p>" + t.pIp1 + "</p><p>" + t.pIp2 + "</p>"
+      + "<h2>" + t.hLiab + "</h2><p>" + t.pLiab + "</p>";
+    document.getElementById("doc").innerHTML = html;
+    document.getElementById("doc").classList.add("active");
+
+    document.getElementById("footer-nav").innerHTML =
+      "<a href='./aviso-legal.html?lang=" + lang + "'>" + t.fLegal + "</a>"
+      + "<a href='./privacidad.html?lang=" + lang + "'>" + t.fPrivacy + "</a>"
+      + "<a href='./terminos.html?lang=" + lang + "'>" + t.fTerms + "</a>";
+
+    var nav = document.getElementById("lang-nav");
+    nav.innerHTML = "";
+    ORDER.forEach(function (code) {
+      var b = document.createElement("button");
+      b.type = "button";
+      b.textContent = NAMES[code];
+      if (code === lang) b.className = "active";
+      b.addEventListener("click", function () { render(code); });
+      nav.appendChild(b);
+    });
+  }
+
+  (function init() {
+    var params = new URLSearchParams(window.location.search);
+    var requested = params.get("lang");
+    var stored = null;
+    try { stored = localStorage.getItem("pageforge.locale"); } catch (e) { /* ignore */ }
+    var browser = (navigator.languages && navigator.languages.length ? navigator.languages : [navigator.language])
+      .map(function (l) { return String(l).toLowerCase().slice(0, 2); });
+    var lang = ORDER.find(function (c) { return c === requested; })
+      || ORDER.find(function (c) { return c === stored; })
+      || ORDER.find(function (c) { return browser.indexOf(c) !== -1; })
+      || "es";
+    render(lang);
+  })();
+  </script>
 </body>
 </html>

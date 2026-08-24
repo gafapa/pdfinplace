@@ -791,7 +791,7 @@ export const PdfEditor = () => {
                     </div>
                     <div className="flex items-center gap-2 shrink-0" title={t('common.language')}>
                         <a
-                            href="./aviso-legal.html"
+                            href={`./aviso-legal.html?lang=${locale}`}
                             className="inline-flex h-8 items-center rounded-md border border-gray-200 bg-white px-2.5 text-xs font-medium text-gray-500 hover:bg-gray-50 hover:text-blue-600"
                         >
                             {t('common.legal')}
