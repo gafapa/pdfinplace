@@ -9,8 +9,8 @@ const LEGACY_STORAGE_KEY = 'pdfing.locale';
 const translations: Record<Locale, TranslationNode> = {
     es: {
         app: {
-            title: 'ForjaPDF',
-            windowTitle: 'ForjaPDF - Editor PDF',
+            title: 'PDF in Place',
+            windowTitle: 'PDF in Place - Editor PDF',
         },
         common: {
             language: 'Idioma',
@@ -176,14 +176,24 @@ const translations: Record<Locale, TranslationNode> = {
             nextPage: 'Página siguiente',
             canvasLabel: 'Lienzo de anotaciones. Usa las herramientas para añadir texto, dibujos, formas o imágenes.',
         },
+        welcome: {
+            title: 'Bienvenido a PDF in Place',
+            description: 'Edita, organiza y protege documentos PDF directamente en tu navegador. Tus archivos nunca salen de tu equipo',
+            featureEdit: 'Edita el texto y las imágenes ya existentes en tus PDF',
+            featureOrganize: 'Reordena, rota, duplica, divide y exporta páginas',
+            featureProtect: 'Protege con contraseña o desbloquea tus documentos',
+            featurePrivate: 'Privado por diseño: todo se procesa localmente',
+            dontShowAgain: 'No mostrar esta página la próxima vez',
+            start: 'Empezar',
+        },
         preview: {
             error: 'Error al cargar vista previa',
         },
     },
     en: {
         app: {
-            title: 'PageForge',
-            windowTitle: 'PageForge - PDF Editor',
+            title: 'PDF in Place',
+            windowTitle: 'PDF in Place - PDF Editor',
         },
         common: {
             language: 'Language',
@@ -349,14 +359,24 @@ const translations: Record<Locale, TranslationNode> = {
             nextPage: 'Next page',
             canvasLabel: 'Annotation canvas. Use the tools to add text, drawings, shapes or images.',
         },
+        welcome: {
+            title: 'Welcome to PDF in Place',
+            description: 'Edit, organize and protect PDF documents right in your browser. Your files never leave your device',
+            featureEdit: 'Edit the text and images already inside your PDFs',
+            featureOrganize: 'Reorder, rotate, duplicate, split and export pages',
+            featureProtect: 'Password-protect or unlock your documents',
+            featurePrivate: 'Private by design: everything is processed locally',
+            dontShowAgain: 'Don’t show this page next time',
+            start: 'Get started',
+        },
         preview: {
             error: 'Error loading preview',
         },
     },
     gl: {
         app: {
-            title: 'ForxaPDF',
-            windowTitle: 'ForxaPDF - Editor de PDF',
+            title: 'PDF in Place',
+            windowTitle: 'PDF in Place - Editor de PDF',
         },
         common: {
             language: 'Idioma',
@@ -522,14 +542,24 @@ const translations: Record<Locale, TranslationNode> = {
             nextPage: 'Páxina seguinte',
             canvasLabel: 'Lenzo de anotacións. Usa as ferramentas para engadir texto, debuxos, formas ou imaxes.',
         },
+        welcome: {
+            title: 'Benvido a PDF in Place',
+            description: 'Edita, organiza e protexe documentos PDF directamente no teu navegador. Os teus ficheiros nunca saen do teu equipo',
+            featureEdit: 'Edita o texto e as imaxes que xa están nos teus PDF',
+            featureOrganize: 'Reordena, xira, duplica, divide e exporta páxinas',
+            featureProtect: 'Protexe con contrasinal ou desbloquea os teus documentos',
+            featurePrivate: 'Privado por deseño: todo se procesa localmente',
+            dontShowAgain: 'Non mostrar esta páxina a próxima vez',
+            start: 'Comezar',
+        },
         preview: {
             error: 'Erro ao cargar a vista previa',
         },
     },
     fr: {
         app: {
-            title: 'ForgePDF',
-            windowTitle: 'ForgePDF - Editeur PDF',
+            title: 'PDF in Place',
+            windowTitle: 'PDF in Place - Éditeur PDF',
         },
         common: {
             language: 'Langue',
@@ -695,14 +725,24 @@ const translations: Record<Locale, TranslationNode> = {
             nextPage: 'Page suivante',
             canvasLabel: 'Canevas d’annotations. Utilisez les outils pour ajouter du texte, des dessins, des formes ou des images.',
         },
+        welcome: {
+            title: 'Bienvenue dans PDF in Place',
+            description: 'Modifiez, organisez et protégez vos documents PDF directement dans votre navigateur. Vos fichiers ne quittent jamais votre appareil',
+            featureEdit: 'Modifiez le texte et les images déjà présents dans vos PDF',
+            featureOrganize: 'Réorganisez, pivotez, dupliquez, divisez et exportez des pages',
+            featureProtect: 'Protégez par mot de passe ou déverrouillez vos documents',
+            featurePrivate: 'Confidentiel par conception : tout est traité localement',
+            dontShowAgain: 'Ne plus afficher cette page',
+            start: 'Commencer',
+        },
         preview: {
             error: 'Erreur de chargement de l’aperçu',
         },
     },
     de: {
         app: {
-            title: 'PDFSchmiede',
-            windowTitle: 'PDFSchmiede - PDF-Editor',
+            title: 'PDF in Place',
+            windowTitle: 'PDF in Place - PDF-Editor',
         },
         common: {
             language: 'Sprache',
@@ -868,14 +908,24 @@ const translations: Record<Locale, TranslationNode> = {
             nextPage: 'Nächste Seite',
             canvasLabel: 'Anmerkungs-Leinwand. Verwenden Sie die Werkzeuge, um Text, Zeichnungen, Formen oder Bilder hinzuzufügen.',
         },
+        welcome: {
+            title: 'Willkommen bei PDF in Place',
+            description: 'Bearbeiten, ordnen und schützen Sie PDF-Dokumente direkt im Browser. Ihre Dateien verlassen Ihr Gerät nie',
+            featureEdit: 'Bearbeiten Sie Text und Bilder, die bereits in Ihren PDFs enthalten sind',
+            featureOrganize: 'Seiten neu anordnen, drehen, duplizieren, teilen und exportieren',
+            featureProtect: 'Dokumente mit Passwort schützen oder entsperren',
+            featurePrivate: 'Privat von Grund auf: Alles wird lokal verarbeitet',
+            dontShowAgain: 'Diese Seite nicht mehr anzeigen',
+            start: 'Loslegen',
+        },
         preview: {
             error: 'Fehler beim Laden der Vorschau',
         },
     },
     pt: {
         app: {
-            title: 'ForjaPDF',
-            windowTitle: 'ForjaPDF - Editor de PDF',
+            title: 'PDF in Place',
+            windowTitle: 'PDF in Place - Editor de PDF',
         },
         common: {
             language: 'Idioma',
@@ -1041,14 +1091,24 @@ const translations: Record<Locale, TranslationNode> = {
             nextPage: 'Página seguinte',
             canvasLabel: 'Tela de anotações. Use as ferramentas para adicionar texto, desenhos, formas ou imagens.',
         },
+        welcome: {
+            title: 'Bem-vindo ao PDF in Place',
+            description: 'Edite, organize e proteja documentos PDF diretamente no seu navegador. Os seus ficheiros nunca saem do seu dispositivo',
+            featureEdit: 'Edite o texto e as imagens já existentes nos seus PDF',
+            featureOrganize: 'Reordene, rode, duplique, divida e exporte páginas',
+            featureProtect: 'Proteja com palavra-passe ou desbloqueie os seus documentos',
+            featurePrivate: 'Privado por conceção: tudo é processado localmente',
+            dontShowAgain: 'Não mostrar esta página da próxima vez',
+            start: 'Começar',
+        },
         preview: {
             error: 'Erro ao carregar a pré-visualização',
         },
     },
     ca: {
         app: {
-            title: 'ForjaPDF',
-            windowTitle: 'ForjaPDF - Editor de PDF',
+            title: 'PDF in Place',
+            windowTitle: 'PDF in Place - Editor de PDF',
         },
         common: {
             language: 'Idioma',
@@ -1214,14 +1274,24 @@ const translations: Record<Locale, TranslationNode> = {
             nextPage: 'Pàgina següent',
             canvasLabel: 'Llenç d’anotacions. Fes servir les eines per afegir text, dibuixos, formes o imatges.',
         },
+        welcome: {
+            title: 'Benvingut a PDF in Place',
+            description: 'Edita, organitza i protegeix documents PDF directament al teu navegador. Els teus fitxers mai surten del teu dispositiu',
+            featureEdit: 'Edita el text i les imatges que ja hi ha als teus PDF',
+            featureOrganize: 'Reordena, gira, duplica, divideix i exporta pàgines',
+            featureProtect: 'Protegeix amb contrasenya o desbloqueja els teus documents',
+            featurePrivate: 'Privat per disseny: tot es processa localment',
+            dontShowAgain: 'No mostris aquesta pàgina la propera vegada',
+            start: 'Començar',
+        },
         preview: {
             error: 'Error en carregar la previsualització',
         },
     },
     eu: {
         app: {
-            title: 'PDFLantegi',
-            windowTitle: 'PDFLantegi - PDF Editorea',
+            title: 'PDF in Place',
+            windowTitle: 'PDF in Place - PDF Editorea',
         },
         common: {
             language: 'Hizkuntza',
@@ -1386,6 +1456,16 @@ const translations: Record<Locale, TranslationNode> = {
             previousPage: 'Aurreko orria',
             nextPage: 'Hurrengo orria',
             canvasLabel: 'Oharraren oihala. Erabili tresnak testua, marrazkiak, formak edo irudiak gehitzeko.',
+        },
+        welcome: {
+            title: 'Ongi etorri PDF in Place aplikaziora',
+            description: 'Editatu, antolatu eta babestu PDF dokumentuak zure nabigatzailean bertan. Zure fitxategiek ez dute inoiz zure gailua uzten',
+            featureEdit: 'Editatu zure PDFetan dauden testua eta irudiak',
+            featureOrganize: 'Berrantolatu, biratu, bikoiztu, zatitu eta esportatu orriak',
+            featureProtect: 'Babestu pasahitzarekin edo desbloqueatu dokumentuak',
+            featurePrivate: 'Pribatutasuna diseinutik: dena lokalki prozesatzen da',
+            dontShowAgain: 'Ez erakutsi orri hau hurrengo aldian',
+            start: 'Hasi',
         },
         preview: {
             error: 'Errorea aurrebista kargatzean',

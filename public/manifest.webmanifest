@@ -1,7 +1,7 @@
 ﻿{
-  "name": "PageForge",
-  "short_name": "PageForge",
-  "description": "Modern workspace to combine, annotate, organize, protect and export PDF documents.",
+  "name": "PDF in Place",
+  "short_name": "PDF in Place",
+  "description": "Edit, organize, protect and export PDF documents entirely in your browser.",
   "start_url": "./",
   "scope": "./",
   "display": "standalone",

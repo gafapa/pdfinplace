@@ -1,6 +1,6 @@
-# PageForge
+# PDF in Place
 
-PageForge is a browser-based PDF editor built with React, TypeScript, Vite, Tailwind CSS, pdf.js, pdf-lib, fontkit, and @libpdf/core.
+PDF in Place is a browser-based PDF editor built with React, TypeScript, Vite, Tailwind CSS, pdf.js, pdf-lib, fontkit, and @libpdf/core.
 
 It runs entirely in the browser. Documents remain in memory unless the user enables local-session persistence. With persistence enabled, the current session and reusable signatures/stamps are stored locally in the user's browser storage.
 
@@ -62,7 +62,7 @@ See [DEPLOYMENT.md](./DEPLOYMENT.md) for static hosting, caching, HTTPS, and sec
 
 ## Browser Storage And Privacy
 
-PageForge does not upload files to a server. The browser stores:
+PDF in Place does not upload files to a server. The browser stores:
 
 - The current editing session in IndexedDB when local-session persistence is enabled.
 - Export history and UI preferences in localStorage.
@@ -94,7 +94,7 @@ The page editor analyzes existing text and raster images only when the **Edit co
 
 Each edited output page is copied into an isolated in-memory PDF before its content changes are applied. This keeps edits independent when the same source page has been duplicated. The existing annotation layer is rendered after content changes.
 
-PDF text editing is inherently approximate when the original embedded font cannot be reused. PageForge selects a compatible standard font and uses the bundled Liberation Sans fallback for Unicode text. Image moves use a rendered snapshot, so vector image data is not preserved.
+PDF text editing is inherently approximate when the original embedded font cannot be reused. PDF in Place selects a compatible standard font and uses the bundled Liberation Sans fallback for Unicode text. Image moves use a rendered snapshot, so vector image data is not preserved.
 
 ## Dependency Notes
 

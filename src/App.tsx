@@ -1,6 +1,8 @@
-import { Suspense, lazy, useEffect } from 'react';
+import { Suspense, lazy, useCallback, useEffect, useState } from 'react';
 import { useI18n } from './i18n';
 import { APP_ENVIRONMENT, isNonProductionEnvironment } from './config/environment';
+import { WelcomeModal } from './components/WelcomeModal';
+import { isWelcomeDismissed } from './utils/welcomePreference';
 
 const LazyPdfEditor = lazy(() =>
   import('./pages/PdfEditor').then((module) => ({ default: module.PdfEditor }))
@@ -8,6 +10,7 @@ const LazyPdfEditor = lazy(() =>
 
 function App() {
   const { t, locale } = useI18n();
+  const [showWelcome, setShowWelcome] = useState(() => !isWelcomeDismissed());
 
   useEffect(() => {
     const environmentPrefix = APP_ENVIRONMENT === 'test'
@@ -19,6 +22,8 @@ function App() {
     document.documentElement.lang = locale;
     document.documentElement.dataset.environment = APP_ENVIRONMENT;
   }, [locale, t]);
+
+  const dismissWelcome = useCallback(() => setShowWelcome(false), []);
 
   return (
     <div className="h-[100dvh] font-sans text-gray-900 bg-white">
@@ -41,6 +46,7 @@ function App() {
           <LazyPdfEditor />
         </Suspense>
       </main>
+      {showWelcome ? <WelcomeModal onClose={dismissWelcome} /> : null}
     </div>
   );
 }

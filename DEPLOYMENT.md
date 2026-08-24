@@ -1,6 +1,6 @@
 # Deployment
 
-PageForge is deployed as a static single-page application.
+PDF in Place is deployed as a static single-page application.
 
 ## Environments
 
