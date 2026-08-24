@@ -426,6 +426,11 @@ const mergeSavedEdits = (
     });
 };
 
+export interface ParseContentPageMessages {
+    pageTooLarge?: string;
+    tooManyElements?: string;
+}
+
 export const parseContentPage = async (
     pdfDocument: PDFDocumentProxy,
     pageNumber: number,
@@ -433,6 +438,7 @@ export const parseContentPage = async (
     targetWidth: number,
     targetHeight: number,
     savedEdits: ContentEdit[],
+    messages: ParseContentPageMessages = {},
 ): Promise<ParsedContentPage> => {
     const page = await pdfDocument.getPage(pageNumber);
     const unscaledViewport = page.getViewport({ scale: 1, rotation: displayRotation });
@@ -449,7 +455,7 @@ export const parseContentPage = async (
         viewport.height <= 0 ||
         viewport.width * viewport.height > MAX_CONTENT_RENDER_PIXELS
     ) {
-        throw new Error('This PDF page is too large to edit safely.');
+        throw new Error(messages.pageTooLarge ?? 'This PDF page is too large to edit safely.');
     }
 
     const [textContent, textStyles, imageBounds] = await Promise.all([
@@ -459,7 +465,7 @@ export const parseContentPage = async (
     ]);
 
     if (textContent.items.length > MAX_CONTENT_TEXT_ITEMS) {
-        throw new Error('This PDF page contains too many text elements to edit safely.');
+        throw new Error(messages.tooManyElements ?? 'This PDF page contains too many text elements to edit safely.');
     }
 
     let styleIndex = 0;

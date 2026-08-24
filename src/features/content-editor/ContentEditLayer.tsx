@@ -24,6 +24,9 @@ interface ContentEditLayerLabels {
     restoreSelection: string;
     textElement: string;
     imageElement: string;
+    parseFailed: string;
+    pageTooLarge: string;
+    tooManyElements: string;
 }
 
 interface ContentEditLayerProps {
@@ -47,6 +50,11 @@ interface DragState {
     scaleX: number;
     scaleY: number;
     moved: boolean;
+}
+
+interface PendingDragDelta {
+    deltaX: number;
+    deltaY: number;
 }
 
 const dirtyEditsFromBlocks = (blocks: ContentBlock[]) =>
@@ -81,6 +89,8 @@ export const ContentEditLayer = ({
     const blocksRef = useRef<ContentBlock[]>([]);
     const editsRef = useRef(edits);
     const dragRef = useRef<DragState | null>(null);
+    const dragFrameRef = useRef<number | null>(null);
+    const pendingDragRef = useRef<PendingDragDelta | null>(null);
     const loadedParseKeyRef = useRef<string | null>(null);
 
     useEffect(() => {
@@ -100,6 +110,10 @@ export const ContentEditLayer = ({
             width,
             height,
             editsRef.current,
+            {
+                pageTooLarge: labels.pageTooLarge,
+                tooManyElements: labels.tooManyElements,
+            },
         ).then((page) => {
             if (cancelled) return;
             blocksRef.current = page.blocks;
@@ -107,15 +121,15 @@ export const ContentEditLayer = ({
             setParseResult({ key: parseKey, page });
         }).catch((error: unknown) => {
             if (cancelled) return;
-            const message = error instanceof Error ? error.message : 'Could not analyze this PDF page.';
+            console.error('Failed to analyze the PDF page content:', error);
             setParseResult({ key: parseKey, page: null });
-            onError(message);
+            onError(labels.parseFailed);
         });
 
         return () => {
             cancelled = true;
         };
-    }, [displayRotation, height, isActive, onError, pageIndex, parseKey, pdfDocument, width]);
+    }, [displayRotation, height, isActive, onError, pageIndex, parseKey, pdfDocument, width, labels]);
 
     const parsedPage = parseResult?.key === parseKey ? parseResult.page : null;
     const isLoading = isActive && parseResult?.key !== parseKey;
@@ -226,17 +240,19 @@ export const ContentEditLayer = ({
         setSelectedBlockId(block.id);
     }, [editingBlockId, height, width]);
 
-    const handlePointerMove = useCallback((event: PointerEvent<HTMLButtonElement>) => {
+    const applyPendingDrag = useCallback(() => {
+        dragFrameRef.current = null;
+        const pending = pendingDragRef.current;
         const drag = dragRef.current;
         const viewportTransform = parsedPage?.viewportTransform;
-        if (!drag || drag.pointerId !== event.pointerId || !viewportTransform) return;
-        const deltaX = (event.clientX - drag.clientX) / Math.max(0.01, drag.scaleX);
-        const deltaY = (event.clientY - drag.clientY) / Math.max(0.01, drag.scaleY);
-        if (!drag.moved && Math.hypot(deltaX, deltaY) < 3) return;
-        drag.moved = true;
+        if (!pending || !drag || !viewportTransform) {
+            pendingDragRef.current = null;
+            return;
+        }
+        pendingDragRef.current = null;
 
-        const nextX = Math.max(0, Math.min(width - drag.block.width, drag.block.x + deltaX));
-        const nextY = Math.max(0, Math.min(height - drag.block.height, drag.block.y + deltaY));
+        const nextX = Math.max(0, Math.min(width - drag.block.width, drag.block.x + pending.deltaX));
+        const nextY = Math.max(0, Math.min(height - drag.block.height, drag.block.y + pending.deltaY));
         const pdfDelta = viewportDeltaToPdfDelta(
             viewportTransform,
             nextX - drag.block.x,
@@ -257,6 +273,26 @@ export const ContentEditLayer = ({
         )));
     }, [height, parsedPage?.viewportTransform, updateBlocks, width]);
 
+    useEffect(() => () => {
+        if (dragFrameRef.current !== null) {
+            cancelAnimationFrame(dragFrameRef.current);
+        }
+    }, []);
+
+    const handlePointerMove = useCallback((event: PointerEvent<HTMLButtonElement>) => {
+        const drag = dragRef.current;
+        if (!drag || drag.pointerId !== event.pointerId || !parsedPage?.viewportTransform) return;
+        const deltaX = (event.clientX - drag.clientX) / Math.max(0.01, drag.scaleX);
+        const deltaY = (event.clientY - drag.clientY) / Math.max(0.01, drag.scaleY);
+        if (!drag.moved && Math.hypot(deltaX, deltaY) < 3) return;
+        drag.moved = true;
+
+        pendingDragRef.current = { deltaX, deltaY };
+        if (dragFrameRef.current === null) {
+            dragFrameRef.current = requestAnimationFrame(applyPendingDrag);
+        }
+    }, [applyPendingDrag, parsedPage?.viewportTransform]);
+
     const handlePointerEnd = useCallback((event: PointerEvent<HTMLButtonElement>) => {
         const drag = dragRef.current;
         if (!drag || drag.pointerId !== event.pointerId) return;
@@ -264,7 +300,12 @@ export const ContentEditLayer = ({
             event.currentTarget.releasePointerCapture(event.pointerId);
         }
         dragRef.current = null;
-    }, []);
+        if (dragFrameRef.current !== null) {
+            cancelAnimationFrame(dragFrameRef.current);
+            dragFrameRef.current = null;
+        }
+        applyPendingDrag();
+    }, [applyPendingDrag]);
 
     const handleBlockKeyDown = useCallback((
         event: KeyboardEvent<HTMLButtonElement>,

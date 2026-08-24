@@ -118,3 +118,4 @@ After each deployment:
 5. Export the PDF and reopen it.
 6. Verify the service worker and offline shell after one successful online load.
 7. Check the response headers and confirm that the test domain returns `X-Robots-Tag: noindex, nofollow`.
+8. Confirm that the HTTP response includes the CSP, COOP, CORP, permissions, referrer, HSTS, and MIME-sniffing headers listed above; the HTML meta policy is only a fallback.

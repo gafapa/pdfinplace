@@ -1,6 +1,6 @@
-const MAX_IMPORT_FILES = 20;
+export const MAX_IMPORT_FILES = 20;
 export const MAX_IMPORT_FILE_SIZE_BYTES = 75 * 1024 * 1024;
-const MAX_IMPORT_TOTAL_SIZE_BYTES = 250 * 1024 * 1024;
+export const MAX_IMPORT_TOTAL_SIZE_BYTES = 250 * 1024 * 1024;
 export const MAX_IMPORT_PAGES = 500;
 export const MAX_IMAGE_PIXELS = 32_000_000;
 export const MAX_RENDER_PIXELS = 32_000_000;
@@ -41,13 +41,17 @@ interface ImportSkipReason {
     fileName?: string;
 }
 
-export const getAcceptedImportFiles = (newFiles: File[]): AcceptedImportFiles => {
+export const getAcceptedImportFiles = (
+    newFiles: File[],
+    existingFileCount = 0,
+    existingBytes = 0,
+): AcceptedImportFiles => {
     const acceptedFiles: File[] = [];
     const skippedReasons: ImportSkipReason[] = [];
     let acceptedBytes = 0;
 
     for (const file of newFiles) {
-        if (acceptedFiles.length >= MAX_IMPORT_FILES) {
+        if (existingFileCount + acceptedFiles.length >= MAX_IMPORT_FILES) {
             skippedReasons.push({ code: 'file-count', fileName: file.name });
             continue;
         }
@@ -62,7 +66,10 @@ export const getAcceptedImportFiles = (newFiles: File[]): AcceptedImportFiles =>
             continue;
         }
 
-        if (acceptedBytes + file.size > MAX_IMPORT_TOTAL_SIZE_BYTES) {
+        if (
+            acceptedBytes + file.size > MAX_IMPORT_TOTAL_SIZE_BYTES ||
+            existingBytes + acceptedBytes + file.size > MAX_IMPORT_TOTAL_SIZE_BYTES
+        ) {
             skippedReasons.push({ code: 'batch-size' });
             break;
         }

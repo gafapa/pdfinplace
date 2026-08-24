@@ -1,6 +1,7 @@
 import { rgbToCss, transformContentPoint } from './parseContentPage';
 import type { ContentEdit, TextContentBlock } from './types';
 
+const MAX_CACHED_IMAGES = 50;
 const imageCache = new Map<string, Promise<HTMLImageElement>>();
 
 const loadImage = (dataUrl: string) => {
@@ -14,6 +15,11 @@ const loadImage = (dataUrl: string) => {
         image.src = dataUrl;
     });
     imageCache.set(dataUrl, promise);
+    while (imageCache.size > MAX_CACHED_IMAGES) {
+        const oldestKey = imageCache.keys().next().value;
+        if (oldestKey === undefined) break;
+        imageCache.delete(oldestKey);
+    }
     return promise;
 };
 

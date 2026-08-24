@@ -16,6 +16,8 @@ if ('serviceWorker' in navigator) {
   } else {
     navigator.serviceWorker.getRegistrations().then((registrations) => {
       registrations.forEach((registration) => registration.unregister())
+    }).catch((error) => {
+      console.error('Service worker unregistration failed:', error)
     })
   }
 }

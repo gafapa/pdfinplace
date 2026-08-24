@@ -66,3 +66,14 @@ export const loadPdfDocument = async (source: PdfDocumentInitParameters): Promis
     const loadingTask = await getPdfDocument(source);
     return loadingTask.promise;
 };
+
+export interface LoadedPdfDocument {
+    pdfDoc: PdfDocumentProxy;
+    loadingTask: PdfLoadingTask;
+}
+
+export const loadPdfDocumentWithTask = async (source: PdfDocumentInitParameters): Promise<LoadedPdfDocument> => {
+    const loadingTask = await getPdfDocument(source);
+    const pdfDoc = await loadingTask.promise;
+    return { pdfDoc, loadingTask };
+};

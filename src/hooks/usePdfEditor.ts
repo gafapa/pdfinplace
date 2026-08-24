@@ -7,16 +7,18 @@ import type {
     ShapeAnnotationData,
     ImageAnnotationData
 } from '../types/annotations';
-import type { PDFDocument, PDFPage } from 'pdf-lib';
+import type { PDFDocument, PDFFont, PDFPage } from 'pdf-lib';
 import { createId } from '../utils/createId';
 import { clearPersistedSession, loadPersistedSession, savePersistedSession, type PersistedFileRecord } from '../utils/persistedSession';
-import { getPdfDocument, loadPdfDocument } from '../utils/pdfjs';
+import { loadPdfDocumentWithTask, type LoadedPdfDocument } from '../utils/pdfjs';
 import {
     MAX_ARCHIVE_ENTRIES,
     MAX_ARCHIVE_ENTRY_BYTES,
     MAX_ARCHIVE_UNCOMPRESSED_BYTES,
     MAX_IMAGE_PIXELS,
+    MAX_IMPORT_FILES,
     MAX_IMPORT_PAGES,
+    MAX_IMPORT_TOTAL_SIZE_BYTES,
     MAX_OFFICE_XML_ELEMENTS,
     MAX_RENDER_PIXELS,
     formatMegabytes,
@@ -27,11 +29,38 @@ import {
 import { getDataUrlImageKind, readImageDimensions } from '../utils/imageValidation';
 import { getLegacyEditorCanvasSize } from '../utils/pageGeometry';
 import type { ContentEdit } from '../features/content-editor/types';
+import { clearPersistedAssets } from '../utils/persistedAssets';
+import { orderItemsByIds } from '../utils/orderedSelection';
 
 type PdfLibModule = typeof import('pdf-lib');
 
+class ImportLimitError extends Error {}
+
+const releasePdfDocument = (fileData?: {
+    pdfDoc?: import('pdfjs-dist').PDFDocumentProxy;
+    loadingTask?: LoadedPdfDocument['loadingTask'];
+}) => {
+    if (!fileData) return;
+
+    if (fileData.loadingTask) {
+        void fileData.loadingTask.destroy().catch(() => {
+            // The document transport may already be gone; nothing else to release.
+        });
+        return;
+    }
+
+    if (fileData.pdfDoc) {
+        void Promise.resolve(fileData.pdfDoc.cleanup()).catch(() => {
+            // Best-effort cleanup for documents loaded without a tracked task.
+        });
+    }
+};
+
 let pdfLibPromise: Promise<PdfLibModule> | null = null;
 let contentEditExporterPromise: Promise<typeof import('../features/content-editor/applyContentEdits')> | null = null;
+let unicodeFontBytesPromise: Promise<ArrayBuffer> | null = null;
+const overlayFontCache = new WeakMap<PDFDocument, Promise<PDFFont>>();
+const UNICODE_FONT_PATH = `${import.meta.env.BASE_URL}pdfjs/standard_fonts/LiberationSans-Regular.ttf`;
 
 const loadPdfLib = async (): Promise<PdfLibModule> => {
     if (!pdfLibPromise) {
@@ -45,6 +74,46 @@ const loadContentEditExporter = () => {
         contentEditExporterPromise = import('../features/content-editor/applyContentEdits');
     }
     return contentEditExporterPromise;
+};
+
+const loadUnicodeFontBytes = async () => {
+    if (!unicodeFontBytesPromise) {
+        unicodeFontBytesPromise = fetch(UNICODE_FONT_PATH).then((response) => {
+            if (!response.ok) {
+                throw new Error(`Could not load the Unicode fallback font (${response.status}).`);
+            }
+            return response.arrayBuffer();
+        });
+    }
+    try {
+        return await unicodeFontBytesPromise;
+    } catch (error) {
+        unicodeFontBytesPromise = null;
+        throw error;
+    }
+};
+
+const getOverlayFont = (
+    pdfDocument: PDFDocument,
+    textValues: string[],
+    pdfLib: PdfLibModule,
+) => {
+    const cached = overlayFontCache.get(pdfDocument);
+    if (cached) return cached;
+
+    const fontPromise = (async () => {
+        const standardFont = await pdfDocument.embedFont(pdfLib.StandardFonts.Helvetica);
+        try {
+            textValues.forEach((value) => standardFont.encodeText(value));
+            return standardFont;
+        } catch {
+            const { default: fontkit } = await import('@pdf-lib/fontkit');
+            pdfDocument.registerFontkit(fontkit);
+            return pdfDocument.embedFont(await loadUnicodeFontBytes(), { subset: true });
+        }
+    })();
+    overlayFontCache.set(pdfDocument, fontPromise);
+    return fontPromise;
 };
 
 export interface EditorPage {
@@ -62,6 +131,7 @@ export interface EditorFile {
     id: string;
     file: File;
     pdfDoc?: import('pdfjs-dist').PDFDocumentProxy; // Cached pdf.js document for rendering
+    loadingTask?: LoadedPdfDocument['loadingTask']; // Owning loading task, needed to fully release the document
     pageCount: number;
 }
 
@@ -69,7 +139,9 @@ export type PageSize = 'Original' | 'A4' | 'A3' | 'Letter' | 'Legal';
 interface ExportLabels {
     failed: string;
     downloadPrefix: string;
-    originalName: string;
+    originalName?: string;
+    missingPagesWarning?: string;
+    success?: string;
 }
 
 interface ImportLabels {
@@ -79,12 +151,13 @@ interface ImportLabels {
     unsupported: string;
     fileSize: string;
     batchSize: string;
+    success?: string;
 }
 
 export interface EditorNotification {
     id: string;
     message: string;
-    tone: 'error' | 'status';
+    tone: 'error' | 'success';
 }
 
 interface SplitPdfLabels extends ExportLabels {
@@ -111,18 +184,13 @@ export interface PrintOverlayOptions {
     marginPercent: number;
 }
 
-interface ProtectPdfLabels {
-    failed: string;
+interface ProtectPdfLabels extends ExportLabels {
     invalidPassword: string;
-    downloadPrefix: string;
-    originalName: string;
 }
 
-interface UnlockPdfLabels {
-    failed: string;
+interface UnlockPdfLabels extends ExportLabels {
     invalidPassword: string;
     invalidFile: string;
-    downloadPrefix: string;
 }
 
 const PAGE_SIZES: Record<Exclude<PageSize, 'Original'>, [number, number]> = {
@@ -221,7 +289,7 @@ const downloadPdfBytes = (pdfBytes: Uint8Array<ArrayBufferLike>, filename: strin
     document.body.appendChild(link);
     link.click();
     document.body.removeChild(link);
-    URL.revokeObjectURL(url);
+    window.setTimeout(() => URL.revokeObjectURL(url), 10_000);
 };
 
 const EXPORT_HISTORY_STORAGE_KEY = 'pageforge.export-history';
@@ -247,7 +315,15 @@ const clearSensitiveBrowserData = async () => {
         localStorage.removeItem(OVERLAY_OPTIONS_STORAGE_KEY);
     }
 
-    await clearPersistedSession();
+    const clearResults = await Promise.allSettled([
+        clearPersistedSession(),
+        clearPersistedAssets(),
+    ]);
+    clearResults.forEach((result) => {
+        if (result.status === 'rejected') {
+            console.error('Failed to clear sensitive browser data:', result.reason);
+        }
+    });
 };
 
 const loadExportHistory = (): ExportHistoryEntry[] => {
@@ -436,6 +512,7 @@ export const usePdfEditor = () => {
         redo,
         canUndo,
         canRedo,
+        history: pagesHistory,
         setHistory: setPagesHistory,
         setCurrentIndex: setPagesCurrentIndex
     } = useHistory<EditorPage[]>([]);
@@ -448,32 +525,35 @@ export const usePdfEditor = () => {
     const [isSessionPersistenceEnabled, setIsSessionPersistenceEnabled] = useState(isLocalPersistenceEnabled);
     const persistedFileCacheRef = useRef<Record<string, PersistedFileRecord>>({});
     const filesRef = useRef<Record<string, EditorFile>>({});
+    const isImportingRef = useRef(false);
     const [exportHistory, setExportHistory] = useState<ExportHistoryEntry[]>(loadExportHistory);
     const [printOverlayOptions, setPrintOverlayOptions] = useState<PrintOverlayOptions>(loadOverlayOptions);
     const notifyError = useCallback((message: string) => {
         setNotification({ id: createId(), message, tone: 'error' });
     }, []);
+    const notifySuccess = useCallback((message: string) => {
+        setNotification({ id: createId(), message, tone: 'success' });
+    }, []);
     const dismissNotification = useCallback(() => setNotification(null), []);
 
     const recordExport = useCallback((filename: string, pageCount: number, mode: ExportHistoryEntry['mode']) => {
+        const nextEntry: ExportHistoryEntry = {
+            id: createId(),
+            filename,
+            exportedAt: Date.now(),
+            pageCount,
+            mode,
+        };
+
+        let nextHistory: ExportHistoryEntry[] = [];
         setExportHistory(prev => {
-            const nextHistory = [
-                {
-                    id: createId(),
-                    filename,
-                    exportedAt: Date.now(),
-                    pageCount,
-                    mode,
-                },
-                ...prev,
-            ].slice(0, MAX_EXPORT_HISTORY);
-
-            if (isSessionPersistenceEnabled) {
-                localStorage.setItem(EXPORT_HISTORY_STORAGE_KEY, JSON.stringify(nextHistory));
-            }
-
+            nextHistory = [nextEntry, ...prev].slice(0, MAX_EXPORT_HISTORY);
             return nextHistory;
         });
+
+        if (isSessionPersistenceEnabled) {
+            localStorage.setItem(EXPORT_HISTORY_STORAGE_KEY, JSON.stringify(nextHistory));
+        }
     }, [isSessionPersistenceEnabled]);
 
     const setSessionPersistenceEnabled = useCallback((enabled: boolean) => {
@@ -514,26 +594,60 @@ export const usePdfEditor = () => {
                     return;
                 }
 
+                const persistedBytes = persistedSession.files.reduce(
+                    (total, persistedFile) => total + persistedFile.buffer.byteLength,
+                    0,
+                );
+                if (
+                    persistedSession.files.length > MAX_IMPORT_FILES ||
+                    persistedSession.pages.length > MAX_IMPORT_PAGES ||
+                    persistedBytes > MAX_IMPORT_TOTAL_SIZE_BYTES
+                ) {
+                    throw new Error('The saved session exceeds the current safety limits.');
+                }
+
                 persistedFileCacheRef.current = Object.fromEntries(
                     persistedSession.files.map((persistedFile) => [persistedFile.id, persistedFile])
                 );
 
-                const restoredFiles = await Promise.all(
-                    persistedSession.files.map(async (persistedFile) => {
+                const restoredFiles: (readonly [string, EditorFile])[] = [];
+                let restoreFailure: unknown = null;
+                let restoreCancelled = false;
+
+                for (const persistedFile of persistedSession.files) {
+                    if (isCancelled) {
+                        restoreCancelled = true;
+                        break;
+                    }
+                    try {
                         const file = new File([cloneArrayBuffer(persistedFile.buffer)], persistedFile.name, {
                             type: persistedFile.type,
                             lastModified: persistedFile.lastModified,
                         });
-                        const pdfDoc = await loadPdfDocument({ data: cloneArrayBuffer(persistedFile.buffer) });
+                        const { pdfDoc, loadingTask } = await loadPdfDocumentWithTask({ data: cloneArrayBuffer(persistedFile.buffer) });
 
-                        return [persistedFile.id, {
+                        restoredFiles.push([persistedFile.id, {
                             id: persistedFile.id,
                             file,
                             pageCount: persistedFile.pageCount,
                             pdfDoc,
-                        } satisfies EditorFile] as const;
-                    })
-                );
+                            loadingTask,
+                        }]);
+                    } catch (loadError) {
+                        restoreFailure = loadError;
+                        break;
+                    }
+                }
+
+                if (restoreFailure !== null || restoreCancelled || isCancelled) {
+                    restoredFiles.forEach(([, fileData]) => releasePdfDocument(fileData));
+                }
+                if (restoreFailure !== null) {
+                    throw restoreFailure;
+                }
+                if (restoreCancelled || isCancelled) {
+                    return;
+                }
 
                 setFiles(Object.fromEntries(restoredFiles));
                 setPagesHistory([persistedSession.pages.map((page) => ({
@@ -545,6 +659,9 @@ export const usePdfEditor = () => {
                 setHasSavedSession(true);
             } catch (error) {
                 console.error('Failed to restore session:', error);
+                persistedFileCacheRef.current = {};
+                await clearPersistedSession();
+                if (!isCancelled) setHasSavedSession(false);
             } finally {
                 if (!isCancelled) {
                     setIsSessionReady(true);
@@ -640,14 +757,43 @@ export const usePdfEditor = () => {
         filesRef.current = files;
     }, [files]);
 
+    useEffect(() => {
+        const referencedFileIds = new Set(
+            pagesHistory.flatMap((historyPages) => historyPages.map((page) => page.fileId)),
+        );
+        const obsoleteFiles = Object.values(files).filter(
+            (fileData) => !referencedFileIds.has(fileData.id),
+        );
+        if (obsoleteFiles.length === 0) return;
+
+        const cleanupId = window.setTimeout(() => {
+            obsoleteFiles.forEach((fileData) => {
+                releasePdfDocument(fileData.pdfDoc);
+                delete persistedFileCacheRef.current[fileData.id];
+            });
+            setFiles((currentFiles) => Object.fromEntries(
+                Object.entries(currentFiles).filter(([fileId]) => referencedFileIds.has(fileId)),
+            ));
+        }, 0);
+        return () => window.clearTimeout(cleanupId);
+    }, [files, pagesHistory]);
+
     useEffect(() => () => {
         Object.values(filesRef.current).forEach((fileData) => {
-            void fileData.pdfDoc?.cleanup();
+            releasePdfDocument(fileData.pdfDoc);
         });
     }, []);
 
     const addFiles = useCallback(async (newFiles: File[], labels: ImportLabels) => {
-        const { acceptedFiles, skippedReasons } = getAcceptedImportFiles(newFiles);
+        if (isImportingRef.current) return;
+
+        const existingFiles = Object.values(filesRef.current);
+        const existingBytes = existingFiles.reduce((total, fileData) => total + fileData.file.size, 0);
+        const { acceptedFiles, skippedReasons } = getAcceptedImportFiles(
+            newFiles,
+            existingFiles.length,
+            existingBytes,
+        );
 
         if (skippedReasons.length > 0) {
             const formattedReasons = skippedReasons.map((reason) => {
@@ -667,6 +813,7 @@ export const usePdfEditor = () => {
             return;
         }
 
+        isImportingRef.current = true;
         setIsProcessing(true);
         try {
             const newFilesMap: Record<string, EditorFile> = {};
@@ -674,6 +821,21 @@ export const usePdfEditor = () => {
             const failedReasons: string[] = [];
             const pdfLib = await loadPdfLib();
             let importedPageCount = pages.length;
+            let importedFileBytes = existingBytes;
+
+            const storeImportedFile = (fileId: string, fileData: EditorFile) => {
+                if (existingFiles.length + Object.keys(newFilesMap).length >= MAX_IMPORT_FILES) {
+                    releasePdfDocument(fileData.pdfDoc);
+                    throw new ImportLimitError(labels.fileCount);
+                }
+                if (importedFileBytes + fileData.file.size > MAX_IMPORT_TOTAL_SIZE_BYTES) {
+                    releasePdfDocument(fileData.pdfDoc);
+                    throw new ImportLimitError(labels.batchSize);
+                }
+
+                newFilesMap[fileId] = fileData;
+                importedFileBytes += fileData.file.size;
+            };
 
             const appendFilePages = (fileId: string, pageCount: number) => {
                 if (importedPageCount + pageCount > MAX_IMPORT_PAGES) {
@@ -731,12 +893,12 @@ export const usePdfEditor = () => {
                     const newFileName = file.name.replace(/\.(jpg|jpeg|png)$/i, '.pdf');
                     const newFile = new File([arrayBuffer], newFileName, { type: 'application/pdf' });
 
-                    newFilesMap[fileId] = {
+                    storeImportedFile(fileId, {
                         id: fileId,
                         file: newFile,
-                        pdfDoc: await loadPdfDocument({ data: cloneArrayBuffer(arrayBuffer) }),
+                        ...await loadPdfDocumentWithTask({ data: cloneArrayBuffer(arrayBuffer) }),
                         pageCount: 1
-                    };
+                    });
 
                     appendFilePages(fileId, 1);
                     continue;
@@ -916,17 +1078,17 @@ export const usePdfEditor = () => {
                     const newFileName = file.name.replace(/\.docx$/i, '.pdf');
                     const newFile = new File([arrayBuffer], newFileName, { type: 'application/pdf' });
 
-                    const loadingTask = await getPdfDocument({ data: cloneArrayBuffer(arrayBuffer) });
-                    const loadedPdf = await loadingTask.promise;
+                    const { pdfDoc: docxPdf, loadingTask: docxTask } = await loadPdfDocumentWithTask({ data: cloneArrayBuffer(arrayBuffer) });
 
-                    newFilesMap[fileId] = {
+                    storeImportedFile(fileId, {
                         id: fileId,
                         file: newFile,
-                        pdfDoc: loadedPdf,
-                        pageCount: loadedPdf.numPages
-                    };
+                        pdfDoc: docxPdf,
+                        loadingTask: docxTask,
+                        pageCount: docxPdf.numPages
+                    });
 
-                    appendFilePages(fileId, loadedPdf.numPages);
+                    appendFilePages(fileId, docxPdf.numPages);
                     continue;
                 }
 
@@ -1154,36 +1316,44 @@ export const usePdfEditor = () => {
                         const newFileName = file.name.replace(/\.odt$/i, '.pdf');
                         const newFile = new File([arrayBuffer], newFileName, { type: 'application/pdf' });
 
-                        const loadingTask = await getPdfDocument({ data: cloneArrayBuffer(arrayBuffer) });
-                        const loadedPdf = await loadingTask.promise;
+                        const { pdfDoc: odtPdf, loadingTask: odtTask } = await loadPdfDocumentWithTask({ data: cloneArrayBuffer(arrayBuffer) });
 
-                        newFilesMap[fileId] = {
+                        storeImportedFile(fileId, {
                             id: fileId,
                             file: newFile,
-                            pdfDoc: loadedPdf,
-                            pageCount: loadedPdf.numPages
-                        };
+                            pdfDoc: odtPdf,
+                            loadingTask: odtTask,
+                            pageCount: odtPdf.numPages
+                        });
 
-                        appendFilePages(fileId, loadedPdf.numPages);
+                        appendFilePages(fileId, odtPdf.numPages);
                         continue;
                     }
                 }
 
-                const loadingTask = await getPdfDocument({ data: cloneArrayBuffer(arrayBuffer) });
-                const pdfDoc = await loadingTask.promise;
+                const { pdfDoc, loadingTask } = await loadPdfDocumentWithTask({ data: cloneArrayBuffer(arrayBuffer) });
 
-                newFilesMap[fileId] = {
+                storeImportedFile(fileId, {
                     id: fileId,
                     file,
                     pdfDoc,
+                    loadingTask,
                     pageCount: pdfDoc.numPages
-                };
+                });
 
                 appendFilePages(fileId, pdfDoc.numPages);
             } catch (error) {
-                void newFilesMap[fileId]?.pdfDoc?.cleanup();
+                const failedFileData = newFilesMap[fileId];
+                if (failedFileData) {
+                    importedFileBytes -= failedFileData.file.size;
+                    releasePdfDocument(failedFileData.pdfDoc);
+                }
                 delete newFilesMap[fileId];
-                failedReasons.push(file.name);
+                if (error instanceof ImportLimitError) {
+                    failedReasons.push(`${file.name}: ${error.message}`);
+                } else {
+                    failedReasons.push(file.name);
+                }
                 console.error(`Error loading file ${file.name}:`, error);
             }
         }
@@ -1196,11 +1366,15 @@ export const usePdfEditor = () => {
             }
             if (newPages.length > 0) {
                 setPages(prev => [...prev, ...newPages]);
+                if (!failedReasons.length && labels.success) {
+                    notifySuccess(labels.success);
+                }
             }
         } finally {
+            isImportingRef.current = false;
             setIsProcessing(false);
         }
-    }, [pages.length, setPages, notifyError]);
+    }, [pages.length, setPages, notifyError, notifySuccess]);
 
     const movePage = useCallback((activeId: string, overId: string) => {
         setPages((items) => {
@@ -1268,14 +1442,16 @@ export const usePdfEditor = () => {
 
     const clearAll = useCallback(() => {
         Object.values(filesRef.current).forEach((fileData) => {
-            void fileData.pdfDoc?.cleanup();
+            releasePdfDocument(fileData.pdfDoc);
         });
         filesRef.current = {};
         setFiles({});
         // Reset history completely
         setPagesHistory([[]]);
         setPagesCurrentIndex(0);
-        void clearPersistedSession();
+        setExportHistory([]);
+        setPrintOverlayOptions(DEFAULT_PRINT_OVERLAY_OPTIONS);
+        void clearSensitiveBrowserData();
         setHasSavedSession(false);
     }, [setPagesHistory, setPagesCurrentIndex]);
 
@@ -1509,10 +1685,14 @@ export const usePdfEditor = () => {
     ) => {
         const pdfLib = await loadPdfLib();
         const { width, height } = pdfPage.getSize();
-        const overlayFont = await pdfPage.doc.embedFont(pdfLib.StandardFonts.Helvetica);
         const normalizedWatermark = printOverlayOptions.watermarkText.trim();
         const normalizedHeader = printOverlayOptions.headerText.trim();
         const normalizedFooter = printOverlayOptions.footerText.trim();
+        const overlayFont = await getOverlayFont(
+            pdfPage.doc,
+            [normalizedWatermark, normalizedHeader, normalizedFooter],
+            pdfLib,
+        );
 
         if (normalizedWatermark) {
             const watermarkSize = Math.max(36, Math.min(width, height) * 0.08);
@@ -1678,7 +1858,7 @@ export const usePdfEditor = () => {
 
     const exportPdf = useCallback(async (labels?: ExportLabels, pageIds?: string[]) => {
         const sourcePages = pageIds?.length
-            ? pages.filter(page => pageIds.includes(page.id))
+            ? orderItemsByIds(pages, pageIds, (page) => page.id)
             : pages;
 
         if (sourcePages.length === 0) {
@@ -1693,13 +1873,18 @@ export const usePdfEditor = () => {
             const filename = `${prefix}_${pageSize === 'Original' ? originalName : pageSize}.pdf`;
             downloadPdfBytes(pdfBytes, filename);
             recordExport(filename, sourcePages.length, pageIds?.length ? 'selection' : 'all');
+            if (labels?.missingPagesWarning && sourcePages.some((page) => !files[page.fileId])) {
+                notifyError(labels.missingPagesWarning);
+            } else if (labels?.success) {
+                notifySuccess(labels.success);
+            }
         } catch (error) {
             console.error('Error exporting PDF:', error);
             notifyError(labels?.failed ?? 'Failed to export PDF.');
         } finally {
             setIsProcessing(false);
         }
-    }, [pages, buildPdfBytes, pageSize, recordExport, notifyError]);
+    }, [pages, files, buildPdfBytes, pageSize, recordExport, notifyError, notifySuccess]);
 
     const exportPageRange = useCallback(async (
         startPage: number,
@@ -1723,6 +1908,11 @@ export const usePdfEditor = () => {
             const filename = `${prefix}_${rangeStart}-${rangeEnd}_${sizeLabel}.pdf`;
             downloadPdfBytes(pdfBytes, filename);
             recordExport(filename, sourcePages.length, 'range');
+            if (labels?.missingPagesWarning && sourcePages.some((page) => !files[page.fileId])) {
+                notifyError(labels.missingPagesWarning);
+            } else if (labels?.success) {
+                notifySuccess(labels.success);
+            }
             return true;
         } catch (error) {
             console.error('Error exporting PDF range:', error);
@@ -1731,7 +1921,7 @@ export const usePdfEditor = () => {
         } finally {
             setIsProcessing(false);
         }
-    }, [pages, buildPdfBytes, pageSize, recordExport, notifyError]);
+    }, [pages, files, buildPdfBytes, pageSize, recordExport, notifyError, notifySuccess]);
 
     const splitPdf = useCallback(async (
         mode: 'single' | 'odd-even',
@@ -1764,6 +1954,11 @@ export const usePdfEditor = () => {
                 downloadPdfBytes(pdfBytes, group.filename);
                 recordExport(group.filename, group.pages.length, mode === 'single' ? 'split-single' : 'split-odd-even');
             }
+            if (labels?.missingPagesWarning && groups.some((group) => group.pages.some((page) => !files[page.fileId]))) {
+                notifyError(labels.missingPagesWarning);
+            } else if (labels?.success) {
+                notifySuccess(labels.success);
+            }
             return true;
         } catch (error) {
             console.error('Error splitting PDF:', error);
@@ -1772,7 +1967,7 @@ export const usePdfEditor = () => {
         } finally {
             setIsProcessing(false);
         }
-    }, [pages, buildPdfBytes, recordExport, notifyError]);
+    }, [pages, files, buildPdfBytes, recordExport, notifyError, notifySuccess]);
 
     const exportProtectedPdf = useCallback(async (
         password: string,
@@ -1805,6 +2000,11 @@ export const usePdfEditor = () => {
             const filename = `${prefix}_${sizeLabel}.pdf`;
             downloadPdfBytes(protectedBytes, filename);
             recordExport(filename, pages.length, 'protected');
+            if (labels?.missingPagesWarning && pages.some((page) => !files[page.fileId])) {
+                notifyError(labels.missingPagesWarning);
+            } else if (labels?.success) {
+                notifySuccess(labels.success);
+            }
             return true;
         } catch (error) {
             console.error('Error protecting PDF:', error);
@@ -1813,7 +2013,7 @@ export const usePdfEditor = () => {
         } finally {
             setIsProcessing(false);
         }
-    }, [pages, buildPdfBytes, pageSize, recordExport, notifyError]);
+    }, [pages, files, buildPdfBytes, pageSize, recordExport, notifyError, notifySuccess]);
 
     const unlockPdfFile = useCallback(async (
         file: File | null,
@@ -1849,8 +2049,21 @@ export const usePdfEditor = () => {
             const prefix = labels?.downloadPrefix ?? 'unlocked_document';
             const baseName = file.name.replace(/\.pdf$/i, '');
             const filename = `${prefix}_${baseName}.pdf`;
+
+            let unlockedPageCount = 0;
+            try {
+                const pdfLib = await loadPdfLib();
+                const unlockedDoc = await pdfLib.PDFDocument.load(unlockedBytes);
+                unlockedPageCount = unlockedDoc.getPageCount();
+            } catch (countError) {
+                console.error('Could not determine the unlocked PDF page count:', countError);
+            }
+
             downloadPdfBytes(unlockedBytes, filename);
-            recordExport(filename, 0, 'unlocked');
+            recordExport(filename, unlockedPageCount, 'unlocked');
+            if (labels?.success) {
+                notifySuccess(labels.success);
+            }
             return true;
         } catch (error) {
             console.error('Error unlocking PDF:', error);
@@ -1863,7 +2076,7 @@ export const usePdfEditor = () => {
         } finally {
             setIsProcessing(false);
         }
-    }, [recordExport, notifyError]);
+    }, [recordExport, notifyError, notifySuccess]);
 
     const updatePageAnnotations = useCallback((
         pageId: string,
@@ -1917,6 +2130,7 @@ export const usePdfEditor = () => {
         redo,
         canUndo,
         canRedo,
-        updatePageAnnotations
+        updatePageAnnotations,
+        notifySuccess
     };
 };

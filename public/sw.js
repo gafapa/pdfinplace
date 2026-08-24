@@ -1,5 +1,5 @@
 const CACHE_PREFIX = 'pageforge-cache-';
-const CACHE_NAME = `${CACHE_PREFIX}v7`;
+const CACHE_NAME = `${CACHE_PREFIX}v8`;
 const BASE_PATH = new URL(self.registration.scope).pathname;
 const MAX_CACHE_ENTRIES = 80;
 const MAX_CACHEABLE_RESPONSE_BYTES = 5 * 1024 * 1024;
@@ -18,7 +18,15 @@ const trimCache = async (cache) => {
   const keys = await cache.keys();
   if (keys.length <= MAX_CACHE_ENTRIES) return;
 
-  await Promise.all(keys.slice(0, keys.length - MAX_CACHE_ENTRIES).map((request) => cache.delete(request)));
+  const removableKeys = keys.filter((request) => {
+    const pathname = new URL(request.url).pathname;
+    return !APP_SHELL_PATHS.has(pathname);
+  });
+  await Promise.all(
+    removableKeys
+      .slice(0, keys.length - MAX_CACHE_ENTRIES)
+      .map((request) => cache.delete(request))
+  );
 };
 
 const isCacheableStaticRequest = (request, url) => {
@@ -32,6 +40,19 @@ const isCacheableStaticRequest = (request, url) => {
     ['script', 'style', 'worker', 'font', 'image'].includes(request.destination) ||
     /\.(?:bcmap|icc|wasm|ttf|pfb)$/i.test(url.pathname)
   );
+};
+
+const isPdfJsRequest = (url) =>
+  url.pathname.startsWith(`${BASE_PATH}pdfjs/`);
+
+const fetchAndCache = async (request) => {
+  const response = await fetch(request);
+  if (!await shouldCacheResponse(response)) return response;
+
+  const cache = await caches.open(CACHE_NAME);
+  await cache.put(request, response.clone());
+  await trimCache(cache);
+  return response;
 };
 
 const shouldCacheResponse = async (response) => {
@@ -98,24 +119,27 @@ self.addEventListener('fetch', (event) => {
     return;
   }
 
+  if (isPdfJsRequest(url)) {
+    event.respondWith(
+      fetchAndCache(request).catch(async () => {
+        const cached = await caches.match(request);
+        if (cached) return cached;
+        throw new Error('PDF.js asset is unavailable.');
+      })
+    );
+    return;
+  }
+
   event.respondWith(
     caches.match(request).then((cached) => {
       if (cached) return cached;
       if (!isCacheableStaticRequest(request, url)) return fetch(request);
 
-      return fetch(request)
-        .then(async (response) => {
-          if (!await shouldCacheResponse(response)) {
-            return response;
-          }
-
-          const responseClone = response.clone();
-          const cache = await caches.open(CACHE_NAME);
-          await cache.put(request, responseClone);
-          await trimCache(cache);
-          return response;
-        })
-        .catch(() => cached);
+      return fetchAndCache(request)
+        .catch((error) => {
+          if (cached) return cached;
+          throw error;
+        });
     })
   );
 });

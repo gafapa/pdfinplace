@@ -5,6 +5,13 @@ export interface EditorCanvasSize {
     height: number;
 }
 
+interface AnnotationBounds {
+    x: number;
+    y: number;
+    width: number;
+    height: number;
+}
+
 const PORTRAIT_MAX_SIZE: EditorCanvasSize = { width: 800, height: 1000 };
 const LANDSCAPE_MAX_SIZE: EditorCanvasSize = { width: 1000, height: 800 };
 
@@ -22,6 +29,39 @@ export const getEditorCanvasSize = (pageWidth: number, pageHeight: number): Edit
 
 export const getLegacyEditorCanvasSize = (rotation: number): EditorCanvasSize =>
     rotation % 180 === 0 ? PORTRAIT_MAX_SIZE : LANDSCAPE_MAX_SIZE;
+
+export const transformAnnotationBounds = (
+    annotation: Annotation,
+    targetBounds: AnnotationBounds,
+): Annotation => {
+    if (annotation.type !== 'drawing') {
+        return {
+            ...structuredClone(annotation),
+            ...targetBounds,
+        };
+    }
+
+    const data = annotation.data as DrawingAnnotationData;
+    const scaleX = annotation.width === 0 ? 1 : targetBounds.width / annotation.width;
+    const scaleY = annotation.height === 0 ? 1 : targetBounds.height / annotation.height;
+
+    return {
+        ...structuredClone(annotation),
+        ...targetBounds,
+        data: {
+            ...data,
+            strokeWidth: data.strokeWidth * Math.min(Math.abs(scaleX), Math.abs(scaleY)),
+            points: data.points.map((point) => ({
+                x: annotation.width === 0
+                    ? point.x + (targetBounds.x - annotation.x)
+                    : targetBounds.x + ((point.x - annotation.x) * scaleX),
+                y: annotation.height === 0
+                    ? point.y + (targetBounds.y - annotation.y)
+                    : targetBounds.y + ((point.y - annotation.y) * scaleY),
+            })),
+        },
+    };
+};
 
 export const scaleAnnotations = (
     annotations: Annotation[],

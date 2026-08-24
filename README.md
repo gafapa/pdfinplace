@@ -2,7 +2,7 @@
 
 PageForge is a browser-based PDF editor built with React, TypeScript, Vite, Tailwind CSS, pdf.js, pdf-lib, fontkit, and @libpdf/core.
 
-It runs entirely in the browser. Imported documents, reusable signatures/stamps, preferences, and the current session are stored locally in the user's browser storage.
+It runs entirely in the browser. Documents remain in memory unless the user enables local-session persistence. With persistence enabled, the current session and reusable signatures/stamps are stored locally in the user's browser storage.
 
 ## Features
 
@@ -30,9 +30,10 @@ Node.js `20.19+`, `22.12+`, or `24+` is required.
 
 ```bash
 npm run lint
+npm run check:sw
 npm test
 npm run build
-npm audit --omit=dev
+npm audit
 ```
 
 The project includes a local `.npmrc` that points npm to the official npm registry, so `npm audit` works even when a global npm mirror is configured.
@@ -63,20 +64,20 @@ See [DEPLOYMENT.md](./DEPLOYMENT.md) for static hosting, caching, HTTPS, and sec
 
 PageForge does not upload files to a server. The browser stores:
 
-- The current editing session in IndexedDB.
+- The current editing session in IndexedDB when local-session persistence is enabled.
 - Export history and UI preferences in localStorage.
-- Saved signatures and stamps in localStorage.
+- Saved signatures and stamps in IndexedDB when local-session persistence is enabled.
 - PWA shell and same-origin assets in the service worker cache.
 
-Use the in-app clear action or the browser site-data controls to remove local data.
+The in-app clear action removes the current session, export history, output options, and saved signatures/stamps. Browser site-data controls also remove non-sensitive UI preferences such as language and zoom.
 
 ## Import Limits
 
 The app rejects oversized imports before expensive parsing or rendering:
 
-- Maximum files per batch: 20.
+- Maximum resident source files, including files retained for undo: 20.
 - Maximum single file size: 75 MB.
-- Maximum batch size: 250 MB.
+- Maximum resident source data, including files retained for undo: 250 MB.
 - Maximum active imported pages: 500.
 - Maximum imported image size: 32 megapixels.
 - Maximum rendered DOCX/ODT area: 32 megapixels.
@@ -85,7 +86,7 @@ The app rejects oversized imports before expensive parsing or rendering:
 - Maximum single uncompressed archive entry: 50 MB.
 - Maximum total uncompressed archive size: 150 MB.
 
-Office archives are inspected before their contents are rendered. These limits reduce the risk of browser memory exhaustion from oversized documents and compressed archive bombs.
+Office archives are inspected before their contents are rendered. Source files that are no longer referenced by the bounded undo history are released. These limits reduce the risk of browser memory exhaustion from oversized documents and compressed archive bombs.
 
 ## Existing Content Editing
 

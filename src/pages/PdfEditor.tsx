@@ -1,4 +1,4 @@
-import { Suspense, lazy, useCallback, useEffect, useMemo, useRef, useState, type MouseEvent as ReactMouseEvent } from 'react';
+import { Suspense, lazy, memo, useCallback, useEffect, useMemo, useRef, useState, type MouseEvent as ReactMouseEvent } from 'react';
 import { usePdfEditor, type EditorFile, type EditorPage, type PageSize } from '../hooks/usePdfEditor';
 import { PdfPreview } from '../components/PdfPreview';
 import { DndContext, closestCenter, KeyboardSensor, PointerSensor, useSensor, useSensors, DragOverlay } from '@dnd-kit/core';
@@ -70,7 +70,7 @@ interface SortablePageProps {
 }
 
 // Sortable Item Component
-const SortablePage = ({
+const SortablePage = memo(function SortablePage({
     id,
     page,
     file,
@@ -89,7 +89,7 @@ const SortablePage = ({
     selectLabel,
     deselectLabel,
     editLabel,
-}: SortablePageProps) => {
+}: SortablePageProps) {
     const {
         attributes,
         listeners,
@@ -201,7 +201,7 @@ const SortablePage = ({
             </div>
         </div>
     );
-};
+});
 
 export const PdfEditor = () => {
     const { locale, setLocale, t } = useI18n();
@@ -215,6 +215,7 @@ export const PdfEditor = () => {
         hasSavedSession,
         isSessionPersistenceEnabled,
         setSessionPersistenceEnabled,
+        exportHistory,
         pageSize,
         setPageSize,
         printOverlayOptions,
@@ -253,6 +254,7 @@ export const PdfEditor = () => {
     const [unlockPassword, setUnlockPassword] = useState('');
     const [unlockFile, setUnlockFile] = useState<File | null>(null);
     const [uiError, setUiError] = useState('');
+    const [isClearAllDialogOpen, setIsClearAllDialogOpen] = useState(false);
     const addFilesInputRef = useRef<HTMLInputElement>(null);
     const unlockFileInputRef = useRef<HTMLInputElement>(null);
     const selectedPageIdsValid = useMemo(
@@ -260,11 +262,23 @@ export const PdfEditor = () => {
         [selectedPageIds, pages]
     );
     const selectedPageIdSet = useMemo(() => new Set(selectedPageIdsValid), [selectedPageIdsValid]);
+    const selectionOrderMap = useMemo(
+        () => new Map(selectedPageIdsValid.map((pageId, index) => [pageId, index + 1])),
+        [selectedPageIdsValid],
+    );
 
     const toolbarButtonClass = "inline-flex h-10 w-10 items-center justify-center rounded-md border border-gray-200 bg-white hover:bg-gray-50 text-gray-700 text-xs font-medium transition-colors motion-reduce:transition-none whitespace-nowrap disabled:opacity-40 disabled:cursor-not-allowed focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-600 focus-visible:ring-offset-1";
     const toolbarIconButtonClass = toolbarButtonClass;
     const canExport = pages.length > 0 && !isProcessing;
     const hasSelectedPages = selectedPageIdsValid.length > 0 && !isProcessing;
+    const activeOverlayCount = [
+        printOverlayOptions.watermarkText.trim().length > 0,
+        printOverlayOptions.headerText.trim().length > 0,
+        printOverlayOptions.footerText.trim().length > 0,
+        printOverlayOptions.includePageNumbers,
+        printOverlayOptions.cropPercent > 0,
+        printOverlayOptions.marginPercent > 0,
+    ].filter(Boolean).length;
 
     useEffect(() => {
         localStorage.setItem('pageforge.editor.scale', scale.toString());
@@ -278,6 +292,25 @@ export const PdfEditor = () => {
         localStorage.setItem('pageforge.editor.export-panel-open', String(isExportPanelOpen));
     }, [isExportPanelOpen]);
 
+    useEffect(() => {
+        if (notification?.tone !== 'success') {
+            return;
+        }
+        const timer = window.setTimeout(() => dismissNotification(), 4000);
+        return () => window.clearTimeout(timer);
+    }, [notification, dismissNotification]);
+
+    useEffect(() => {
+        const handleBeforeUnload = (event: BeforeUnloadEvent) => {
+            if (!isProcessing && pages.length > 0 && !isSessionPersistenceEnabled) {
+                event.preventDefault();
+                event.returnValue = '';
+            }
+        };
+        window.addEventListener('beforeunload', handleBeforeUnload);
+        return () => window.removeEventListener('beforeunload', handleBeforeUnload);
+    }, [isProcessing, pages.length, isSessionPersistenceEnabled]);
+
     const handleFilesPicked = useCallback((filesList: FileList | null) => {
         if (!filesList || isProcessing) {
             return;
@@ -289,6 +322,7 @@ export const PdfEditor = () => {
             unsupported: t('editor.importUnsupported'),
             fileSize: t('editor.importFileSize'),
             batchSize: t('editor.importBatchSize'),
+            success: t('editor.importSuccess'),
         });
     }, [addFiles, isProcessing, t]);
 
@@ -308,6 +342,8 @@ export const PdfEditor = () => {
             failed: t('editor.exportFailed'),
             downloadPrefix: t('editor.downloadPrefix'),
             originalName: t('editor.originalSizeName'),
+            missingPagesWarning: t('editor.missingPagesWarning'),
+            success: t('editor.exportSuccess'),
         });
     }, [
         canExport,
@@ -324,6 +360,8 @@ export const PdfEditor = () => {
             failed: t('editor.exportFailed'),
             downloadPrefix: t('editor.downloadPrefix'),
             originalName: t('editor.originalSizeName'),
+            missingPagesWarning: t('editor.missingPagesWarning'),
+            success: t('editor.exportSuccess'),
         }, selectedPageIdsValid);
     }, [selectedPageIdsValid, isProcessing, exportPdf, t]);
 
@@ -337,7 +375,8 @@ export const PdfEditor = () => {
             start < 1 ||
             end < 1 ||
             start > pages.length ||
-            end > pages.length
+            end > pages.length ||
+            start > end
         ) {
             setUiError(t('editor.invalidRange'));
             return;
@@ -347,6 +386,8 @@ export const PdfEditor = () => {
             failed: t('editor.exportFailed'),
             downloadPrefix: t('editor.downloadPrefix'),
             originalName: t('editor.originalSizeName'),
+            missingPagesWarning: t('editor.missingPagesWarning'),
+            success: t('editor.exportSuccess'),
         });
     }, [rangeStart, rangeEnd, pages.length, exportPageRange, t]);
 
@@ -355,6 +396,8 @@ export const PdfEditor = () => {
             failed: t('editor.exportFailed'),
             downloadPrefix: t('editor.downloadPrefix'),
             originalName: t('editor.originalSizeName'),
+            missingPagesWarning: t('editor.missingPagesWarning'),
+            success: t('editor.exportSuccess'),
             splitDownloadPrefix: t('editor.splitDownloadPrefix'),
             oddSuffix: t('editor.splitOddFile'),
             evenSuffix: t('editor.splitEvenFile'),
@@ -367,6 +410,8 @@ export const PdfEditor = () => {
             failed: t('editor.exportFailed'),
             downloadPrefix: t('editor.downloadPrefix'),
             originalName: t('editor.originalSizeName'),
+            missingPagesWarning: t('editor.missingPagesWarning'),
+            success: t('editor.exportSuccess'),
             splitDownloadPrefix: t('editor.splitDownloadPrefix'),
             oddSuffix: t('editor.splitOddFile'),
             evenSuffix: t('editor.splitEvenFile'),
@@ -378,6 +423,66 @@ export const PdfEditor = () => {
         setSelectedPageIds([]);
         setLastSelectedPageId(null);
     }, []);
+
+    useEffect(() => {
+        const handleKeyDown = (e: KeyboardEvent) => {
+            const target = e.target as HTMLElement | null;
+            const isFormField = Boolean(
+                target && (
+                    target.tagName === 'INPUT' ||
+                    target.tagName === 'SELECT' ||
+                    target.tagName === 'TEXTAREA' ||
+                    target.isContentEditable
+                ),
+            );
+            const isDialogOpen = editingPageId !== null ||
+                isProtectDialogOpen ||
+                isUnlockDialogOpen ||
+                isClearAllDialogOpen;
+
+            if (isFormField || isDialogOpen || isProcessing) {
+                return;
+            }
+
+            const hasModifier = e.ctrlKey || e.metaKey;
+            if (hasModifier && !e.altKey && (e.key === 'z' || e.key === 'Z')) {
+                e.preventDefault();
+                if (e.shiftKey) {
+                    redo();
+                } else {
+                    undo();
+                }
+                return;
+            }
+            if (hasModifier && (e.key === 'y' || e.key === 'Y')) {
+                e.preventDefault();
+                redo();
+                return;
+            }
+            if ((e.key === 'Delete' || e.key === 'Backspace') && selectedPageIdsValid.length > 0) {
+                e.preventDefault();
+                deletePages(selectedPageIdsValid);
+                clearSelection();
+                return;
+            }
+            if (e.key === 'Escape' && selectedPageIdsValid.length > 0) {
+                clearSelection();
+            }
+        };
+        window.addEventListener('keydown', handleKeyDown);
+        return () => window.removeEventListener('keydown', handleKeyDown);
+    }, [
+        editingPageId,
+        isProtectDialogOpen,
+        isUnlockDialogOpen,
+        isClearAllDialogOpen,
+        isProcessing,
+        redo,
+        undo,
+        selectedPageIdsValid,
+        deletePages,
+        clearSelection,
+    ]);
 
     const selectAllPages = useCallback(() => {
         setSelectedPageIds(pages.map(page => page.id));
@@ -469,12 +574,14 @@ export const PdfEditor = () => {
         setIsProtectDialogOpen(false);
         setProtectPassword('');
         setProtectPasswordConfirm('');
+        setUiError('');
     }, []);
 
     const closeUnlockDialog = useCallback(() => {
         setIsUnlockDialogOpen(false);
         setUnlockPassword('');
         setUnlockFile(null);
+        setUiError('');
     }, []);
 
     const triggerUnlockFilePicker = useCallback(() => {
@@ -496,6 +603,8 @@ export const PdfEditor = () => {
             invalidPassword: t('editor.invalidPassword'),
             downloadPrefix: t('editor.protectedDownloadPrefix'),
             originalName: t('editor.originalSizeName'),
+            missingPagesWarning: t('editor.missingPagesWarning'),
+            success: t('editor.protectSuccess'),
         });
 
         if (success) {
@@ -516,6 +625,7 @@ export const PdfEditor = () => {
             invalidPassword: t('editor.invalidPassword'),
             invalidFile: t('editor.unlockInvalidFile'),
             downloadPrefix: t('editor.unlockedDownloadPrefix'),
+            success: t('editor.unlockSuccess'),
         });
 
         if (success) {
@@ -535,6 +645,8 @@ export const PdfEditor = () => {
     );
     const protectDialogRef = useDialogFocus<HTMLDivElement>(isProtectDialogOpen, closeProtectDialog);
     const unlockDialogRef = useDialogFocus<HTMLDivElement>(isUnlockDialogOpen, closeUnlockDialog);
+    const closeClearAllDialog = useCallback(() => setIsClearAllDialogOpen(false), []);
+    const clearAllDialogRef = useDialogFocus<HTMLDivElement>(isClearAllDialogOpen, closeClearAllDialog);
 
     const handleDragStart = (event: DragStartEvent) => {
         setActiveId(String(event.active.id));
@@ -578,6 +690,7 @@ export const PdfEditor = () => {
                     unsupported: t('editor.importUnsupported'),
                     fileSize: t('editor.importFileSize'),
                     batchSize: t('editor.importBatchSize'),
+                    success: t('editor.importSuccess'),
                 });
             }
         }
@@ -594,26 +707,46 @@ export const PdfEditor = () => {
                 aria-live="assertive"
                 aria-atomic="true"
             >
-                {(notification || uiError) ? (
-                    <div role="alert" className="pointer-events-auto flex items-start gap-3 whitespace-pre-line rounded-lg border border-red-200 bg-white p-3 text-sm text-red-800 shadow-xl">
-                        <span className="flex-1">{uiError || notification?.message}</span>
-                        <button
-                            type="button"
-                            onClick={() => {
-                                setUiError('');
-                                dismissNotification();
-                            }}
-                            className="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-md hover:bg-red-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-red-600"
-                            aria-label={t('common.close')}
+                {(notification || uiError) ? (() => {
+                    const isError = uiError.length > 0 || notification?.tone !== 'success';
+                    return (
+                        <div
+                            role="alert"
+                            className={`pointer-events-auto flex items-start gap-3 whitespace-pre-line rounded-lg border p-3 text-sm shadow-xl ${
+                                isError
+                                    ? 'border-red-200 bg-white text-red-800'
+                                    : 'border-green-200 bg-white text-green-800'
+                            }`}
                         >
-                            <X aria-hidden="true" className="h-4 w-4" />
-                        </button>
-                    </div>
-                ) : null}
+                            <span className="flex-1">{uiError || notification?.message}</span>
+                            <button
+                                type="button"
+                                onClick={() => {
+                                    setUiError('');
+                                    dismissNotification();
+                                }}
+                                className={`inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-md focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-offset-1 ${
+                                    isError ? 'hover:bg-red-50 focus-visible:ring-red-600' : 'hover:bg-green-50 focus-visible:ring-green-600'
+                                }`}
+                                aria-label={t('common.close')}
+                            >
+                                <X aria-hidden="true" className="h-4 w-4" />
+                            </button>
+                        </div>
+                    );
+                })() : null}
             </div>
             <div role="status" aria-live="polite" className="sr-only">
                 {isProcessing ? t('common.processing') : ''}
             </div>
+            {isProcessing ? (
+                <div className="pointer-events-none fixed inset-0 z-[90] flex items-start justify-center" aria-hidden="true">
+                    <div className="mt-20 flex items-center gap-3 rounded-xl border border-gray-200 bg-white/95 px-4 py-3 text-sm font-medium text-gray-700 shadow-xl backdrop-blur">
+                        <span className="h-5 w-5 animate-spin rounded-full border-2 border-blue-500 border-t-transparent motion-reduce:animate-none" />
+                        {t('common.processing')}
+                    </div>
+                </div>
+            ) : null}
             <input
                 ref={addFilesInputRef}
                 type="file"
@@ -701,7 +834,7 @@ export const PdfEditor = () => {
                             <Plus className="w-4 h-4" />
                         </button>
                         <button
-                            onClick={clearAll}
+                            onClick={() => setIsClearAllDialogOpen(true)}
                             disabled={isProcessing}
                             className={toolbarIconButtonClass}
                             title={t('common.clear')}
@@ -716,6 +849,7 @@ export const PdfEditor = () => {
                             disabled={!canUndo}
                             className={toolbarIconButtonClass}
                             title={t('editor.undo')}
+                            aria-label={t('editor.undo')}
                         >
                             <Undo className="w-4 h-4" />
                         </button>
@@ -724,6 +858,7 @@ export const PdfEditor = () => {
                             disabled={!canRedo}
                             className={toolbarIconButtonClass}
                             title={t('editor.redo')}
+                            aria-label={t('editor.redo')}
                         >
                             <Redo className="w-4 h-4" />
                         </button>
@@ -743,11 +878,12 @@ export const PdfEditor = () => {
                         <button
                             onClick={handleExport}
                             disabled={!canExport}
-                            className={toolbarIconButtonClass}
+                            className="inline-flex h-10 items-center gap-2 rounded-md border border-blue-600 bg-blue-600 px-3 text-xs font-medium text-white hover:bg-blue-700 transition-colors whitespace-nowrap disabled:opacity-40 disabled:cursor-not-allowed focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-600 focus-visible:ring-offset-1"
                             title={t('common.export')}
                             aria-label={t('common.export')}
                         >
                             <Download className="w-4 h-4" />
+                            <span className="hidden sm:inline">{t('common.export')}</span>
                         </button>
                         <button
                             type="button"
@@ -990,17 +1126,50 @@ export const PdfEditor = () => {
                                             />
                                         </div>
                                     </section>
+
+                                    {exportHistory.length > 0 ? (
+                                        <section className="space-y-2 rounded-2xl border border-gray-200 bg-gray-50/80 p-3">
+                                            <div className="text-[11px] font-semibold uppercase tracking-[0.14em] text-gray-500">
+                                                {t('editor.recentExports')}
+                                            </div>
+                                            <ul className="space-y-1.5">
+                                                {exportHistory.map((entry) => {
+                                                    const formattedDate = new Intl.DateTimeFormat(locale, {
+                                                        dateStyle: 'short',
+                                                        timeStyle: 'short',
+                                                    }).format(entry.exportedAt);
+                                                    return (
+                                                        <li
+                                                            key={entry.id}
+                                                            className="rounded-xl border border-gray-200 bg-white px-3 py-2 text-xs text-gray-700"
+                                                        >
+                                                            <div className="truncate font-medium" title={entry.filename}>{entry.filename}</div>
+                                                            <div className="mt-0.5 flex items-center justify-between gap-2 text-[11px] text-gray-500">
+                                                                <span>{t('common.pagesCount', { count: entry.pageCount })}</span>
+                                                                <time dateTime={new Date(entry.exportedAt).toISOString()}>{formattedDate}</time>
+                                                            </div>
+                                                        </li>
+                                                    );
+                                                })}
+                                            </ul>
+                                        </section>
+                                    ) : null}
                                 </div>
                             </div>
                         </div>
                         <button
                             type="button"
                             onClick={() => setIsExportPanelOpen((prev) => !prev)}
-                            className="mb-4 inline-flex h-12 w-10 items-center justify-center rounded-r-2xl border border-l-0 border-gray-200 bg-white/95 text-gray-700 shadow-lg backdrop-blur transition hover:bg-gray-50"
+                            className="relative mb-4 inline-flex h-12 w-10 items-center justify-center rounded-r-2xl border border-l-0 border-gray-200 bg-white/95 text-gray-700 shadow-lg backdrop-blur transition hover:bg-gray-50"
                             title={isExportPanelOpen ? t('editor.closeExportPanel') : t('editor.openExportPanel')}
                             aria-label={isExportPanelOpen ? t('editor.closeExportPanel') : t('editor.openExportPanel')}
                         >
                             {isExportPanelOpen ? <ChevronLeft className="h-4 w-4" /> : <ChevronRight className="h-4 w-4" />}
+                            {!isExportPanelOpen && activeOverlayCount > 0 ? (
+                                <span className="absolute -top-1.5 left-1/2 -translate-x-1/2 rounded-full bg-blue-600 px-1.5 min-w-[18px] text-center text-[10px] font-bold leading-4 text-white shadow">
+                                    {activeOverlayCount}
+                                </span>
+                            ) : null}
                         </button>
                     </div>
                 </div>
@@ -1064,7 +1233,7 @@ export const PdfEditor = () => {
                                             rotateLabel={t('editor.rotate')}
                                             deleteLabel={t('editor.deletePage')}
                                             isSelected={selectedPageIdSet.has(page.id)}
-                                            selectionOrder={selectedPageIdsValid.indexOf(page.id) >= 0 ? selectedPageIdsValid.indexOf(page.id) + 1 : null}
+                                            selectionOrder={selectionOrderMap.get(page.id) ?? null}
                                             onToggleSelection={handleToggleSelection}
                                             selectLabel={t('editor.selectPage')}
                                             deselectLabel={t('editor.deselectPage')}
@@ -1112,6 +1281,7 @@ export const PdfEditor = () => {
                         onClick={() => setScale(s => Math.max(0.5, s - 0.1))}
                         className={toolbarIconButtonClass}
                         title={t('editor.zoomOut')}
+                        aria-label={t('editor.zoomOut')}
                     >
                         <ZoomOut className="w-4 h-4" />
                     </button>
@@ -1119,6 +1289,7 @@ export const PdfEditor = () => {
                         onClick={() => setScale(s => Math.min(2, s + 0.1))}
                         className={toolbarIconButtonClass}
                         title={t('editor.zoomIn')}
+                        aria-label={t('editor.zoomIn')}
                     >
                         <ZoomIn className="w-4 h-4" />
                     </button>
@@ -1131,6 +1302,11 @@ export const PdfEditor = () => {
             {(() => {
                 const selectedPage = editingPageId ? pages.find(p => p.id === editingPageId) : null;
                 if (!selectedPage) return null;
+                const selectedPageIndex = pages.findIndex(p => p.id === selectedPage.id);
+                const handleNavigateFromEditor = (delta: 1 | -1) => {
+                    const nextPage = pages[selectedPageIndex + delta];
+                    if (nextPage) setEditingPageId(nextPage.id);
+                };
                 return (
                     <Suspense
                         fallback={
@@ -1146,6 +1322,9 @@ export const PdfEditor = () => {
                             onSave={(annotations, contentEdits, canvasSize) => {
                                 updatePageAnnotations(selectedPage.id, annotations, contentEdits, canvasSize);
                             }}
+                            onRequestNavigate={handleNavigateFromEditor}
+                            hasPreviousPage={selectedPageIndex > 0}
+                            hasNextPage={selectedPageIndex >= 0 && selectedPageIndex < pages.length - 1}
                             pdfDocument={files[selectedPage.fileId]?.pdfDoc}
                             pageIndex={selectedPage.pageIndex}
                             pageRotation={selectedPage.rotation}
@@ -1276,6 +1455,49 @@ export const PdfEditor = () => {
                                 aria-label={t('common.save')}
                             >
                                 <Check className="h-4 w-4" />
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            ) : null}
+
+            {isClearAllDialogOpen ? (
+                <div className="fixed inset-0 z-40 flex items-center justify-center bg-black/30 p-4">
+                    <div
+                        ref={clearAllDialogRef}
+                        role="dialog"
+                        aria-modal="true"
+                        aria-labelledby="clear-all-dialog-title"
+                        aria-describedby="clear-all-dialog-description"
+                        tabIndex={-1}
+                        className="w-full max-w-sm rounded-lg border border-gray-200 bg-white p-4 shadow-xl"
+                    >
+                        <h2 id="clear-all-dialog-title" className="mb-1 text-sm font-semibold text-gray-900">{t('editor.clearAllTitle')}</h2>
+                        <p id="clear-all-dialog-description" className="mb-3 text-xs text-gray-600">{t('editor.clearAllDescription')}</p>
+                        <div className="mt-4 flex justify-end gap-2">
+                            <button
+                                type="button"
+                                autoFocus
+                                onClick={closeClearAllDialog}
+                                className="inline-flex h-9 items-center justify-center rounded-md border border-gray-200 bg-white px-3 text-xs font-medium text-gray-700 hover:bg-gray-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-600"
+                                title={t('common.cancel')}
+                                aria-label={t('common.cancel')}
+                            >
+                                {t('common.cancel')}
+                            </button>
+                            <button
+                                type="button"
+                                onClick={() => {
+                                    closeClearAllDialog();
+                                    clearSelection();
+                                    clearAll();
+                                }}
+                                disabled={isProcessing}
+                                className="inline-flex h-9 items-center justify-center rounded-md border border-red-300 bg-red-600 px-3 text-xs font-medium text-white hover:bg-red-700 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-red-600 disabled:opacity-40"
+                                title={t('common.clear')}
+                                aria-label={t('common.clear')}
+                            >
+                                {t('common.clear')}
                             </button>
                         </div>
                     </div>

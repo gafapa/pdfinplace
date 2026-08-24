@@ -1,6 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import {
     MAX_IMPORT_FILE_SIZE_BYTES,
+    MAX_IMPORT_FILES,
+    MAX_IMPORT_TOTAL_SIZE_BYTES,
     getAcceptedImportFiles,
     getImportFileKind,
     isAcceptedUnlockPdf,
@@ -28,5 +30,16 @@ describe('import validation', () => {
             size: MAX_IMPORT_FILE_SIZE_BYTES + 1,
         } as File;
         expect(isAcceptedUnlockPdf(oversizedFile)).toBe(false);
+    });
+
+    it('enforces file and byte limits across successive imports', () => {
+        const file = createFile('document.pdf', 'application/pdf');
+
+        expect(getAcceptedImportFiles([file], MAX_IMPORT_FILES, 0).acceptedFiles).toEqual([]);
+        expect(getAcceptedImportFiles(
+            [file],
+            1,
+            MAX_IMPORT_TOTAL_SIZE_BYTES - file.size + 1,
+        ).acceptedFiles).toEqual([]);
     });
 });

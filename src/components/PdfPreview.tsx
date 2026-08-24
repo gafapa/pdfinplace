@@ -8,6 +8,7 @@ import type {
 } from '../types/annotations';
 import { useI18n } from '../i18n';
 import { getPdfDocument } from '../utils/pdfjs';
+import { getLegacyEditorCanvasSize } from '../utils/pageGeometry';
 import { drawContentEditsPreview } from '../features/content-editor/drawContentEditsPreview';
 import type { ContentEdit } from '../features/content-editor/types';
 
@@ -50,17 +51,25 @@ export const PdfPreview = ({
     const imageCacheRef = useRef<Map<string, HTMLImageElement>>(new Map());
     const [loading, setLoading] = useState(true);
     const [error, setError] = useState(false);
+    const renderGenerationRef = useRef(0);
+    const renderQueueRef = useRef<Promise<void>>(Promise.resolve());
 
     useEffect(() => {
         let isMounted = true;
         let loadedPdf: PdfDocumentProxy | null = null;
         let renderTask: PdfRenderTask | null = null;
         let loadingTask: PdfLoadingTask | null = null;
+        const generation = renderGenerationRef.current + 1;
+        renderGenerationRef.current = generation;
+
+        const isCurrentRender = () => isMounted && renderGenerationRef.current === generation;
 
         const renderPreview = async () => {
             try {
-                setLoading(true);
-                setError(false);
+                if (isMounted) {
+                    setLoading(true);
+                    setError(false);
+                }
 
                 if (pdfDocument) {
                     loadedPdf = pdfDocument;
@@ -72,11 +81,17 @@ export const PdfPreview = ({
                     return;
                 }
 
-                if (!isMounted || !loadedPdf) return;
+                if (!isCurrentRender() || !loadedPdf) {
+                    if (loadingTask) void loadingTask.destroy();
+                    return;
+                }
 
                 const page = await loadedPdf.getPage(pageIndex || 1);
 
-                if (!isMounted) return;
+                if (!isCurrentRender()) {
+                    if (loadingTask) void loadingTask.destroy();
+                    return;
+                }
 
                 // Native rotation (page.rotate) + user rotation (rotation prop)
                 const totalRotation = (page.rotate + rotation) % 360;
@@ -106,6 +121,8 @@ export const PdfPreview = ({
                         renderTask = page.render(renderContext);
                         await renderTask.promise;
 
+                        if (!isCurrentRender()) return;
+
                         if (contentEdits.length > 0) {
                             await drawContentEditsPreview(
                                 context,
@@ -116,8 +133,8 @@ export const PdfPreview = ({
 
                         // Draw annotations on top if provided
                         if (annotations && annotations.length > 0) {
-                            const editorBaseWidth = annotationCanvasWidth ?? (totalRotation % 180 === 0 ? 800 : 1000);
-                            const editorBaseHeight = annotationCanvasHeight ?? (totalRotation % 180 === 0 ? 1000 : 800);
+                            const editorBaseWidth = annotationCanvasWidth ?? getLegacyEditorCanvasSize(totalRotation).width;
+                            const editorBaseHeight = annotationCanvasHeight ?? getLegacyEditorCanvasSize(totalRotation).height;
                             const annotationScaleX = canvas.width / editorBaseWidth;
                             const annotationScaleY = canvas.height / editorBaseHeight;
 
@@ -184,15 +201,26 @@ export const PdfPreview = ({
                                         img = new Image();
                                         imageCacheRef.current.set(data.dataUrl, img);
                                     }
+                                    const drawLoadedImage = () => {
+                                        context.save();
+                                        context.scale(annotationScaleX, annotationScaleY);
+                                        const centerX = ann.x + (ann.width / 2);
+                                        const centerY = ann.y + (ann.height / 2);
+                                        context.translate(centerX, centerY);
+                                        context.rotate((ann.rotation * Math.PI) / 180);
+                                        context.translate(-centerX, -centerY);
+                                        context.drawImage(img!, ann.x, ann.y, ann.width, ann.height);
+                                        context.restore();
+                                    };
                                     if (img.complete) {
-                                        context.drawImage(img, ann.x, ann.y, ann.width, ann.height);
+                                        drawLoadedImage();
                                     } else {
                                         img.onload = () => {
-                                            if (!isMounted) return;
-                                            context.save();
-                                            context.scale(annotationScaleX, annotationScaleY);
-                                            context.drawImage(img, ann.x, ann.y, ann.width, ann.height);
-                                            context.restore();
+                                            if (!isCurrentRender()) return;
+                                            drawLoadedImage();
+                                        };
+                                        img.onerror = () => {
+                                            if (isMounted) setError(true);
                                         };
                                         img.src = data.dataUrl;
                                     }
@@ -213,7 +241,7 @@ export const PdfPreview = ({
             }
         };
 
-        renderPreview();
+        renderQueueRef.current = renderQueueRef.current.then(renderPreview, renderPreview);
 
         return () => {
             isMounted = false;

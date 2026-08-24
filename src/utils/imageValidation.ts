@@ -37,7 +37,16 @@ const readJpegDimensions = (bytes: Uint8Array): ImageDimensions | null => {
         }
 
         const marker = bytes[offset + 1];
-        if (marker === 0xd8 || marker === 0xd9) {
+        if (marker === 0xff) {
+            offset += 1;
+            continue;
+        }
+        if (
+            marker === 0x01 ||
+            marker === 0xd8 ||
+            marker === 0xd9 ||
+            (marker >= 0xd0 && marker <= 0xd7)
+        ) {
             offset += 2;
             continue;
         }
