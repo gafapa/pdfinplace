@@ -915,6 +915,12 @@ export const PdfEditor = () => {
                 {pages.length > 0 ? (
                     <div className="flex flex-col gap-2 border-t border-gray-100 pt-2">
                         <div className="flex flex-wrap items-center justify-center gap-2">
+                            <span
+                                className="inline-flex h-8 items-center rounded-md border border-blue-200 bg-blue-50 px-2.5 text-xs font-semibold text-blue-700 tabular-nums"
+                                title={t('editor.selectedCount', { count: selectedPageIdsValid.length })}
+                            >
+                                {selectedPageIdsValid.length}/{pages.length}
+                            </span>
                             <button
                                 type="button"
                                 onClick={selectAllPages}
@@ -1300,9 +1306,6 @@ export const PdfEditor = () => {
                         <ZoomIn className="w-4 h-4" />
                     </button>
                 </div>
-            </div>
-            <div className="pointer-events-none absolute bottom-2 sm:bottom-3 right-2 sm:right-3 z-20 rounded-md border border-blue-200 bg-white/95 px-2.5 py-1 text-xs font-semibold text-blue-700 shadow-sm backdrop-blur">
-                {selectedPageIdsValid.length}/{pages.length}
             </div>
             {/* Page Editor Modal */}
             {(() => {
