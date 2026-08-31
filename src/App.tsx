@@ -26,7 +26,7 @@ function App() {
   const dismissWelcome = useCallback(() => setShowWelcome(false), []);
 
   return (
-    <div className="h-[100dvh] font-sans text-gray-900 bg-white">
+    <div className="h-[100dvh] bg-gray-100 font-sans text-gray-900">
       {isNonProductionEnvironment ? (
         <div
           role="status"
@@ -38,7 +38,7 @@ function App() {
       <main className="h-full overflow-hidden">
         <Suspense
           fallback={
-            <div className="flex h-full items-center justify-center bg-white">
+            <div className="flex h-full items-center justify-center bg-gray-100">
               <div className="h-8 w-8 rounded-full border-2 border-red-600 border-t-transparent animate-spin motion-reduce:animate-none" />
             </div>
           }

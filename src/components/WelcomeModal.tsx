@@ -33,36 +33,36 @@ export const WelcomeModal = ({ onClose }: WelcomeModalProps) => {
     ];
 
     return (
-        <div className="fixed inset-0 z-[300] flex items-center justify-center bg-white/85 p-4 backdrop-blur-sm">
+        <div className="dialog-backdrop fixed inset-0 z-[300] flex items-center justify-center p-4 sm:p-6">
             <div
                 role="dialog"
                 aria-modal="true"
                 aria-labelledby="welcome-title"
                 aria-describedby="welcome-description"
-                className="w-full max-w-lg rounded-2xl border border-gray-200 bg-white p-6 shadow-2xl sm:p-8"
+                className="welcome-surface w-full max-w-lg p-6 sm:p-8"
             >
-                <div className="mb-1 flex items-center gap-3">
-                    <div className="rounded-xl bg-blue-600 p-2.5 text-white shadow-sm">
+                <div className="mb-1 flex items-center gap-3 pt-1">
+                    <div className="brand-mark h-11 w-11 rounded-xl">
                         <FilePenLine aria-hidden="true" className="h-6 w-6" />
                     </div>
                     <h1 id="welcome-title" className="text-xl font-bold tracking-tight text-gray-900 sm:text-2xl">
                         {t('welcome.title')}
                     </h1>
                 </div>
-                <p id="welcome-description" className="mt-3 text-sm leading-relaxed text-gray-600">
+                <p id="welcome-description" className="mt-4 max-w-[46ch] text-sm leading-6 text-gray-600">
                     {t('welcome.description')}
                 </p>
 
-                <ul className="mt-5 space-y-2.5">
+                <ul className="mt-6 grid gap-2.5 sm:grid-cols-2">
                     {features.map((feature) => (
-                        <li key={feature.label} className="flex items-start gap-3 rounded-xl border border-gray-100 bg-gray-50/80 px-3 py-2.5">
-                            <feature.icon aria-hidden="true" className="mt-0.5 h-4 w-4 shrink-0 text-blue-600" />
+                        <li key={feature.label} className="flex items-start gap-3 rounded-xl bg-gray-50 px-3.5 py-3">
+                            <feature.icon aria-hidden="true" className="mt-0.5 h-4 w-4 shrink-0 text-red-600" />
                             <span className="text-sm font-medium text-gray-700">{feature.label}</span>
                         </li>
                     ))}
                 </ul>
 
-                <label className="mt-5 flex cursor-pointer items-center gap-2.5 text-sm text-gray-600">
+                <label className="mt-6 flex cursor-pointer items-center gap-2.5 rounded-lg py-1 text-sm text-gray-600">
                     <input
                         type="checkbox"
                         checked={dontShowAgain}
@@ -77,16 +77,16 @@ export const WelcomeModal = ({ onClose }: WelcomeModalProps) => {
                         type="button"
                         autoFocus
                         onClick={handleClose}
-                        className="inline-flex h-11 items-center justify-center rounded-xl bg-blue-600 px-6 text-sm font-semibold text-white shadow-md transition-colors hover:bg-blue-700 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-600 focus-visible:ring-offset-2"
+                        className="primary-action h-11 w-full px-6 text-sm sm:w-auto"
                     >
                         {t('welcome.start')}
                     </button>
                 </div>
 
-                <nav aria-label={t('common.legal')} className="mt-5 flex flex-wrap gap-x-4 gap-y-1 border-t border-gray-100 pt-4 text-xs text-gray-500">
-                    <a href={`./aviso-legal.html?lang=${locale}`} className="hover:text-blue-600 hover:underline">Aviso legal</a>
-                    <a href={`./privacidad.html?lang=${locale}`} className="hover:text-blue-600 hover:underline">Privacidad</a>
-                    <a href={`./terminos.html?lang=${locale}`} className="hover:text-blue-600 hover:underline">Términos de uso</a>
+                <nav aria-label={t('common.legal')} className="mt-6 flex flex-wrap gap-x-4 gap-y-1 border-t border-gray-100 pt-4 text-xs text-gray-500">
+                    <a href={`./aviso-legal.html?lang=${locale}`} className="underline-offset-4 hover:text-red-600 hover:underline">Aviso legal</a>
+                    <a href={`./privacidad.html?lang=${locale}`} className="underline-offset-4 hover:text-red-600 hover:underline">Privacidad</a>
+                    <a href={`./terminos.html?lang=${locale}`} className="underline-offset-4 hover:text-red-600 hover:underline">Términos de uso</a>
                 </nav>
             </div>
         </div>

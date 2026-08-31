@@ -48,7 +48,7 @@ const MAX_UPLOAD_IMAGE_BYTES = 10 * 1024 * 1024;
 const MAX_UPLOAD_IMAGE_PIXELS = 16_000_000;
 const MAX_SAVED_ASSETS = 30;
 const MAX_SAVED_ASSET_BYTES = 25 * 1024 * 1024;
-const discardDialogButtonClass = "inline-flex h-9 items-center justify-center rounded-md border border-gray-200 bg-white px-3 text-xs font-medium text-gray-700 hover:bg-gray-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-600";
+const discardDialogButtonClass = "inline-flex h-9 items-center justify-center rounded-lg border border-gray-200 bg-white px-3 text-xs font-medium text-gray-700 hover:bg-gray-50";
 
 interface PageEditorModalProps {
     isOpen: boolean;
@@ -1108,7 +1108,7 @@ export const PageEditorModal = ({
             aria-modal="true"
             aria-labelledby="page-editor-title"
             tabIndex={-1}
-            className="fixed inset-0 bg-white/90 z-[50] flex flex-col overflow-hidden"
+            className="workspace-shell fixed inset-0 z-[50] flex flex-col overflow-hidden"
         >
             <div aria-live="assertive" aria-atomic="true">
                 {errorMessage ? (
@@ -1125,7 +1125,7 @@ export const PageEditorModal = ({
                     </div>
                 ) : null}
             </div>
-            <div className="bg-white border-b border-gray-200 text-gray-900 px-2 sm:px-3 py-2 shadow-sm z-[60]">
+            <div className="workspace-header z-[60] px-2 py-2 text-gray-900 sm:px-3">
                 <div className="grid grid-cols-[auto_1fr_auto] items-center gap-2">
                     <h2 id="page-editor-title" className="font-semibold text-gray-700 shrink-0">
                         {t('common.page')} {pageIndex}
@@ -1236,7 +1236,7 @@ export const PageEditorModal = ({
                         ) : null}
                         <button
                             onClick={handleSave}
-                            className="h-9 w-9 inline-flex items-center justify-center rounded-lg bg-blue-600 hover:bg-blue-500 text-white transition-colors shadow-md shadow-blue-900/20 shrink-0"
+                            className="primary-action h-9 w-9 shrink-0 p-0"
                             title={t('common.save')}
                             aria-label={t('common.save')}
                         >
@@ -1474,7 +1474,7 @@ export const PageEditorModal = ({
                 </div>
             </div>
 
-            <div ref={editorViewportRef} className={`flex-1 overflow-auto custom-scrollbar bg-white p-2 pr-14 sm:p-4 sm:pr-16 lg:p-8 lg:pr-20 ${isAssetsPanelOpen ? 'lg:pl-[20rem]' : ''}`}>
+            <div ref={editorViewportRef} className={`workspace-canvas flex-1 overflow-auto p-2 pr-14 custom-scrollbar sm:p-4 sm:pr-16 lg:p-8 lg:pr-20 ${isAssetsPanelOpen ? 'lg:pl-[20rem]' : ''}`}>
                 <div className="flex min-h-full w-max min-w-full items-start justify-center">
                     <div
                         className="relative mx-auto"
@@ -1594,13 +1594,13 @@ export const PageEditorModal = ({
             </div>
             <input ref={fileInputRef} type="file" accept="image/png,image/jpeg,.png,.jpg,.jpeg" className="hidden" onChange={handleImageUpload} />
             {isDiscardDialogOpen ? (
-                <div className="fixed inset-0 z-[200] flex items-center justify-center bg-black/30 p-4">
+                <div className="dialog-backdrop fixed inset-0 z-[200] flex items-center justify-center p-4">
                     <div
                         role="dialog"
                         aria-modal="true"
                         aria-labelledby="discard-dialog-title"
                         aria-describedby="discard-dialog-description"
-                        className="w-full max-w-sm rounded-lg border border-gray-200 bg-white p-4 shadow-xl"
+                        className="dialog-surface w-full max-w-sm p-5"
                     >
                         <h2 id="discard-dialog-title" className="mb-1 text-sm font-semibold text-gray-900">{t('modal.discardTitle')}</h2>
                         <p id="discard-dialog-description" className="mb-3 text-xs text-gray-600">{t('modal.discardDescription')}</p>

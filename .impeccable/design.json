@@ -1,0 +1,226 @@
+{
+  "schemaVersion": 2,
+  "generatedAt": "2026-08-31T01:31:39.1622431+02:00",
+  "title": "Design System: PDF in Place",
+  "extensions": {
+    "colorMeta": {
+      "document-red": {
+        "role": "primary",
+        "displayName": "Document Red",
+        "canonical": "#dc2635",
+        "tonalRamp": ["#450a0a", "#7f1d1d", "#991b1b", "#dc2635", "#ef4444", "#f87171", "#fecaca", "#fef2f2"]
+      },
+      "document-red-deep": {
+        "role": "primary",
+        "displayName": "Document Red Deep",
+        "canonical": "#bd1726",
+        "tonalRamp": ["#450a0a", "#7f1d1d", "#991b1b", "#bd1726", "#dc2635", "#f87171", "#fecaca", "#fef2f2"]
+      },
+      "document-red-soft": {
+        "role": "primary",
+        "displayName": "Document Red Soft",
+        "canonical": "#fff0f1",
+        "tonalRamp": ["#450a0a", "#7f1d1d", "#991b1b", "#dc2635", "#f87171", "#fecaca", "#fee2e2", "#fff0f1"]
+      },
+      "selection-blue": {
+        "role": "secondary",
+        "displayName": "Selection Blue",
+        "canonical": "#2563eb",
+        "tonalRamp": ["#172554", "#1e3a8a", "#1e40af", "#2563eb", "#3b82f6", "#60a5fa", "#bfdbfe", "#eff6ff"]
+      },
+      "workspace-mist": {
+        "role": "neutral",
+        "displayName": "Workspace Mist",
+        "canonical": "#eef1f4",
+        "tonalRamp": ["#111827", "#374151", "#596273", "#8994a3", "#aeb7c3", "#c8d0da", "#dce1e8", "#eef1f4"]
+      },
+      "paper-white": {
+        "role": "neutral",
+        "displayName": "Paper White",
+        "canonical": "#ffffff",
+        "tonalRamp": ["#20242c", "#485163", "#596273", "#8994a3", "#c8d0da", "#dce1e8", "#f7f8fa", "#ffffff"]
+      },
+      "surface-subtle": {
+        "role": "neutral",
+        "displayName": "Surface Subtle",
+        "canonical": "#f7f8fa",
+        "tonalRamp": ["#20242c", "#485163", "#596273", "#8994a3", "#c8d0da", "#dce1e8", "#eef1f4", "#f7f8fa"]
+      },
+      "working-ink": {
+        "role": "neutral",
+        "displayName": "Working Ink",
+        "canonical": "#20242c",
+        "tonalRamp": ["#20242c", "#374151", "#596273", "#8994a3", "#aeb7c3", "#dce1e8", "#eef1f4", "#f7f8fa"]
+      },
+      "muted-slate": {
+        "role": "neutral",
+        "displayName": "Muted Slate",
+        "canonical": "#596273",
+        "tonalRamp": ["#20242c", "#374151", "#596273", "#768193", "#8994a3", "#aeb7c3", "#dce1e8", "#f7f8fa"]
+      },
+      "structural-line": {
+        "role": "neutral",
+        "displayName": "Structural Line",
+        "canonical": "#dce1e8",
+        "tonalRamp": ["#20242c", "#485163", "#596273", "#8994a3", "#aeb7c3", "#c8d0da", "#dce1e8", "#f7f8fa"]
+      },
+      "structural-line-strong": {
+        "role": "neutral",
+        "displayName": "Structural Line Strong",
+        "canonical": "#c8d0da",
+        "tonalRamp": ["#20242c", "#485163", "#596273", "#768193", "#8994a3", "#aeb7c3", "#c8d0da", "#eef1f4"]
+      }
+    },
+    "typographyMeta": {
+      "headline": {
+        "displayName": "Headline",
+        "purpose": "Welcome titles and the largest task-level messages."
+      },
+      "title": {
+        "displayName": "Title",
+        "purpose": "Product identity, empty-state headings, and dialog titles."
+      },
+      "body": {
+        "displayName": "Body",
+        "purpose": "Instructions and explanatory copy."
+      },
+      "label": {
+        "displayName": "Label",
+        "purpose": "Buttons, fields, status chips, and compact tool descriptions."
+      }
+    },
+    "shadows": [
+      {
+        "name": "low-ambient",
+        "value": "0 1px 2px rgb(15 23 42 / 0.06), 0 2px 6px rgb(15 23 42 / 0.03)",
+        "purpose": "Headers and resting controls that need slight separation."
+      },
+      {
+        "name": "working-surface",
+        "value": "0 6px 18px -8px rgb(15 23 42 / 0.18), 0 2px 5px rgb(15 23 42 / 0.05)",
+        "purpose": "Document cards, floating tools, and tactile empty-state details."
+      },
+      {
+        "name": "protected-focus",
+        "value": "0 24px 60px -24px rgb(15 23 42 / 0.32), 0 8px 20px -12px rgb(15 23 42 / 0.18)",
+        "purpose": "Dialogs, welcome surfaces, and elevated document hover states."
+      }
+    ],
+    "motion": [
+      {
+        "name": "control-response",
+        "value": "160ms cubic-bezier(0.16, 1, 0.3, 1)",
+        "purpose": "Fast feedback for control color, border, shadow, and position changes."
+      },
+      {
+        "name": "surface-lift",
+        "value": "180ms cubic-bezier(0.16, 1, 0.3, 1)",
+        "purpose": "Document-card lift and elevated surface response."
+      }
+    ],
+    "breakpoints": [
+      {
+        "name": "sm",
+        "value": "640px"
+      }
+    ]
+  },
+  "components": [
+    {
+      "name": "Primary Action",
+      "kind": "button",
+      "refersTo": "button-primary",
+      "description": "The single primary outcome within an immediate action group.",
+      "html": "<button class=\"ds-primary-action\" type=\"button\">Export PDF</button>",
+      "css": ".ds-primary-action { min-height: 2.5rem; padding: 0 0.875rem; border: 1px solid var(--primary, #dc2635); border-radius: 0.625rem; background: var(--primary, #dc2635); color: #fff; font: 700 0.75rem/1.5 'Segoe UI Variable', Aptos, 'Segoe UI', sans-serif; box-shadow: 0 8px 18px -10px rgb(220 38 53 / 0.75), 0 2px 4px rgb(220 38 53 / 0.14); transition: background 160ms cubic-bezier(0.16, 1, 0.3, 1), border-color 160ms cubic-bezier(0.16, 1, 0.3, 1), transform 160ms cubic-bezier(0.16, 1, 0.3, 1); } .ds-primary-action:hover { background: var(--primary-hover, #bd1726); border-color: var(--primary-hover, #bd1726); } .ds-primary-action:active { transform: translateY(1px); } .ds-primary-action:focus-visible { outline: 3px solid rgb(37 99 235 / 0.32); outline-offset: 2px; }"
+    },
+    {
+      "name": "Toolbar Button",
+      "kind": "button",
+      "refersTo": "button-toolbar",
+      "description": "A compact icon control for document and editor commands.",
+      "html": "<button class=\"ds-toolbar-button\" type=\"button\" aria-label=\"Add files\"><svg viewBox=\"0 0 24 24\" aria-hidden=\"true\"><path d=\"M5 12h14\"/><path d=\"M12 5v14\"/></svg></button>",
+      "css": ".ds-toolbar-button { display: inline-grid; width: 2.5rem; height: 2.5rem; place-items: center; border: 1px solid var(--border-color, #dce1e8); border-radius: 0.625rem; background: #fff; color: #485163; box-shadow: 0 1px 1px rgb(15 23 42 / 0.03); transition: background 160ms cubic-bezier(0.16, 1, 0.3, 1), border-color 160ms cubic-bezier(0.16, 1, 0.3, 1), box-shadow 160ms cubic-bezier(0.16, 1, 0.3, 1); } .ds-toolbar-button svg { width: 1rem; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; } .ds-toolbar-button:hover { background: var(--surface-subtle, #f7f8fa); border-color: var(--border-strong, #c8d0da); box-shadow: 0 1px 2px rgb(15 23 42 / 0.06), 0 2px 6px rgb(15 23 42 / 0.03); } .ds-toolbar-button:focus-visible { outline: 3px solid rgb(37 99 235 / 0.32); outline-offset: 2px; }"
+    },
+    {
+      "name": "Preference Field",
+      "kind": "input",
+      "refersTo": "field-default",
+      "description": "A compact field for locale, page size, and lightweight preferences.",
+      "html": "<label class=\"ds-field-label\">Page size<select class=\"ds-preference-field\"><option>Original</option><option>A4</option></select></label>",
+      "css": ".ds-field-label { display: grid; gap: 0.375rem; color: var(--text-secondary, #596273); font: 600 0.75rem/1.5 'Segoe UI Variable', Aptos, 'Segoe UI', sans-serif; } .ds-preference-field { height: 2.5rem; min-width: 9rem; padding: 0 0.625rem; border: 1px solid var(--border-color, #dce1e8); border-radius: 0.625rem; background: var(--surface-subtle, #f7f8fa); color: var(--text-primary, #20242c); font: 500 0.75rem/1.5 'Segoe UI Variable', Aptos, 'Segoe UI', sans-serif; } .ds-preference-field:hover { background: #fff; border-color: var(--border-strong, #c8d0da); } .ds-preference-field:focus-visible { outline: 3px solid rgb(37 99 235 / 0.32); outline-offset: 2px; }"
+    },
+    {
+      "name": "Selection Chip",
+      "kind": "chip",
+      "description": "A compact count or state label for page selection.",
+      "html": "<span class=\"ds-selection-chip\">3 / 12 selected</span>",
+      "css": ".ds-selection-chip { display: inline-flex; min-height: 2rem; align-items: center; padding: 0 0.625rem; border: 1px solid #bfdbfe; border-radius: 0.375rem; background: #eff6ff; color: #1d4ed8; font: 700 0.75rem/1.5 'Segoe UI Variable', Aptos, 'Segoe UI', sans-serif; font-variant-numeric: tabular-nums; }"
+    },
+    {
+      "name": "Document Card",
+      "kind": "card",
+      "refersTo": "document-card",
+      "description": "A tactile paper preview with selection and page-position cues.",
+      "html": "<article class=\"ds-document-card\"><span class=\"ds-page-check\" aria-hidden=\"true\"></span><div class=\"ds-document-lines\"><strong>PDF in Place</strong><span></span><span></span></div><span class=\"ds-page-number\">1</span></article>",
+      "css": ".ds-document-card { position: relative; width: 11.25rem; aspect-ratio: 0.707; overflow: hidden; border: 3px solid var(--accent, #2563eb); border-radius: 0.75rem; background: #fff; color: var(--text-primary, #20242c); box-shadow: 0 6px 18px -8px rgb(15 23 42 / 0.18), 0 2px 5px rgb(15 23 42 / 0.05); transition: transform 180ms cubic-bezier(0.16, 1, 0.3, 1), box-shadow 180ms cubic-bezier(0.16, 1, 0.3, 1); } .ds-document-card:hover { transform: translateY(-2px); box-shadow: 0 24px 60px -24px rgb(15 23 42 / 0.32), 0 8px 20px -12px rgb(15 23 42 / 0.18); } .ds-page-check { position: absolute; top: 0.375rem; left: 0.375rem; width: 1rem; height: 1rem; border: 1px solid var(--border-strong, #c8d0da); border-radius: 50%; background: #fff; } .ds-document-lines { display: grid; gap: 0.75rem; padding: 2.5rem 1.25rem; font: 600 0.625rem/1.4 'Segoe UI Variable', Aptos, 'Segoe UI', sans-serif; } .ds-document-lines span { display: block; height: 0.375rem; background: var(--surface-subtle, #f7f8fa); } .ds-document-lines span:last-child { width: 68%; } .ds-page-number { position: absolute; bottom: 0; left: 0; padding: 0.125rem 0.375rem; border-radius: 0 0.375rem 0 0; background: var(--accent, #2563eb); color: #fff; font: 700 0.75rem/1.5 'Segoe UI Variable', Aptos, 'Segoe UI', sans-serif; }"
+    },
+    {
+      "name": "Workspace Header",
+      "kind": "nav",
+      "description": "The persistent frame for product identity, status, and workspace preferences.",
+      "html": "<nav class=\"ds-workspace-header\" aria-label=\"Workspace\"><span class=\"ds-brand-mark\"><svg viewBox=\"0 0 24 24\" aria-hidden=\"true\"><path d=\"M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z\"/><path d=\"M14 2v6h6\"/></svg></span><span class=\"ds-brand-copy\"><strong>PDF in Place</strong><small>Saved locally</small></span><button type=\"button\">Legal</button></nav>",
+      "css": ".ds-workspace-header { display: flex; min-height: 3.75rem; align-items: center; gap: 0.75rem; padding: 0.625rem 0.75rem; border-bottom: 1px solid var(--border-color, #dce1e8); background: rgb(255 255 255 / 0.97); color: var(--text-primary, #20242c); box-shadow: 0 1px 2px rgb(15 23 42 / 0.06), 0 2px 6px rgb(15 23 42 / 0.03); font-family: 'Segoe UI Variable', Aptos, 'Segoe UI', sans-serif; } .ds-brand-mark { display: grid; width: 2.25rem; height: 2.25rem; place-items: center; border-radius: 0.625rem; background: var(--primary, #dc2635); color: #fff; } .ds-brand-mark svg { width: 1.25rem; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; } .ds-brand-copy { display: grid; margin-right: auto; } .ds-brand-copy strong { font-size: 1rem; } .ds-brand-copy small { color: var(--text-secondary, #596273); font-size: 0.6875rem; } .ds-workspace-header button { height: 2.25rem; padding: 0 0.625rem; border: 1px solid var(--border-color, #dce1e8); border-radius: 0.625rem; background: var(--surface-subtle, #f7f8fa); color: var(--text-secondary, #596273); } .ds-workspace-header button:hover { background: #fff; border-color: var(--border-strong, #c8d0da); } .ds-workspace-header button:focus-visible { outline: 3px solid rgb(37 99 235 / 0.32); outline-offset: 2px; }"
+    },
+    {
+      "name": "Dialog Surface",
+      "kind": "custom",
+      "refersTo": "dialog",
+      "description": "A protected-focus surface for confirmation and password workflows.",
+      "html": "<section class=\"ds-dialog\" role=\"dialog\" aria-labelledby=\"ds-dialog-title\"><h2 id=\"ds-dialog-title\">Protect PDF</h2><p>Generate a password-protected PDF from the current document.</p><input type=\"password\" placeholder=\"Password\" aria-label=\"Password\"><div><button class=\"ds-dialog-cancel\" type=\"button\">Cancel</button><button class=\"ds-dialog-confirm\" type=\"button\">Save</button></div></section>",
+      "css": ".ds-dialog { width: min(100%, 22rem); padding: 1.25rem; border-radius: 1rem; background: #fff; color: var(--text-primary, #20242c); box-shadow: 0 24px 60px -24px rgb(15 23 42 / 0.32), 0 8px 20px -12px rgb(15 23 42 / 0.18); font-family: 'Segoe UI Variable', Aptos, 'Segoe UI', sans-serif; } .ds-dialog h2 { margin: 0 0 0.25rem; font-size: 1.125rem; letter-spacing: -0.02em; } .ds-dialog p { margin: 0 0 1rem; color: var(--text-secondary, #596273); font-size: 0.8125rem; line-height: 1.5; } .ds-dialog input { width: 100%; height: 2.5rem; box-sizing: border-box; padding: 0 0.625rem; border: 1px solid var(--border-color, #dce1e8); border-radius: 0.625rem; color: var(--text-primary, #20242c); } .ds-dialog > div { display: flex; justify-content: flex-end; gap: 0.5rem; margin-top: 1rem; } .ds-dialog button { min-height: 2.5rem; padding: 0 0.875rem; border-radius: 0.625rem; font-weight: 700; } .ds-dialog-cancel { border: 1px solid var(--border-color, #dce1e8); background: #fff; color: var(--text-secondary, #596273); } .ds-dialog-confirm { border: 1px solid var(--primary, #dc2635); background: var(--primary, #dc2635); color: #fff; } .ds-dialog button:focus-visible, .ds-dialog input:focus-visible { outline: 3px solid rgb(37 99 235 / 0.32); outline-offset: 2px; }"
+    }
+  ],
+  "narrative": {
+    "northStar": "The Private Workbench",
+    "overview": "PDF in Place should feel like a well-kept document desk: calm enough for concentrated work, precise enough to inspire trust, and immediately understandable without specialist knowledge. The interface lets the document remain the main artifact while controls form a compact, dependable frame around it.\n\nThe system is layered and restrained rather than flat or ornamental. Color, depth, and motion communicate status and hierarchy; they do not decorate empty space. The visual language must avoid promotional, playful, or spectacle-driven patterns that would compete with the user's documents.",
+    "keyCharacteristics": [
+      "Calm, precise, and trustworthy.",
+      "Compact controls surrounding a generous document workspace.",
+      "Clear separation between primary actions, selection state, and destructive actions.",
+      "Quietly tactile interaction with restrained depth and fast feedback.",
+      "Responsive composition that preserves every workflow on narrow screens."
+    ],
+    "rules": [
+      {
+        "name": "The Two Accent Rule",
+        "body": "Document Red owns brand and primary outcomes; Selection Blue owns selection and focus. Never interchange those roles.",
+        "section": "colors"
+      },
+      {
+        "name": "The Functional Hierarchy Rule",
+        "body": "Use size for task hierarchy and weight for control hierarchy; do not add display typography merely to make an operational screen feel branded.",
+        "section": "typography"
+      },
+      {
+        "name": "The Earned Elevation Rule",
+        "body": "A surface receives a stronger shadow only when it floats above the workspace, protects focus, or responds to interaction.",
+        "section": "elevation"
+      }
+    ],
+    "dos": [
+      "Do reserve Document Red for product identity and the primary outcome in each action group.",
+      "Do use Selection Blue consistently for focus, active tools, selected pages, and ordered selection.",
+      "Do keep controls compact and grouped while leaving generous uninterrupted space around documents.",
+      "Do preserve complete workflows on mobile through reflow and horizontal tool bands.",
+      "Do use depth only to clarify working layers, interaction, or protected focus."
+    ],
+    "donts": [
+      "Don't interchange Document Red and Selection Blue or use both as competing calls to action.",
+      "Don't introduce promotional hero patterns, playful decoration, or spectacle-driven motion into operational screens.",
+      "Don't place white document pages on an undifferentiated white workspace.",
+      "Don't hide essential actions on narrow screens; reflow or provide a clear horizontal scroll affordance.",
+      "Don't combine heavy shadows, strong borders, and decorative blur on the same surface."
+    ]
+  }
+}

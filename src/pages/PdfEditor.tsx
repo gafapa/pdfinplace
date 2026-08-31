@@ -109,7 +109,7 @@ const SortablePage = memo(function SortablePage({
     return (
         <div ref={setNodeRef} style={style} className="relative group">
             <div
-                className={`bg-white rounded shadow-sm hover:shadow-md transition-shadow overflow-hidden cursor-pointer ${isSelected ? 'ring-4 ring-blue-200 shadow-md' : ''}`}
+                className={`document-card cursor-pointer ${isSelected ? 'ring-4 ring-blue-200 shadow-md' : ''}`}
                 style={{ border: `3px solid ${isSelected ? '#2563EB' : documentColor}` }}
                 {...attributes}
                 {...listeners}
@@ -267,7 +267,7 @@ export const PdfEditor = () => {
         [selectedPageIdsValid],
     );
 
-    const toolbarButtonClass = "inline-flex h-10 w-10 items-center justify-center rounded-md border border-gray-200 bg-white hover:bg-gray-50 text-gray-700 text-xs font-medium transition-colors motion-reduce:transition-none whitespace-nowrap disabled:opacity-40 disabled:cursor-not-allowed focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-600 focus-visible:ring-offset-1";
+    const toolbarButtonClass = "toolbar-button text-xs font-medium whitespace-nowrap motion-reduce:transition-none";
     const toolbarIconButtonClass = toolbarButtonClass;
     const canExport = pages.length > 0 && !isProcessing;
     const hasSelectedPages = selectedPageIdsValid.length > 0 && !isProcessing;
@@ -698,7 +698,7 @@ export const PdfEditor = () => {
 
     return (
         <div
-            className="relative flex h-full flex-col overflow-hidden"
+            className="workspace-shell relative flex h-full flex-col overflow-hidden"
             onDragOver={handleDragOver}
             onDrop={handleDrop}
         >
@@ -770,10 +770,10 @@ export const PdfEditor = () => {
                 }}
             />
             {/* Toolbar */}
-            <div className="shrink-0 bg-white border-b border-gray-200 px-2 sm:px-3 py-2 shadow-sm z-10">
-                <div className="flex items-center justify-between gap-2 pb-2 border-b border-gray-100">
+            <div className="workspace-header">
+                <div className="workspace-header-top">
                     <div className="flex items-center gap-2 shrink-0">
-                        <div className="bg-red-600 p-1.5 rounded text-white">
+                        <div className="brand-mark">
                             <FileText className="w-5 h-5" />
                         </div>
                         <div className="flex flex-col">
@@ -789,15 +789,15 @@ export const PdfEditor = () => {
                             </span>
                         </div>
                     </div>
-                    <div className="flex items-center gap-2 shrink-0" title={t('common.language')}>
+                    <div className="workspace-preferences" title={t('common.language')}>
                         <a
                             href={`./aviso-legal.html?lang=${locale}`}
-                            className="inline-flex h-8 items-center rounded-md border border-gray-200 bg-white px-2.5 text-xs font-medium text-gray-500 hover:bg-gray-50 hover:text-blue-600"
+                            className="preference-control inline-flex h-9 shrink-0 items-center rounded-lg border px-2.5 text-xs font-medium"
                         >
                             {t('common.legal')}
                         </a>
                         <label
-                            className="inline-flex h-8 items-center gap-2 rounded-md border border-gray-200 bg-white px-2.5 text-xs font-medium text-gray-700 hover:bg-gray-50"
+                            className="preference-control inline-flex h-9 shrink-0 items-center gap-2 rounded-lg border px-2.5 text-xs font-medium"
                             title={isSessionPersistenceEnabled ? t('editor.disableLocalSession') : t('editor.enableLocalSession')}
                         >
                             <input
@@ -816,7 +816,7 @@ export const PdfEditor = () => {
                             id="language-select"
                             value={locale}
                             onChange={(e) => setLocale(e.target.value as Locale)}
-                            className="h-8 min-w-[132px] rounded-md border border-gray-200 bg-white px-2.5 text-xs font-medium text-gray-700 hover:bg-gray-50 focus:border-gray-300 focus:ring-1 focus:ring-gray-300"
+                            className="preference-control h-9 min-w-[132px] rounded-lg border px-2.5 text-xs font-medium"
                             aria-label={t('common.language')}
                         >
                             {AVAILABLE_LOCALES.map((lang) => (
@@ -827,7 +827,7 @@ export const PdfEditor = () => {
                         </select>
                     </div>
                 </div>
-                <div className="grid grid-cols-2 sm:grid-cols-[1fr_auto_1fr] items-center gap-2 pt-2">
+                <div className="workspace-toolbar">
                     <div className="col-span-2 sm:col-span-1 min-w-0 flex items-center gap-2 overflow-x-auto whitespace-nowrap">
                         <button
                             type="button"
@@ -873,7 +873,7 @@ export const PdfEditor = () => {
                         <select
                             value={pageSize}
                             onChange={(e) => setPageSize(e.target.value as PageSize)}
-                            className="h-8 rounded-md bg-white hover:bg-gray-50 border border-gray-200 text-gray-700 text-xs font-medium px-2.5 focus:ring-1 focus:ring-gray-300 focus:border-gray-300"
+                            className="preference-control h-10 rounded-lg border px-2.5 text-xs font-medium"
                         >
                             <option value="Original">{t('editor.pageSizeOriginal')}</option>
                             <option value="A4">A4</option>
@@ -884,7 +884,7 @@ export const PdfEditor = () => {
                         <button
                             onClick={handleExport}
                             disabled={!canExport}
-                            className="inline-flex h-10 items-center gap-2 rounded-md border border-blue-600 bg-blue-600 px-3 text-xs font-medium text-white hover:bg-blue-700 transition-colors whitespace-nowrap disabled:opacity-40 disabled:cursor-not-allowed focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-600 focus-visible:ring-offset-1"
+                            className="primary-action"
                             title={t('common.export')}
                             aria-label={t('common.export')}
                         >
@@ -914,7 +914,7 @@ export const PdfEditor = () => {
                 </div>
                 {pages.length > 0 ? (
                     <div className="flex flex-col gap-2 border-t border-gray-100 pt-2">
-                        <div className="flex flex-wrap items-center justify-center gap-2">
+                        <div className="selection-toolbar custom-scrollbar">
                             <span
                                 className="inline-flex h-8 items-center rounded-md border border-blue-200 bg-blue-50 px-2.5 text-xs font-semibold text-blue-700 tabular-nums"
                                 title={t('editor.selectedCount', { count: selectedPageIdsValid.length })}
@@ -1188,13 +1188,15 @@ export const PdfEditor = () => {
             ) : null}
 
             {/* Main Content */}
-            <div className={`min-h-0 flex-1 bg-white overflow-y-auto p-3 sm:p-5 lg:p-8 custom-scrollbar ${pages.length > 0 && isExportPanelOpen ? 'lg:pl-[22rem]' : ''}`}>
+            <div className={`workspace-canvas min-h-0 flex-1 overflow-y-auto p-3 sm:p-5 lg:p-8 custom-scrollbar ${pages.length > 0 && isExportPanelOpen ? 'lg:pl-[22rem]' : ''}`}>
                 {pages.length === 0 ? (
-                    <div className="box-border flex min-h-full flex-col items-center justify-center rounded-xl border-2 border-dashed border-gray-300 p-4 text-gray-400">
-                        <Upload className="w-12 h-12 sm:w-16 sm:h-16 mb-4 text-gray-300" />
-                        <h3 className="text-base sm:text-xl font-medium text-gray-600 mb-2 text-center">{t('editor.dragDropTitle')}</h3>
-                        <p className="max-w-md text-center mb-6 text-sm sm:text-base">{t('editor.dragDropDescription')}</p>
-                        <label className="btn bg-blue-600 hover:bg-blue-700 text-white flex items-center gap-2 cursor-pointer shadow-lg hover:-translate-y-1" title={t('editor.addFirst')} aria-label={t('editor.addFirst')}>
+                    <div className="empty-state box-border flex min-h-full flex-col items-center justify-center p-6 sm:p-10">
+                        <div className="empty-state-icon">
+                            <Upload className="h-7 w-7" />
+                        </div>
+                        <h3 className="mb-2 text-center text-lg font-bold sm:text-2xl">{t('editor.dragDropTitle')}</h3>
+                        <p className="mb-7 max-w-md text-center text-sm leading-6 text-gray-600 sm:text-base">{t('editor.dragDropDescription')}</p>
+                        <label className="btn cursor-pointer" title={t('editor.addFirst')} aria-label={t('editor.addFirst')}>
                             <Plus className="w-5 h-5" />
                             <input
                                 type="file"
@@ -1288,7 +1290,7 @@ export const PdfEditor = () => {
             </div>
 
             <div className="pointer-events-none absolute right-2 sm:right-3 bottom-14 sm:bottom-auto sm:top-1/2 z-20 sm:-translate-y-1/2">
-                <div className="pointer-events-auto flex flex-col gap-2 rounded-lg border border-gray-200 bg-white/95 p-1 shadow-sm backdrop-blur">
+                <div className="floating-tools pointer-events-auto flex flex-col gap-1 p-1">
                     <button
                         onClick={() => setScale(s => Math.max(0.5, s - 0.1))}
                         className={toolbarIconButtonClass}
@@ -1347,7 +1349,7 @@ export const PdfEditor = () => {
             })()}
 
             {isProtectDialogOpen ? (
-                <div className="fixed inset-0 z-40 flex items-center justify-center bg-black/30 p-4">
+                <div className="dialog-backdrop fixed inset-0 z-40 flex items-center justify-center p-4">
                     <div
                         ref={protectDialogRef}
                         role="dialog"
@@ -1355,7 +1357,7 @@ export const PdfEditor = () => {
                         aria-labelledby="protect-dialog-title"
                         aria-describedby="protect-dialog-description"
                         tabIndex={-1}
-                        className="w-full max-w-sm rounded-lg border border-gray-200 bg-white p-4 shadow-xl"
+                        className="dialog-surface w-full max-w-sm p-5"
                     >
                         <h2 id="protect-dialog-title" className="mb-1 text-sm font-semibold text-gray-900">{t('editor.protectPdf')}</h2>
                         <p id="protect-dialog-description" className="mb-3 text-xs text-gray-600">{t('editor.protectHint')}</p>
@@ -1408,7 +1410,7 @@ export const PdfEditor = () => {
             ) : null}
 
             {isUnlockDialogOpen ? (
-                <div className="fixed inset-0 z-40 flex items-center justify-center bg-black/30 p-4">
+                <div className="dialog-backdrop fixed inset-0 z-40 flex items-center justify-center p-4">
                     <div
                         ref={unlockDialogRef}
                         role="dialog"
@@ -1416,7 +1418,7 @@ export const PdfEditor = () => {
                         aria-labelledby="unlock-dialog-title"
                         aria-describedby="unlock-dialog-description"
                         tabIndex={-1}
-                        className="w-full max-w-sm rounded-lg border border-gray-200 bg-white p-4 shadow-xl"
+                        className="dialog-surface w-full max-w-sm p-5"
                     >
                         <h2 id="unlock-dialog-title" className="mb-1 text-sm font-semibold text-gray-900">{t('editor.unlockPdf')}</h2>
                         <p id="unlock-dialog-description" className="mb-3 text-xs text-gray-600">{t('editor.unlockHint')}</p>
@@ -1471,7 +1473,7 @@ export const PdfEditor = () => {
             ) : null}
 
             {isClearAllDialogOpen ? (
-                <div className="fixed inset-0 z-40 flex items-center justify-center bg-black/30 p-4">
+                <div className="dialog-backdrop fixed inset-0 z-40 flex items-center justify-center p-4">
                     <div
                         ref={clearAllDialogRef}
                         role="dialog"
@@ -1479,7 +1481,7 @@ export const PdfEditor = () => {
                         aria-labelledby="clear-all-dialog-title"
                         aria-describedby="clear-all-dialog-description"
                         tabIndex={-1}
-                        className="w-full max-w-sm rounded-lg border border-gray-200 bg-white p-4 shadow-xl"
+                        className="dialog-surface w-full max-w-sm p-5"
                     >
                         <h2 id="clear-all-dialog-title" className="mb-1 text-sm font-semibold text-gray-900">{t('editor.clearAllTitle')}</h2>
                         <p id="clear-all-dialog-description" className="mb-3 text-xs text-gray-600">{t('editor.clearAllDescription')}</p>
