@@ -31,6 +31,18 @@ import { getLegacyEditorCanvasSize } from '../utils/pageGeometry';
 import type { ContentEdit } from '../features/content-editor/types';
 import { clearPersistedAssets } from '../utils/persistedAssets';
 import { orderItemsByIds } from '../utils/orderedSelection';
+import {
+    getImageExportFilename,
+    getImageExportFormatDetails,
+    getImageExportRenderScale,
+    normalizeImageExportQuality,
+    type ImageExportFormat,
+} from '../utils/imageExport';
+import {
+    getSessionPersistencePreference,
+    setSessionPersistencePreference,
+    subscribeToSessionPreference,
+} from '../utils/sessionPreference';
 
 type PdfLibModule = typeof import('pdf-lib');
 
@@ -125,6 +137,7 @@ export interface EditorPage {
     contentEdits: ContentEdit[];
     annotationCanvasWidth?: number;
     annotationCanvasHeight?: number;
+    previewRevision?: number;
 }
 
 export interface EditorFile {
@@ -152,6 +165,7 @@ interface ImportLabels {
     fileSize: string;
     batchSize: string;
     success?: string;
+    onPasswordRequired?: (file: File) => void;
 }
 
 export interface EditorNotification {
@@ -167,12 +181,18 @@ interface SplitPdfLabels extends ExportLabels {
     pageSuffix: string;
 }
 
-export interface ExportHistoryEntry {
-    id: string;
-    filename: string;
-    exportedAt: number;
-    pageCount: number;
-    mode: 'all' | 'selection' | 'range' | 'split-single' | 'split-odd-even' | 'protected' | 'unlocked';
+export interface ImageExportOptions {
+    format: ImageExportFormat;
+    quality: number;
+}
+
+interface ImageExportLabels {
+    failed: string;
+    limitExceeded: string;
+    missingPagesWarning?: string;
+    pagePrefix: string;
+    downloadPrefix: string;
+    success?: string;
 }
 
 export interface PrintOverlayOptions {
@@ -188,7 +208,8 @@ interface ProtectPdfLabels extends ExportLabels {
     invalidPassword: string;
 }
 
-interface UnlockPdfLabels extends ExportLabels {
+interface UnlockPdfLabels {
+    failed: string;
     invalidPassword: string;
     invalidFile: string;
 }
@@ -278,10 +299,21 @@ const canvasToPngBytes = (canvas: HTMLCanvasElement): Promise<ArrayBuffer> =>
         }, 'image/png');
     });
 
-const downloadPdfBytes = (pdfBytes: Uint8Array<ArrayBufferLike>, filename: string) => {
-    const pdfBytesBuffer = new ArrayBuffer(pdfBytes.byteLength);
-    new Uint8Array(pdfBytesBuffer).set(pdfBytes);
-    const blob = new Blob([pdfBytesBuffer], { type: 'application/pdf' });
+const canvasToImageBlob = (
+    canvas: HTMLCanvasElement,
+    mimeType: string,
+    quality: number,
+): Promise<Blob> => new Promise((resolve, reject) => {
+    canvas.toBlob((blob) => {
+        if (!blob || blob.type !== mimeType) {
+            reject(new Error('Canvas could not be encoded as ' + mimeType + '.'));
+            return;
+        }
+        resolve(blob);
+    }, mimeType, quality);
+});
+
+const downloadBlob = (blob: Blob, filename: string) => {
     const url = URL.createObjectURL(blob);
     const link = document.createElement('a');
     link.href = url;
@@ -292,25 +324,24 @@ const downloadPdfBytes = (pdfBytes: Uint8Array<ArrayBufferLike>, filename: strin
     window.setTimeout(() => URL.revokeObjectURL(url), 10_000);
 };
 
-const EXPORT_HISTORY_STORAGE_KEY = 'pageforge.export-history';
-const MAX_EXPORT_HISTORY = 10;
+const downloadPdfBytes = (pdfBytes: Uint8Array<ArrayBufferLike>, filename: string) => {
+    const pdfBytesBuffer = new ArrayBuffer(pdfBytes.byteLength);
+    new Uint8Array(pdfBytesBuffer).set(pdfBytes);
+    downloadBlob(new Blob([pdfBytesBuffer], { type: 'application/pdf' }), filename);
+};
+
+const LEGACY_EXPORT_HISTORY_STORAGE_KEY = 'pageforge.export-history';
 const OVERLAY_OPTIONS_STORAGE_KEY = 'pageforge.overlay-options';
-const LOCAL_PERSISTENCE_STORAGE_KEY = 'pageforge.local-persistence-enabled';
 const SAVED_ASSETS_STORAGE_KEY = 'pageforge.saved-assets';
 const MAX_HISTORY_ENTRIES = 80;
 const SESSION_PERSIST_DEBOUNCE_MS = 600;
+const MAX_IMAGE_EXPORT_TOTAL_PIXELS = 160_000_000;
 
-const isLocalPersistenceEnabled = () => {
-    if (typeof window === 'undefined') {
-        return false;
-    }
-
-    return localStorage.getItem(LOCAL_PERSISTENCE_STORAGE_KEY) === 'true';
-};
+class ImageExportLimitError extends Error {}
 
 const clearSensitiveBrowserData = async () => {
     if (typeof window !== 'undefined') {
-        localStorage.removeItem(EXPORT_HISTORY_STORAGE_KEY);
+        localStorage.removeItem(LEGACY_EXPORT_HISTORY_STORAGE_KEY);
         localStorage.removeItem(SAVED_ASSETS_STORAGE_KEY);
         localStorage.removeItem(OVERLAY_OPTIONS_STORAGE_KEY);
     }
@@ -326,25 +357,6 @@ const clearSensitiveBrowserData = async () => {
     });
 };
 
-const loadExportHistory = (): ExportHistoryEntry[] => {
-    if (typeof window === 'undefined' || !isLocalPersistenceEnabled()) {
-        return [];
-    }
-
-    try {
-        const rawHistory = localStorage.getItem(EXPORT_HISTORY_STORAGE_KEY);
-        if (!rawHistory) {
-            return [];
-        }
-
-        const parsedHistory = JSON.parse(rawHistory) as ExportHistoryEntry[];
-        return Array.isArray(parsedHistory) ? parsedHistory : [];
-    } catch (error) {
-        console.error('Failed to read export history:', error);
-        return [];
-    }
-};
-
 const DEFAULT_PRINT_OVERLAY_OPTIONS: PrintOverlayOptions = {
     watermarkText: '',
     includePageNumbers: false,
@@ -355,7 +367,7 @@ const DEFAULT_PRINT_OVERLAY_OPTIONS: PrintOverlayOptions = {
 };
 
 const loadOverlayOptions = (): PrintOverlayOptions => {
-    if (typeof window === 'undefined' || !isLocalPersistenceEnabled()) {
+    if (typeof window === 'undefined' || !getSessionPersistencePreference()) {
         if (typeof window !== 'undefined') {
             localStorage.removeItem(OVERLAY_OPTIONS_STORAGE_KEY);
         }
@@ -522,11 +534,10 @@ export const usePdfEditor = () => {
     const [pageSize, setPageSize] = useState<PageSize>(getInitialPageSize);
     const [isSessionReady, setIsSessionReady] = useState(false);
     const [hasSavedSession, setHasSavedSession] = useState(false);
-    const [isSessionPersistenceEnabled, setIsSessionPersistenceEnabled] = useState(isLocalPersistenceEnabled);
+    const [isSessionPersistenceEnabled, setIsSessionPersistenceEnabled] = useState(getSessionPersistencePreference);
     const persistedFileCacheRef = useRef<Record<string, PersistedFileRecord>>({});
     const filesRef = useRef<Record<string, EditorFile>>({});
     const isImportingRef = useRef(false);
-    const [exportHistory, setExportHistory] = useState<ExportHistoryEntry[]>(loadExportHistory);
     const [printOverlayOptions, setPrintOverlayOptions] = useState<PrintOverlayOptions>(loadOverlayOptions);
     const notifyError = useCallback((message: string) => {
         setNotification({ id: createId(), message, tone: 'error' });
@@ -536,37 +547,25 @@ export const usePdfEditor = () => {
     }, []);
     const dismissNotification = useCallback(() => setNotification(null), []);
 
-    const recordExport = useCallback((filename: string, pageCount: number, mode: ExportHistoryEntry['mode']) => {
-        const nextEntry: ExportHistoryEntry = {
-            id: createId(),
-            filename,
-            exportedAt: Date.now(),
-            pageCount,
-            mode,
-        };
-
-        let nextHistory: ExportHistoryEntry[] = [];
-        setExportHistory(prev => {
-            nextHistory = [nextEntry, ...prev].slice(0, MAX_EXPORT_HISTORY);
-            return nextHistory;
-        });
-
-        if (isSessionPersistenceEnabled) {
-            localStorage.setItem(EXPORT_HISTORY_STORAGE_KEY, JSON.stringify(nextHistory));
-        }
-    }, [isSessionPersistenceEnabled]);
-
-    const setSessionPersistenceEnabled = useCallback((enabled: boolean) => {
+    const applySessionPersistencePreference = useCallback((enabled: boolean) => {
         setIsSessionPersistenceEnabled(enabled);
-        localStorage.setItem(LOCAL_PERSISTENCE_STORAGE_KEY, String(enabled));
 
         if (!enabled) {
             persistedFileCacheRef.current = {};
             setHasSavedSession(false);
-            setExportHistory([]);
             setPrintOverlayOptions(DEFAULT_PRINT_OVERLAY_OPTIONS);
             void clearSensitiveBrowserData();
         }
+    }, []);
+
+    const setSessionPersistenceEnabled = useCallback((enabled: boolean) => {
+        setSessionPersistencePreference(enabled);
+    }, []);
+
+    useEffect(() => subscribeToSessionPreference(applySessionPersistencePreference), [applySessionPersistencePreference]);
+
+    useEffect(() => {
+        localStorage.removeItem(LEGACY_EXPORT_HISTORY_STORAGE_KEY);
     }, []);
 
     useEffect(() => {
@@ -819,6 +818,7 @@ export const usePdfEditor = () => {
             const newFilesMap: Record<string, EditorFile> = {};
             const newPages: EditorPage[] = [];
             const failedReasons: string[] = [];
+            const passwordProtectedFiles: File[] = [];
             const pdfLib = await loadPdfLib();
             let importedPageCount = pages.length;
             let importedFileBytes = existingBytes;
@@ -1349,15 +1349,24 @@ export const usePdfEditor = () => {
                     releasePdfDocument(failedFileData.pdfDoc);
                 }
                 delete newFilesMap[fileId];
-                if (error instanceof ImportLimitError) {
+                const isPasswordProtectedPdf = getImportFileKind(file) === 'pdf' &&
+                    isLikelyInvalidPasswordError(error);
+                if (isPasswordProtectedPdf) {
+                    passwordProtectedFiles.push(file);
+                } else if (error instanceof ImportLimitError) {
                     failedReasons.push(`${file.name}: ${error.message}`);
                 } else {
                     failedReasons.push(file.name);
                 }
-                console.error(`Error loading file ${file.name}:`, error);
+                if (!isPasswordProtectedPdf) {
+                    console.error(`Error loading file ${file.name}:`, error);
+                }
             }
         }
 
+            if (passwordProtectedFiles.length > 0) {
+                labels.onPasswordRequired?.(passwordProtectedFiles[0]);
+            }
             if (failedReasons.length > 0) {
                 notifyError(`${labels.failedPrefix}\n${failedReasons.join('\n')}`);
             }
@@ -1366,7 +1375,7 @@ export const usePdfEditor = () => {
             }
             if (newPages.length > 0) {
                 setPages(prev => [...prev, ...newPages]);
-                if (!failedReasons.length && labels.success) {
+                if (!failedReasons.length && passwordProtectedFiles.length === 0 && labels.success) {
                     notifySuccess(labels.success);
                 }
             }
@@ -1449,7 +1458,6 @@ export const usePdfEditor = () => {
         // Reset history completely
         setPagesHistory([[]]);
         setPagesCurrentIndex(0);
-        setExportHistory([]);
         setPrintOverlayOptions(DEFAULT_PRINT_OVERLAY_OPTIONS);
         void clearSensitiveBrowserData();
         setHasSavedSession(false);
@@ -1872,7 +1880,6 @@ export const usePdfEditor = () => {
             const originalName = labels?.originalName ?? 'original';
             const filename = `${prefix}_${pageSize === 'Original' ? originalName : pageSize}.pdf`;
             downloadPdfBytes(pdfBytes, filename);
-            recordExport(filename, sourcePages.length, pageIds?.length ? 'selection' : 'all');
             if (labels?.missingPagesWarning && sourcePages.some((page) => !files[page.fileId])) {
                 notifyError(labels.missingPagesWarning);
             } else if (labels?.success) {
@@ -1884,7 +1891,132 @@ export const usePdfEditor = () => {
         } finally {
             setIsProcessing(false);
         }
-    }, [pages, files, buildPdfBytes, pageSize, recordExport, notifyError, notifySuccess]);
+    }, [pages, files, buildPdfBytes, pageSize, notifyError, notifySuccess]);
+
+    const exportPagesAsImages = useCallback(async (
+        options: ImageExportOptions,
+        labels?: ImageExportLabels,
+        pageIds?: string[],
+    ) => {
+        const orderedPages = pageIds?.length
+            ? orderItemsByIds(pages, pageIds, (page) => page.id)
+            : pages;
+        const sourcePages = orderedPages.filter((page) => files[page.fileId]);
+
+        if (sourcePages.length === 0) {
+            return false;
+        }
+
+        setIsProcessing(true);
+        let renderedDocument: LoadedPdfDocument | null = null;
+        try {
+            const pdfBytes = await buildPdfBytes(sourcePages);
+            renderedDocument = await loadPdfDocumentWithTask({ data: toArrayBuffer(pdfBytes) });
+
+            const normalizedQuality = normalizeImageExportQuality(options.quality);
+            const renderScale = getImageExportRenderScale(normalizedQuality);
+            const formatDetails = getImageExportFormatDetails(options.format);
+            const pageNumbers = sourcePages.map((page) => pages.findIndex((candidate) => candidate.id === page.id) + 1);
+            const renderPlans: Array<{
+                page: Awaited<ReturnType<LoadedPdfDocument['pdfDoc']['getPage']>>;
+                pageNumber: number;
+                viewport: ReturnType<Awaited<ReturnType<LoadedPdfDocument['pdfDoc']['getPage']>>['getViewport']>;
+            }> = [];
+            let totalPixels = 0;
+
+            for (let index = 0; index < renderedDocument.pdfDoc.numPages; index += 1) {
+                const pdfPage = await renderedDocument.pdfDoc.getPage(index + 1);
+                const viewport = pdfPage.getViewport({ scale: renderScale });
+                const pagePixels = Math.ceil(viewport.width) * Math.ceil(viewport.height);
+                totalPixels += pagePixels;
+                if (pagePixels > MAX_RENDER_PIXELS || totalPixels > MAX_IMAGE_EXPORT_TOTAL_PIXELS) {
+                    throw new ImageExportLimitError('Image export exceeds the safe rendering limit.');
+                }
+                renderPlans.push({
+                    page: pdfPage,
+                    pageNumber: pageNumbers[index] ?? index + 1,
+                    viewport,
+                });
+            }
+
+            const isArchive = renderPlans.length > 1;
+            const archive = isArchive ? new (await import('jszip')).default() : null;
+            const pagePrefix = labels?.pagePrefix ?? 'page';
+
+            for (const plan of renderPlans) {
+                const canvas = document.createElement('canvas');
+                canvas.width = Math.max(1, Math.ceil(plan.viewport.width));
+                canvas.height = Math.max(1, Math.ceil(plan.viewport.height));
+                const context = canvas.getContext('2d');
+                if (!context) {
+                    throw new Error('Canvas is unavailable for image export.');
+                }
+
+                try {
+                    context.fillStyle = '#ffffff';
+                    context.fillRect(0, 0, canvas.width, canvas.height);
+                    await plan.page.render({
+                        canvas,
+                        canvasContext: context,
+                        viewport: plan.viewport,
+                        background: '#ffffff',
+                    }).promise;
+                    const imageBlob = await canvasToImageBlob(
+                        canvas,
+                        formatDetails.mimeType,
+                        normalizedQuality / 100,
+                    );
+                    const filename = getImageExportFilename(
+                        plan.pageNumber,
+                        pages.length,
+                        pagePrefix,
+                        options.format,
+                    );
+
+                    if (archive) {
+                        archive.file(filename, imageBlob);
+                    } else {
+                        downloadBlob(imageBlob, filename);
+                    }
+                } finally {
+                    canvas.width = 1;
+                    canvas.height = 1;
+                }
+            }
+
+            if (archive) {
+                const archiveBlob = await archive.generateAsync({
+                    type: 'blob',
+                    compression: 'STORE',
+                });
+                downloadBlob(archiveBlob, `${labels?.downloadPrefix ?? 'selected_pages_images'}.zip`);
+            }
+
+            if (labels?.missingPagesWarning && sourcePages.length < orderedPages.length) {
+                notifyError(labels.missingPagesWarning);
+            } else if (labels?.success) {
+                notifySuccess(labels.success);
+            }
+            return true;
+        } catch (error) {
+            console.error('Error exporting pages as images:', error);
+            notifyError(
+                error instanceof ImageExportLimitError
+                    ? labels?.limitExceeded ?? 'Reduce the quality or select fewer pages.'
+                    : labels?.failed ?? 'Failed to export the selected pages as images.',
+            );
+            return false;
+        } finally {
+            if (renderedDocument) {
+                try {
+                    await renderedDocument.loadingTask.destroy();
+                } catch {
+                    // The temporary rendering task may already be released.
+                }
+            }
+            setIsProcessing(false);
+        }
+    }, [pages, files, buildPdfBytes, notifyError, notifySuccess]);
 
     const exportPageRange = useCallback(async (
         startPage: number,
@@ -1907,7 +2039,6 @@ export const usePdfEditor = () => {
             const sizeLabel = pageSize === 'Original' ? originalName : pageSize;
             const filename = `${prefix}_${rangeStart}-${rangeEnd}_${sizeLabel}.pdf`;
             downloadPdfBytes(pdfBytes, filename);
-            recordExport(filename, sourcePages.length, 'range');
             if (labels?.missingPagesWarning && sourcePages.some((page) => !files[page.fileId])) {
                 notifyError(labels.missingPagesWarning);
             } else if (labels?.success) {
@@ -1921,7 +2052,7 @@ export const usePdfEditor = () => {
         } finally {
             setIsProcessing(false);
         }
-    }, [pages, files, buildPdfBytes, pageSize, recordExport, notifyError, notifySuccess]);
+    }, [pages, files, buildPdfBytes, pageSize, notifyError, notifySuccess]);
 
     const splitPdf = useCallback(async (
         mode: 'single' | 'odd-even',
@@ -1952,7 +2083,6 @@ export const usePdfEditor = () => {
             for (const group of groups) {
                 const pdfBytes = await buildPdfBytes(group.pages);
                 downloadPdfBytes(pdfBytes, group.filename);
-                recordExport(group.filename, group.pages.length, mode === 'single' ? 'split-single' : 'split-odd-even');
             }
             if (labels?.missingPagesWarning && groups.some((group) => group.pages.some((page) => !files[page.fileId]))) {
                 notifyError(labels.missingPagesWarning);
@@ -1967,7 +2097,7 @@ export const usePdfEditor = () => {
         } finally {
             setIsProcessing(false);
         }
-    }, [pages, files, buildPdfBytes, recordExport, notifyError, notifySuccess]);
+    }, [pages, files, buildPdfBytes, notifyError, notifySuccess]);
 
     const exportProtectedPdf = useCallback(async (
         password: string,
@@ -1999,7 +2129,6 @@ export const usePdfEditor = () => {
             const sizeLabel = pageSize === 'Original' ? originalName : pageSize;
             const filename = `${prefix}_${sizeLabel}.pdf`;
             downloadPdfBytes(protectedBytes, filename);
-            recordExport(filename, pages.length, 'protected');
             if (labels?.missingPagesWarning && pages.some((page) => !files[page.fileId])) {
                 notifyError(labels.missingPagesWarning);
             } else if (labels?.success) {
@@ -2013,31 +2142,38 @@ export const usePdfEditor = () => {
         } finally {
             setIsProcessing(false);
         }
-    }, [pages, files, buildPdfBytes, pageSize, recordExport, notifyError, notifySuccess]);
+    }, [pages, files, buildPdfBytes, pageSize, notifyError, notifySuccess]);
 
     const unlockPdfFile = useCallback(async (
         file: File | null,
         password: string,
         labels?: UnlockPdfLabels
-    ): Promise<boolean> => {
+    ): Promise<File | null> => {
         if (!file) {
             notifyError(labels?.invalidFile ?? 'Please select a PDF file.');
-            return false;
+            return null;
         }
 
         const isPdfFile = file.type === 'application/pdf' || /\.pdf$/i.test(file.name);
         if (!isPdfFile) {
             notifyError(labels?.invalidFile ?? 'Please select a PDF file.');
-            return false;
+            return null;
         }
         if (!isAcceptedUnlockPdf(file)) {
             notifyError(labels?.invalidFile ?? 'The selected PDF is invalid or too large.');
-            return false;
+            return null;
         }
 
         setIsProcessing(true);
         try {
-            const bytes = new Uint8Array(await file.arrayBuffer());
+            const sourceBuffer = await file.arrayBuffer();
+            const passwordCheck = await loadPdfDocumentWithTask({
+                data: cloneArrayBuffer(sourceBuffer),
+                password,
+            });
+            releasePdfDocument(passwordCheck);
+
+            const bytes = new Uint8Array(sourceBuffer);
             const { PDF: SecurePDF } = await import('@libpdf/core');
             const securePdf = await SecurePDF.load(bytes, { credentials: password });
 
@@ -2046,37 +2182,27 @@ export const usePdfEditor = () => {
             }
 
             const unlockedBytes = await securePdf.save();
-            const prefix = labels?.downloadPrefix ?? 'unlocked_document';
-            const baseName = file.name.replace(/\.pdf$/i, '');
-            const filename = `${prefix}_${baseName}.pdf`;
+            const unlockedBuffer = toArrayBuffer(unlockedBytes);
+            const unlockedDocument = await loadPdfDocumentWithTask({
+                data: cloneArrayBuffer(unlockedBuffer),
+            });
+            releasePdfDocument(unlockedDocument);
 
-            let unlockedPageCount = 0;
-            try {
-                const pdfLib = await loadPdfLib();
-                const unlockedDoc = await pdfLib.PDFDocument.load(unlockedBytes);
-                unlockedPageCount = unlockedDoc.getPageCount();
-            } catch (countError) {
-                console.error('Could not determine the unlocked PDF page count:', countError);
-            }
-
-            downloadPdfBytes(unlockedBytes, filename);
-            recordExport(filename, unlockedPageCount, 'unlocked');
-            if (labels?.success) {
-                notifySuccess(labels.success);
-            }
-            return true;
+            return new File([unlockedBuffer], file.name, {
+                type: 'application/pdf',
+            });
         } catch (error) {
-            console.error('Error unlocking PDF:', error);
             if (isLikelyInvalidPasswordError(error)) {
                 notifyError(labels?.invalidPassword ?? 'Invalid password.');
             } else {
+                console.error('Error unlocking PDF:', error);
                 notifyError(labels?.failed ?? 'Failed to unlock PDF.');
             }
-            return false;
+            return null;
         } finally {
             setIsProcessing(false);
         }
-    }, [recordExport, notifyError, notifySuccess]);
+    }, [notifyError]);
 
     const updatePageAnnotations = useCallback((
         pageId: string,
@@ -2092,6 +2218,7 @@ export const usePdfEditor = () => {
                     contentEdits,
                     annotationCanvasWidth: canvasSize?.width ?? page.annotationCanvasWidth,
                     annotationCanvasHeight: canvasSize?.height ?? page.annotationCanvasHeight,
+                    previewRevision: (page.previewRevision ?? 0) + 1,
                 };
             }
             return page;
@@ -2108,7 +2235,6 @@ export const usePdfEditor = () => {
         hasSavedSession,
         isSessionPersistenceEnabled,
         setSessionPersistenceEnabled,
-        exportHistory,
         pageSize,
         setPageSize,
         printOverlayOptions,
@@ -2122,6 +2248,7 @@ export const usePdfEditor = () => {
         duplicatePages,
         clearAll,
         exportPdf,
+        exportPagesAsImages,
         exportPageRange,
         splitPdf,
         exportProtectedPdf,

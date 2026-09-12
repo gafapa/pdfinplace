@@ -135,8 +135,10 @@ export const PageEditorModal = ({
     const [editorZoom, setEditorZoom] = useState(1);
     const [savedAssets, setSavedAssets] = useState<SavedAsset[]>([]);
     const [areSavedAssetsReady, setAreSavedAssetsReady] = useState(false);
-    const [uploadTarget, setUploadTarget] = useState<'canvas' | 'signature' | 'stamp'>('canvas');
+    const [uploadTarget, setUploadTarget] = useState<'canvas' | 'library'>('canvas');
     const [isAssetsPanelOpen, setIsAssetsPanelOpen] = useState(getInitialAssetsPanelOpen);
+    const [renamingAssetId, setRenamingAssetId] = useState<string | null>(null);
+    const [assetNameDraft, setAssetNameDraft] = useState('');
     const [errorMessage, setErrorMessage] = useState('');
     const [isDiscardDialogOpen, setIsDiscardDialogOpen] = useState(false);
 
@@ -160,8 +162,8 @@ export const PageEditorModal = ({
         pageViewportSize.height,
     );
     const editorScale = fitScale * editorZoom;
-    const editorZoomPercent = Math.round(editorZoom * 100);
-    const dialogRef = useDialogFocus<HTMLDivElement>(isOpen, () => closeRequestRef.current());
+    const handleDialogClose = useCallback(() => closeRequestRef.current(), []);
+    const dialogRef = useDialogFocus<HTMLDivElement>(isOpen, handleDialogClose);
 
     // Sync ref with state for event handlers
     useEffect(() => {
@@ -343,27 +345,48 @@ export const PageEditorModal = ({
     useEffect(() => {
         if (!isOpen) return;
 
+        let resizeFrame: number | null = null;
         const recalculateScale = () => {
             const viewport = editorViewportRef.current;
             if (!viewport) return;
 
-            const availableWidth = viewport.clientWidth - 8;
-            const availableHeight = viewport.clientHeight - 8;
+            const viewportStyles = window.getComputedStyle(viewport);
+            const horizontalPadding = Number.parseFloat(viewportStyles.paddingLeft) + Number.parseFloat(viewportStyles.paddingRight);
+            const verticalPadding = Number.parseFloat(viewportStyles.paddingTop) + Number.parseFloat(viewportStyles.paddingBottom);
+            const scrollbarReserve = 20;
+            const availableWidth = viewport.offsetWidth - horizontalPadding - scrollbarReserve;
+            const availableHeight = viewport.offsetHeight - verticalPadding - scrollbarReserve;
             const widthScale = availableWidth / canvasWidth;
             const heightScale = availableHeight / canvasHeight;
             const nextScale = Math.min(1, widthScale, heightScale);
-            setFitScale(Number.isFinite(nextScale) && nextScale > 0 ? nextScale : 1);
+            const normalizedScale = Number.isFinite(nextScale) && nextScale > 0 ? nextScale : 1;
+            setFitScale(previousScale => (
+                Math.abs(previousScale - normalizedScale) < 0.001 ? previousScale : normalizedScale
+            ));
         };
 
-        recalculateScale();
+        const scheduleScaleRecalculation = () => {
+            if (resizeFrame !== null) {
+                cancelAnimationFrame(resizeFrame);
+            }
+            resizeFrame = requestAnimationFrame(() => {
+                resizeFrame = null;
+                recalculateScale();
+            });
+        };
 
-        const observer = new ResizeObserver(recalculateScale);
+        scheduleScaleRecalculation();
+
+        const observer = new ResizeObserver(scheduleScaleRecalculation);
         if (editorViewportRef.current) observer.observe(editorViewportRef.current);
-        window.addEventListener('resize', recalculateScale);
+        window.addEventListener('resize', scheduleScaleRecalculation);
 
         return () => {
+            if (resizeFrame !== null) {
+                cancelAnimationFrame(resizeFrame);
+            }
             observer.disconnect();
-            window.removeEventListener('resize', recalculateScale);
+            window.removeEventListener('resize', scheduleScaleRecalculation);
         };
     }, [isOpen, canvasWidth, canvasHeight]);
 
@@ -389,6 +412,22 @@ export const PageEditorModal = ({
         }
         updateTextAnnotation(activeTextId, updater);
     }, [activeTextId, updateTextAnnotation]);
+
+    const beginTextAnnotationEdit = useCallback((annotation: Annotation) => {
+        if (annotation.type !== 'text') return;
+
+        const data = annotation.data as TextAnnotationData;
+        setFontSize(data.fontSize);
+        if (TEXT_FONTS.includes(data.fontFamily as (typeof TEXT_FONTS)[number])) {
+            setTextFontFamily(data.fontFamily as (typeof TEXT_FONTS)[number]);
+        }
+        setColor(data.color);
+        setTextBold(data.bold);
+        setTextItalic(data.italic);
+        setSelectedAnnotationId(annotation.id);
+        setEditingTextId(annotation.id);
+        editingTextIdRef.current = annotation.id;
+    }, []);
 
     const getFinalizedAnnotations = useCallback((source: Annotation[]): Annotation[] => {
         const id = editingTextIdRef.current;
@@ -451,7 +490,6 @@ export const PageEditorModal = ({
         dataUrl: string,
         imageWidth: number,
         imageHeight: number,
-        type: 'image' | 'signature' = 'image',
     ): Annotation => {
         const maxWidth = canvasWidth * 0.8;
         const maxHeight = canvasHeight * 0.8;
@@ -461,7 +499,7 @@ export const PageEditorModal = ({
 
         return {
             id: createId(),
-            type,
+            type: 'image',
             x: Math.max(0, (canvasWidth - fittedWidth) / 2),
             y: Math.max(0, (canvasHeight - fittedHeight) / 2),
             width: fittedWidth,
@@ -492,37 +530,37 @@ export const PageEditorModal = ({
             asset.dataUrl,
             asset.width,
             asset.height,
-            asset.kind === 'signature' ? 'signature' : 'image',
         );
         setAnnotations(prev => [...prev, newAnnotation]);
         setSelectedAnnotationId(newAnnotation.id);
         setActiveTool('select');
     }, [createImageLikeAnnotation]);
 
-    const saveSelectedAsset = useCallback((kind: 'signature' | 'stamp') => {
-        if (!selectedAnnotationId) {
-            return;
-        }
-
-        const selectedAnnotation = annotations.find(annotation => annotation.id === selectedAnnotationId);
-        if (!selectedAnnotation || (selectedAnnotation.type !== 'image' && selectedAnnotation.type !== 'signature')) {
-            return;
-        }
-
-        const data = selectedAnnotation.data as ImageAnnotationData;
-        addSavedAsset({
-            id: createId(),
-            name: `${kind}-${savedAssets.length + 1}`,
-            kind,
-            dataUrl: data.dataUrl,
-            width: data.originalWidth,
-            height: data.originalHeight,
-        });
-    }, [selectedAnnotationId, annotations, addSavedAsset, savedAssets.length]);
-
     const removeSavedAsset = useCallback((assetId: string) => {
         setSavedAssets(prev => prev.filter(asset => asset.id !== assetId));
+        setRenamingAssetId(prev => prev === assetId ? null : prev);
     }, []);
+
+    const beginRenamingAsset = useCallback((asset: SavedAsset) => {
+        setRenamingAssetId(asset.id);
+        setAssetNameDraft(asset.name);
+    }, []);
+
+    const cancelRenamingAsset = useCallback(() => {
+        setRenamingAssetId(null);
+        setAssetNameDraft('');
+    }, []);
+
+    const commitAssetName = useCallback((assetId: string) => {
+        const normalizedName = assetNameDraft.trim();
+        if (!normalizedName) return;
+
+        setSavedAssets(prev => prev.map(asset => (
+            asset.id === assetId ? { ...asset, name: normalizedName } : asset
+        )));
+        setRenamingAssetId(null);
+        setAssetNameDraft('');
+    }, [assetNameDraft]);
 
     // Keyboard listener for Delete and Escape (capture phase so it can decide
     // before the dialog-focus handler closes the modal)
@@ -1061,10 +1099,10 @@ export const PageEditorModal = ({
                 setActiveTool('select');
             } else {
                 imageCacheRef.current.set(dataUrl, img);
+                const uploadedName = file.name.replace(/\.[^.]+$/, '').trim();
                 const wasSaved = addSavedAsset({
                     id: createId(),
-                    name: `${uploadTarget}-${savedAssets.length + 1}`,
-                    kind: uploadTarget,
+                    name: uploadedName || `${t('modal.image')} ${savedAssets.length + 1}`,
                     dataUrl,
                     width: img.width,
                     height: img.height,
@@ -1089,7 +1127,7 @@ export const PageEditorModal = ({
 
     const currentEditingTextId = editingTextId;
     const currentEditingText = currentEditingTextId ? annotations.find(a => a.id === currentEditingTextId) : null;
-    const showTextControls = activeTool === 'text';
+    const showTextControls = activeTool === 'text' || Boolean(activeTextAnnotation);
     const toolItems = [
         { id: 'content', icon: FilePenLine, label: t('modal.editContent') },
         { id: 'select', icon: MousePointer2, label: t('modal.select') },
@@ -1118,6 +1156,7 @@ export const PageEditorModal = ({
                             type="button"
                             onClick={() => setErrorMessage('')}
                             className="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-md hover:bg-red-50"
+                            title={t('common.close')}
                             aria-label={t('common.close')}
                         >
                             <X aria-hidden="true" className="h-4 w-4" />
@@ -1126,13 +1165,63 @@ export const PageEditorModal = ({
                 ) : null}
             </div>
             <div className="workspace-header z-[60] px-2 py-2 text-gray-900 sm:px-3">
-                <div className="grid grid-cols-[auto_1fr_auto] items-center gap-2">
-                    <h2 id="page-editor-title" className="font-semibold text-gray-700 shrink-0">
+                <div className="grid grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)] items-center gap-2">
+                    <h2 id="page-editor-title" className="truncate font-semibold text-gray-700">
                         {t('common.page')} {pageIndex}
                     </h2>
-                    <div className="min-w-0 flex justify-center overflow-x-auto">
+                    {onRequestNavigate ? (
+                        <div
+                            role="group"
+                            aria-label={t('modal.pageNavigation')}
+                            className="header-action-group justify-self-center"
+                        >
+                            <button
+                                type="button"
+                                onClick={() => handleNavigateRequest(-1)}
+                                disabled={!hasPreviousPage}
+                                className="toolbar-button"
+                                title={t('modal.previousPage')}
+                                aria-label={t('modal.previousPage')}
+                            >
+                                <ChevronLeft aria-hidden="true" className="h-4 w-4" />
+                            </button>
+                            <button
+                                type="button"
+                                onClick={() => handleNavigateRequest(1)}
+                                disabled={!hasNextPage}
+                                className="toolbar-button"
+                                title={t('modal.nextPage')}
+                                aria-label={t('modal.nextPage')}
+                            >
+                                <ChevronRight aria-hidden="true" className="h-4 w-4" />
+                            </button>
+                        </div>
+                    ) : <div aria-hidden="true" />}
+                    <div className="header-action-group justify-self-end">
+                        <button
+                            type="button"
+                            onClick={handleCloseRequest}
+                            className="toolbar-button"
+                            title={t('common.cancel')}
+                            aria-label={t('common.cancel')}
+                        >
+                            <X aria-hidden="true" className="h-4 w-4" />
+                        </button>
+                        <button
+                            type="button"
+                            onClick={handleSave}
+                            className="primary-action h-10 w-10 shrink-0 p-0"
+                            title={t('common.save')}
+                            aria-label={t('common.save')}
+                        >
+                            <Check aria-hidden="true" className="h-4 w-4" />
+                        </button>
+                    </div>
+                </div>
+                {showTextControls || activeTool === 'content' ? (
+                    <div className="mt-2 flex min-w-0 justify-center overflow-x-auto">
                         {showTextControls ? (
-                            <div className="flex items-center gap-2 whitespace-nowrap rounded-lg border border-gray-200 bg-white p-1 w-fit">
+                            <div className="flex w-fit items-center gap-2 whitespace-nowrap rounded-lg border border-gray-200 bg-white p-1">
                                 <select
                                     value={toolbarFontSize}
                                     onChange={(e) => {
@@ -1142,7 +1231,7 @@ export const PageEditorModal = ({
                                             applyTextStyleToActive(data => ({ ...data, fontSize: nextSize }));
                                         }
                                     }}
-                                    className="h-9 min-w-[86px] bg-white text-gray-700 text-xs rounded border border-gray-300 px-2 py-1 focus:outline-none focus:ring-1 focus:ring-blue-500 shrink-0"
+                                    className="h-9 min-w-[86px] shrink-0 rounded border border-gray-300 bg-white px-2 py-1 text-xs text-gray-700 focus:outline-none focus:ring-1 focus:ring-blue-500"
                                 >
                                     {[12, 16, 20, 24, 32, 48, 64].map(s => <option key={s} value={s}>{s}px</option>)}
                                 </select>
@@ -1155,12 +1244,12 @@ export const PageEditorModal = ({
                                             applyTextStyleToActive(data => ({ ...data, fontFamily: nextFamily }));
                                         }
                                     }}
-                                    className="h-9 min-w-[130px] bg-white text-gray-700 text-xs rounded border border-gray-300 px-2 py-1 focus:outline-none focus:ring-1 focus:ring-blue-500 shrink-0"
+                                    className="h-9 min-w-[130px] shrink-0 rounded border border-gray-300 bg-white px-2 py-1 text-xs text-gray-700 focus:outline-none focus:ring-1 focus:ring-blue-500"
                                 >
                                     {TEXT_FONTS.map(font => <option key={font} value={font}>{font}</option>)}
                                 </select>
                             </div>
-                        ) : activeTool === 'content' ? (
+                        ) : (
                             <div
                                 role="status"
                                 aria-live="polite"
@@ -1172,81 +1261,12 @@ export const PageEditorModal = ({
                                     {contentEdits.length}
                                 </span>
                             </div>
-                        ) : (
-                            <div className="h-9" />
                         )}
                     </div>
-                    <div className="flex items-center gap-2 justify-self-end">
-                        <div className="flex items-center gap-1 rounded-lg border border-gray-200 bg-white p-1">
-                            <button
-                                type="button"
-                                onClick={() => setEditorZoom(prev => Math.max(MIN_EDITOR_ZOOM, Number((prev - EDITOR_ZOOM_STEP).toFixed(2))))}
-                                disabled={editorZoom <= MIN_EDITOR_ZOOM}
-                                className="h-7 w-7 inline-flex items-center justify-center rounded-md text-gray-700 hover:bg-gray-50 disabled:opacity-30"
-                                title={t('editor.zoomOut')}
-                                aria-label={t('editor.zoomOut')}
-                            >
-                                <ZoomOut className="h-3.5 w-3.5" />
-                            </button>
-                            <span className="min-w-12 text-center text-[11px] font-semibold tabular-nums text-gray-600">
-                                {editorZoomPercent}%
-                            </span>
-                            <button
-                                type="button"
-                                onClick={() => setEditorZoom(prev => Math.min(MAX_EDITOR_ZOOM, Number((prev + EDITOR_ZOOM_STEP).toFixed(2))))}
-                                disabled={editorZoom >= MAX_EDITOR_ZOOM}
-                                className="h-7 w-7 inline-flex items-center justify-center rounded-md text-gray-700 hover:bg-gray-50 disabled:opacity-30"
-                                title={t('editor.zoomIn')}
-                                aria-label={t('editor.zoomIn')}
-                            >
-                                <ZoomIn className="h-3.5 w-3.5" />
-                            </button>
-                        </div>
-                        <button
-                            onClick={handleCloseRequest}
-                            className="h-9 w-9 inline-flex items-center justify-center rounded-lg border border-gray-200 bg-white hover:bg-gray-50 text-gray-700 transition-colors shrink-0"
-                            title={t('common.cancel')}
-                            aria-label={t('common.cancel')}
-                        >
-                            <X className="w-4 h-4" />
-                        </button>
-                        {onRequestNavigate ? (
-                            <>
-                                <button
-                                    type="button"
-                                    onClick={() => handleNavigateRequest(-1)}
-                                    disabled={!hasPreviousPage}
-                                    className="h-9 w-9 inline-flex items-center justify-center rounded-lg border border-gray-200 bg-white hover:bg-gray-50 text-gray-700 transition-colors shrink-0 disabled:opacity-30"
-                                    title={t('modal.previousPage')}
-                                    aria-label={t('modal.previousPage')}
-                                >
-                                    <ChevronLeft className="w-4 h-4" />
-                                </button>
-                                <button
-                                    type="button"
-                                    onClick={() => handleNavigateRequest(1)}
-                                    disabled={!hasNextPage}
-                                    className="h-9 w-9 inline-flex items-center justify-center rounded-lg border border-gray-200 bg-white hover:bg-gray-50 text-gray-700 transition-colors shrink-0 disabled:opacity-30"
-                                    title={t('modal.nextPage')}
-                                    aria-label={t('modal.nextPage')}
-                                >
-                                    <ChevronRight className="w-4 h-4" />
-                                </button>
-                            </>
-                        ) : null}
-                        <button
-                            onClick={handleSave}
-                            className="primary-action h-9 w-9 shrink-0 p-0"
-                            title={t('common.save')}
-                            aria-label={t('common.save')}
-                        >
-                            <Check className="w-4 h-4" />
-                        </button>
-                    </div>
-                </div>
+                ) : null}
             </div>
 
-            <div className="pointer-events-none absolute right-3 top-16 z-[70]">
+            <div className="pointer-events-none absolute left-2 top-16 z-[70] sm:left-3">
                 <div className="pointer-events-auto flex max-h-[calc(100vh-5rem)] flex-col gap-2 overflow-y-auto rounded-lg border border-gray-200 bg-white p-1.5 shadow-lg">
                     {toolItems.map(tool => (
                         <button
@@ -1359,13 +1379,22 @@ export const PageEditorModal = ({
                 </div>
             </div>
 
-            <div className="pointer-events-none absolute left-0 top-16 bottom-3 z-[70] flex items-start">
-                <div className="pointer-events-auto flex h-full items-end">
+            <div className="pointer-events-none absolute bottom-3 right-0 top-16 z-[70] flex items-start">
+                <div className="pointer-events-auto flex h-full items-start">
+                    <button
+                        type="button"
+                        onClick={() => setIsAssetsPanelOpen((prev) => !prev)}
+                        className="mt-4 inline-flex h-12 w-10 items-center justify-center rounded-l-2xl border border-r-0 border-gray-200 bg-white/95 text-gray-700 shadow-lg backdrop-blur transition hover:bg-gray-50"
+                        title={isAssetsPanelOpen ? t('modal.closeAssetsPanel') : t('modal.openAssetsPanel')}
+                        aria-label={isAssetsPanelOpen ? t('modal.closeAssetsPanel') : t('modal.openAssetsPanel')}
+                    >
+                        {isAssetsPanelOpen ? <ChevronRight aria-hidden="true" className="h-4 w-4" /> : <ChevronLeft aria-hidden="true" className="h-4 w-4" />}
+                    </button>
                     <div
-                        className={`h-full overflow-hidden rounded-r-2xl border-y border-r border-gray-200 bg-white/95 shadow-xl backdrop-blur transition-all duration-300 ${
+                        className={`h-full overflow-hidden rounded-l-2xl border-y border-l border-gray-200 bg-white/95 shadow-xl backdrop-blur transition-all duration-300 motion-reduce:transition-none ${
                             isAssetsPanelOpen
                                 ? 'w-[min(18rem,calc(100vw-4rem))] translate-x-0 opacity-100'
-                                : 'w-0 -translate-x-4 opacity-0'
+                                : 'w-0 translate-x-4 opacity-0'
                         }`}
                     >
                         <div className="flex h-full min-h-0 flex-col">
@@ -1373,108 +1402,119 @@ export const PageEditorModal = ({
                                 <div className="text-sm font-semibold text-gray-900">{t('modal.savedAssets')}</div>
                                 <div className="text-[11px] text-gray-500">{t('modal.savedAssetsHint')}</div>
                             </div>
-                            <div className="flex-1 min-h-0 space-y-4 overflow-y-auto px-4 py-4 custom-scrollbar">
-                                <section className="space-y-2 rounded-2xl border border-gray-200 bg-gray-50/80 p-3">
-                                    <div className="text-[11px] font-semibold uppercase tracking-[0.14em] text-gray-500">
-                                        {t('modal.libraryUpload')}
-                                    </div>
-                                    <div className="grid gap-2">
-                                        <button
-                                            type="button"
-                                            onClick={() => {
-                                                setUploadTarget('signature');
-                                                fileInputRef.current?.click();
-                                            }}
-                                            className="inline-flex h-9 w-full items-center justify-center rounded-xl border border-gray-200 bg-white px-3 text-sm font-medium text-gray-700 hover:bg-gray-100"
-                                        >
-                                            {t('modal.uploadSignature')}
-                                        </button>
-                                        <button
-                                            type="button"
-                                            onClick={() => {
-                                                setUploadTarget('stamp');
-                                                fileInputRef.current?.click();
-                                            }}
-                                            className="inline-flex h-9 w-full items-center justify-center rounded-xl border border-gray-200 bg-white px-3 text-sm font-medium text-gray-700 hover:bg-gray-100"
-                                        >
-                                            {t('modal.uploadStamp')}
-                                        </button>
-                                    </div>
-                                </section>
+                            <div className="flex min-h-0 flex-1 flex-col overflow-y-auto px-4 py-4 custom-scrollbar">
+                                <button
+                                    type="button"
+                                    onClick={() => {
+                                        setUploadTarget('library');
+                                        fileInputRef.current?.click();
+                                    }}
+                                    className="inline-flex h-11 w-full shrink-0 items-center justify-center gap-2 rounded-xl bg-blue-600 px-4 text-sm font-semibold text-white shadow-sm transition-colors hover:bg-blue-700 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-600 focus-visible:ring-offset-2"
+                                    title={t('modal.uploadLibraryImage')}
+                                >
+                                    <ImageIcon aria-hidden="true" className="h-4 w-4" />
+                                    {t('modal.uploadLibraryImage')}
+                                </button>
 
-                                <section className="space-y-2 rounded-2xl border border-gray-200 bg-gray-50/80 p-3">
-                                    <div className="text-[11px] font-semibold uppercase tracking-[0.14em] text-gray-500">
-                                        {t('modal.saveSelection')}
-                                    </div>
-                                    <div className="grid gap-2">
-                                        <button
-                                            type="button"
-                                            onClick={() => saveSelectedAsset('signature')}
-                                            disabled={!selectedAnnotationId}
-                                            className="inline-flex h-9 w-full items-center justify-center rounded-xl border border-gray-200 bg-white px-3 text-sm font-medium text-gray-700 hover:bg-gray-100 disabled:opacity-40"
-                                        >
-                                            {t('modal.saveAsSignature')}
-                                        </button>
-                                        <button
-                                            type="button"
-                                            onClick={() => saveSelectedAsset('stamp')}
-                                            disabled={!selectedAnnotationId}
-                                            className="inline-flex h-9 w-full items-center justify-center rounded-xl border border-gray-200 bg-white px-3 text-sm font-medium text-gray-700 hover:bg-gray-100 disabled:opacity-40"
-                                        >
-                                            {t('modal.saveAsStamp')}
-                                        </button>
-                                    </div>
-                                </section>
-
-                                <section className="space-y-2 rounded-2xl border border-gray-200 bg-gray-50/80 p-3">
-                                    <div className="text-[11px] font-semibold uppercase tracking-[0.14em] text-gray-500">
-                                        {t('modal.savedItems')}
-                                    </div>
-                                    <div className="space-y-2">
-                                        {savedAssets.length === 0 ? (
-                                            <p className="text-[11px] text-gray-500">{t('modal.noSavedAssets')}</p>
-                                        ) : savedAssets.map(asset => (
-                                            <div key={asset.id} className="rounded-xl border border-gray-200 bg-white p-2">
-                                                <button
-                                                    type="button"
-                                                    onClick={() => insertSavedAsset(asset)}
-                                                    className="block w-full overflow-hidden rounded-lg bg-gray-50"
-                                                    title={t('modal.insertAsset')}
-                                                >
-                                                    <img src={asset.dataUrl} alt={asset.name} className="h-20 w-full object-contain" />
-                                                </button>
-                                                <div className="mt-2 flex items-center justify-between gap-2">
-                                                    <span className="truncate text-xs font-medium text-gray-700">{asset.name}</span>
-                                                    <button
-                                                        type="button"
-                                                        onClick={() => removeSavedAsset(asset.id)}
-                                                        className="rounded-lg p-1 text-gray-500 hover:bg-red-50 hover:text-red-600"
-                                                        title={t('common.delete')}
-                                                        aria-label={t('common.delete')}
-                                                    >
-                                                        <Trash2 className="h-3.5 w-3.5" />
-                                                    </button>
-                                                </div>
+                                <div className="mt-5 text-xs font-semibold text-gray-700">
+                                    {t('modal.savedItems')}
+                                </div>
+                                <div className="mt-2 space-y-3">
+                                    {savedAssets.length === 0 ? (
+                                        <p className="rounded-xl bg-gray-50 px-3 py-4 text-center text-xs leading-5 text-gray-500">
+                                            {t('modal.noSavedAssets')}
+                                        </p>
+                                    ) : savedAssets.map(asset => (
+                                        <div key={asset.id} className="overflow-hidden rounded-xl border border-gray-200 bg-white">
+                                            <button
+                                                type="button"
+                                                onClick={() => insertSavedAsset(asset)}
+                                                className="block w-full bg-gray-50 p-2 transition-colors hover:bg-blue-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-blue-600"
+                                                title={`${t('modal.insertAsset')}: ${asset.name}`}
+                                                aria-label={`${t('modal.insertAsset')}: ${asset.name}`}
+                                            >
+                                                <img src={asset.dataUrl} alt="" className="h-24 w-full object-contain" />
+                                            </button>
+                                            <div className="flex min-h-12 items-center gap-1.5 border-t border-gray-100 px-2 py-1.5">
+                                                {renamingAssetId === asset.id ? (
+                                                    <input
+                                                        type="text"
+                                                        value={assetNameDraft}
+                                                        onChange={(event) => setAssetNameDraft(event.target.value)}
+                                                        onKeyDown={(event) => {
+                                                            if (event.key === 'Enter') {
+                                                                event.preventDefault();
+                                                                commitAssetName(asset.id);
+                                                            } else if (event.key === 'Escape') {
+                                                                event.preventDefault();
+                                                                event.stopPropagation();
+                                                                cancelRenamingAsset();
+                                                            }
+                                                        }}
+                                                        autoFocus
+                                                        className="h-9 min-w-0 flex-1 rounded-lg border border-blue-300 px-2 text-sm text-gray-800 outline-none focus:border-blue-600 focus:ring-2 focus:ring-blue-100"
+                                                        aria-label={t('modal.assetNameLabel')}
+                                                    />
+                                                ) : (
+                                                    <span className="min-w-0 flex-1 truncate px-1 text-xs font-medium text-gray-700">
+                                                        {asset.name}
+                                                    </span>
+                                                )}
+                                                {renamingAssetId === asset.id ? (
+                                                    <>
+                                                        <button
+                                                            type="button"
+                                                            onClick={() => commitAssetName(asset.id)}
+                                                            disabled={!assetNameDraft.trim()}
+                                                            className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-lg text-blue-700 hover:bg-blue-50 disabled:opacity-40"
+                                                            title={t('common.save')}
+                                                            aria-label={t('common.save')}
+                                                        >
+                                                            <Check aria-hidden="true" className="h-4 w-4" />
+                                                        </button>
+                                                        <button
+                                                            type="button"
+                                                            onClick={cancelRenamingAsset}
+                                                            className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-lg text-gray-600 hover:bg-gray-100"
+                                                            title={t('common.cancel')}
+                                                            aria-label={t('common.cancel')}
+                                                        >
+                                                            <X aria-hidden="true" className="h-4 w-4" />
+                                                        </button>
+                                                    </>
+                                                ) : (
+                                                    <>
+                                                        <button
+                                                            type="button"
+                                                            onClick={() => beginRenamingAsset(asset)}
+                                                            className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-lg text-gray-600 hover:bg-blue-50 hover:text-blue-700"
+                                                            title={t('modal.renameAsset')}
+                                                            aria-label={`${t('modal.renameAsset')}: ${asset.name}`}
+                                                        >
+                                                            <Pencil aria-hidden="true" className="h-4 w-4" />
+                                                        </button>
+                                                        <button
+                                                            type="button"
+                                                            onClick={() => removeSavedAsset(asset.id)}
+                                                            className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-lg text-gray-600 hover:bg-red-50 hover:text-red-600"
+                                                            title={t('common.delete')}
+                                                            aria-label={`${t('common.delete')}: ${asset.name}`}
+                                                        >
+                                                            <Trash2 aria-hidden="true" className="h-4 w-4" />
+                                                        </button>
+                                                    </>
+                                                )}
                                             </div>
-                                        ))}
-                                    </div>
-                                </section>
+                                        </div>
+                                    ))}
+                                </div>
                             </div>
                         </div>
                     </div>
-                    <button
-                        type="button"
-                        onClick={() => setIsAssetsPanelOpen((prev) => !prev)}
-                        className="mb-4 inline-flex h-12 w-10 items-center justify-center rounded-r-2xl border border-l-0 border-gray-200 bg-white/95 text-gray-700 shadow-lg backdrop-blur transition hover:bg-gray-50"
-                        title={isAssetsPanelOpen ? t('modal.closeAssetsPanel') : t('modal.openAssetsPanel')}
-                        aria-label={isAssetsPanelOpen ? t('modal.closeAssetsPanel') : t('modal.openAssetsPanel')}
-                    >
-                        {isAssetsPanelOpen ? <ChevronLeft className="h-4 w-4" /> : <ChevronRight className="h-4 w-4" />}
-                    </button>
                 </div>
             </div>
 
-            <div ref={editorViewportRef} className={`workspace-canvas flex-1 overflow-auto p-2 pr-14 custom-scrollbar sm:p-4 sm:pr-16 lg:p-8 lg:pr-20 ${isAssetsPanelOpen ? 'lg:pl-[20rem]' : ''}`}>
+            <div ref={editorViewportRef} className={`workspace-canvas flex-1 overflow-auto p-2 pl-14 pr-14 custom-scrollbar sm:p-4 sm:pl-16 sm:pr-16 lg:p-8 lg:pl-20 lg:pr-20 ${isAssetsPanelOpen ? 'lg:pr-[24rem]' : ''}`}>
                 <div className="flex min-h-full w-max min-w-full items-start justify-center">
                     <div
                         className="relative mx-auto"
@@ -1522,9 +1562,7 @@ export const PageEditorModal = ({
                                     const coords = getCanvasCoords(e);
                                     const hit = [...annotations].reverse().find(ann => ann.type === 'text' && isPointInAnnotation(coords.x, coords.y, ann));
                                     if (hit) {
-                                        setSelectedAnnotationId(hit.id);
-                                        setEditingTextId(hit.id);
-                                        editingTextIdRef.current = hit.id;
+                                        beginTextAnnotationEdit(hit);
                                     }
                                 }}
                             />
@@ -1590,6 +1628,30 @@ export const PageEditorModal = ({
                             )}
                         </div>
                     </div>
+                </div>
+            </div>
+            <div className={`pointer-events-none absolute bottom-3 right-2 z-[70] transition-opacity motion-reduce:transition-none sm:bottom-auto sm:right-3 sm:top-1/2 sm:-translate-y-1/2 ${isAssetsPanelOpen ? 'invisible opacity-0' : 'visible opacity-100'}`}>
+                <div className="floating-tools pointer-events-auto flex flex-col gap-1 p-1">
+                    <button
+                        type="button"
+                        onClick={() => setEditorZoom(prev => Math.max(MIN_EDITOR_ZOOM, Number((prev - EDITOR_ZOOM_STEP).toFixed(2))))}
+                        disabled={editorZoom <= MIN_EDITOR_ZOOM}
+                        className="toolbar-button h-10 w-10 p-0"
+                        title={t('editor.zoomOut')}
+                        aria-label={t('editor.zoomOut')}
+                    >
+                        <ZoomOut aria-hidden="true" className="h-4 w-4" />
+                    </button>
+                    <button
+                        type="button"
+                        onClick={() => setEditorZoom(prev => Math.min(MAX_EDITOR_ZOOM, Number((prev + EDITOR_ZOOM_STEP).toFixed(2))))}
+                        disabled={editorZoom >= MAX_EDITOR_ZOOM}
+                        className="toolbar-button h-10 w-10 p-0"
+                        title={t('editor.zoomIn')}
+                        aria-label={t('editor.zoomIn')}
+                    >
+                        <ZoomIn aria-hidden="true" className="h-4 w-4" />
+                    </button>
                 </div>
             </div>
             <input ref={fileInputRef} type="file" accept="image/png,image/jpeg,.png,.jpg,.jpeg" className="hidden" onChange={handleImageUpload} />

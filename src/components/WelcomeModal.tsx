@@ -1,6 +1,11 @@
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { FilePenLine, LayoutGrid, Lock, ShieldCheck } from 'lucide-react';
 import { useI18n } from '../i18n';
+import { useDialogFocus } from '../hooks/useDialogFocus';
+import {
+    getSessionPersistencePreference,
+    setSessionPersistencePreference,
+} from '../utils/sessionPreference';
 import { setWelcomeDismissed } from '../utils/welcomePreference';
 
 interface WelcomeModalProps {
@@ -10,6 +15,8 @@ interface WelcomeModalProps {
 export const WelcomeModal = ({ onClose }: WelcomeModalProps) => {
     const { t, locale } = useI18n();
     const [dontShowAgain, setDontShowAgain] = useState(false);
+    const [saveSession, setSaveSession] = useState(getSessionPersistencePreference);
+    const dontShowAgainRef = useRef(false);
 
     useEffect(() => {
         document.documentElement.dataset.welcomeOpen = 'true';
@@ -18,11 +25,22 @@ export const WelcomeModal = ({ onClose }: WelcomeModalProps) => {
         };
     }, []);
 
-    const handleClose = () => {
-        if (dontShowAgain) {
+    const handleClose = useCallback(() => {
+        if (dontShowAgainRef.current) {
             setWelcomeDismissed();
         }
         onClose();
+    }, [onClose]);
+    const dialogRef = useDialogFocus<HTMLDivElement>(true, handleClose);
+
+    const handleDontShowAgainChange = (checked: boolean) => {
+        dontShowAgainRef.current = checked;
+        setDontShowAgain(checked);
+    };
+
+    const handleSaveSessionChange = (checked: boolean) => {
+        setSaveSession(checked);
+        setSessionPersistencePreference(checked);
     };
 
     const features = [
@@ -35,11 +53,13 @@ export const WelcomeModal = ({ onClose }: WelcomeModalProps) => {
     return (
         <div className="dialog-backdrop fixed inset-0 z-[300] flex items-center justify-center p-4 sm:p-6">
             <div
+                ref={dialogRef}
                 role="dialog"
                 aria-modal="true"
                 aria-labelledby="welcome-title"
                 aria-describedby="welcome-description"
-                className="welcome-surface w-full max-w-lg p-6 sm:p-8"
+                tabIndex={-1}
+                className="welcome-surface custom-scrollbar max-h-[calc(100dvh-2rem)] w-full max-w-lg overflow-y-auto p-6 sm:p-8"
             >
                 <div className="mb-1 flex items-center gap-3 pt-1">
                     <div className="brand-mark h-11 w-11 rounded-xl">
@@ -62,11 +82,30 @@ export const WelcomeModal = ({ onClose }: WelcomeModalProps) => {
                     ))}
                 </ul>
 
-                <label className="mt-6 flex cursor-pointer items-center gap-2.5 rounded-lg py-1 text-sm text-gray-600">
+                <div className="mt-6 border-t border-gray-200 pt-5">
+                    <label className="flex cursor-pointer items-start gap-3 rounded-xl bg-gray-50 p-3.5">
+                        <input
+                            type="checkbox"
+                            checked={saveSession}
+                            onChange={(event) => handleSaveSessionChange(event.target.checked)}
+                            className="mt-0.5 h-5 w-5 shrink-0 rounded border-gray-300"
+                        />
+                        <span>
+                            <span className="block text-sm font-semibold text-gray-800">
+                                {t('welcome.saveSession')}
+                            </span>
+                            <span className="mt-1 block text-xs leading-5 text-gray-600">
+                                {t('welcome.saveSessionDescription')}
+                            </span>
+                        </span>
+                    </label>
+                </div>
+
+                <label className="mt-4 flex cursor-pointer items-center gap-2.5 rounded-lg py-1 text-sm text-gray-600">
                     <input
                         type="checkbox"
                         checked={dontShowAgain}
-                        onChange={(event) => setDontShowAgain(event.target.checked)}
+                        onChange={(event) => handleDontShowAgainChange(event.target.checked)}
                         className="h-4 w-4 rounded border-gray-300"
                     />
                     {t('welcome.dontShowAgain')}
@@ -75,9 +114,10 @@ export const WelcomeModal = ({ onClose }: WelcomeModalProps) => {
                 <div className="mt-5 flex justify-end">
                     <button
                         type="button"
-                        autoFocus
+                        data-autofocus
                         onClick={handleClose}
                         className="primary-action h-11 w-full px-6 text-sm sm:w-auto"
+                        title={t('welcome.start')}
                     >
                         {t('welcome.start')}
                     </button>

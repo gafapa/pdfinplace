@@ -24,6 +24,7 @@ function App() {
   }, [locale, t]);
 
   const dismissWelcome = useCallback(() => setShowWelcome(false), []);
+  const openWelcome = useCallback(() => setShowWelcome(true), []);
 
   return (
     <div className="h-[100dvh] bg-gray-100 font-sans text-gray-900">
@@ -43,7 +44,7 @@ function App() {
             </div>
           }
         >
-          <LazyPdfEditor />
+          <LazyPdfEditor onOpenWelcome={openWelcome} />
         </Suspense>
       </main>
       {showWelcome ? <WelcomeModal onClose={dismissWelcome} /> : null}

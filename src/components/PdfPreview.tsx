@@ -17,7 +17,19 @@ type PdfRenderTask = import('pdfjs-dist').RenderTask;
 type PdfLoadingTask = import('pdfjs-dist').PDFDocumentLoadingTask;
 
 const cloneArrayBuffer = (buffer: ArrayBuffer) => buffer.slice(0);
+const EMPTY_ANNOTATIONS: Annotation[] = [];
 const EMPTY_CONTENT_EDITS: ContentEdit[] = [];
+
+export interface PdfPreviewFinishOptions {
+    watermarkText: string;
+    headerText: string;
+    footerText: string;
+    includePageNumbers: boolean;
+    cropPercent: number;
+    marginPercent: number;
+    pageNumber: number;
+    totalPages: number;
+}
 
 interface PdfPreviewProps {
     file?: File;
@@ -31,6 +43,8 @@ interface PdfPreviewProps {
     contentEdits?: ContentEdit[];
     annotationCanvasWidth?: number;
     annotationCanvasHeight?: number;
+    showPageBorder?: boolean;
+    finishOptions?: PdfPreviewFinishOptions;
 }
 
 export const PdfPreview = ({
@@ -41,16 +55,19 @@ export const PdfPreview = ({
     height,
     rotation = 0,
     className = "",
-    annotations = [],
+    annotations = EMPTY_ANNOTATIONS,
     contentEdits = EMPTY_CONTENT_EDITS,
     annotationCanvasWidth,
     annotationCanvasHeight,
+    showPageBorder = false,
+    finishOptions,
 }: PdfPreviewProps) => {
     const { t } = useI18n();
     const canvasRef = useRef<HTMLCanvasElement>(null);
     const imageCacheRef = useRef<Map<string, HTMLImageElement>>(new Map());
     const [loading, setLoading] = useState(true);
     const [error, setError] = useState(false);
+    const [renderedPageSize, setRenderedPageSize] = useState({ width: 0, height: 0 });
     const renderGenerationRef = useRef(0);
     const renderQueueRef = useRef<Promise<void>>(Promise.resolve());
 
@@ -97,10 +114,13 @@ export const PdfPreview = ({
                 const totalRotation = (page.rotate + rotation) % 360;
                 const viewport = page.getViewport({ scale: 1, rotation: totalRotation });
 
-                // Calculate scale to fit within width/height bounds
-                let scale = width / viewport.width;
+                // Leave a quiet gutter around thumbnail pages so their physical edge remains visible.
+                const pageGutter = showPageBorder ? Math.max(6, Math.min(width, height ?? width) * 0.045) : 0;
+                const availableWidth = Math.max(1, width - (pageGutter * 2));
+                const availableHeight = height ? Math.max(1, height - (pageGutter * 2)) : undefined;
+                let scale = availableWidth / viewport.width;
                 if (height) {
-                    const heightScale = height / viewport.height;
+                    const heightScale = (availableHeight ?? height) / viewport.height;
                     scale = Math.min(scale, heightScale);
                 }
 
@@ -112,6 +132,12 @@ export const PdfPreview = ({
                     if (canvas && context) {
                         canvas.height = scaledViewport.height;
                         canvas.width = scaledViewport.width;
+                        if (isCurrentRender()) {
+                            setRenderedPageSize({
+                                width: scaledViewport.width,
+                                height: scaledViewport.height,
+                            });
+                        }
 
                         const renderContext = {
                             canvas,
@@ -139,6 +165,39 @@ export const PdfPreview = ({
                             const annotationScaleY = canvas.height / editorBaseHeight;
 
                             annotations.forEach(ann => {
+                                if (ann.type === 'image' || ann.type === 'signature') {
+                                    const data = ann.data as ImageAnnotationData;
+                                    let image = imageCacheRef.current.get(data.dataUrl);
+                                    if (!image) {
+                                        image = new Image();
+                                        imageCacheRef.current.set(data.dataUrl, image);
+                                    }
+
+                                    const drawLoadedImage = () => {
+                                        if (!isCurrentRender()) return;
+                                        context.save();
+                                        context.scale(annotationScaleX, annotationScaleY);
+                                        const centerX = ann.x + (ann.width / 2);
+                                        const centerY = ann.y + (ann.height / 2);
+                                        context.translate(centerX, centerY);
+                                        context.rotate((ann.rotation * Math.PI) / 180);
+                                        context.translate(-centerX, -centerY);
+                                        context.drawImage(image, ann.x, ann.y, ann.width, ann.height);
+                                        context.restore();
+                                    };
+
+                                    if (image.complete && image.naturalWidth > 0) {
+                                        drawLoadedImage();
+                                    } else {
+                                        image.onload = drawLoadedImage;
+                                        image.onerror = () => {
+                                            if (isMounted) setError(true);
+                                        };
+                                        if (!image.src) image.src = data.dataUrl;
+                                    }
+                                    return;
+                                }
+
                                 context.save();
                                 context.scale(annotationScaleX, annotationScaleY);
                                 const centerX = ann.x + (ann.width / 2);
@@ -194,36 +253,6 @@ export const PdfPreview = ({
                                     normalizedLines.forEach((line, index) => {
                                         context.fillText(line, ann.x, ann.y + (index * lineHeight));
                                     });
-                                } else if (ann.type === 'image' || ann.type === 'signature') {
-                                    const data = ann.data as ImageAnnotationData;
-                                    let img = imageCacheRef.current.get(data.dataUrl);
-                                    if (!img) {
-                                        img = new Image();
-                                        imageCacheRef.current.set(data.dataUrl, img);
-                                    }
-                                    const drawLoadedImage = () => {
-                                        context.save();
-                                        context.scale(annotationScaleX, annotationScaleY);
-                                        const centerX = ann.x + (ann.width / 2);
-                                        const centerY = ann.y + (ann.height / 2);
-                                        context.translate(centerX, centerY);
-                                        context.rotate((ann.rotation * Math.PI) / 180);
-                                        context.translate(-centerX, -centerY);
-                                        context.drawImage(img!, ann.x, ann.y, ann.width, ann.height);
-                                        context.restore();
-                                    };
-                                    if (img.complete) {
-                                        drawLoadedImage();
-                                    } else {
-                                        img.onload = () => {
-                                            if (!isCurrentRender()) return;
-                                            drawLoadedImage();
-                                        };
-                                        img.onerror = () => {
-                                            if (isMounted) setError(true);
-                                        };
-                                        img.src = data.dataUrl;
-                                    }
                                 }
 
                                 context.restore();
@@ -263,13 +292,47 @@ export const PdfPreview = ({
         contentEdits,
         annotationCanvasWidth,
         annotationCanvasHeight,
+        showPageBorder,
     ]);
 
+    const normalizedMargin = Math.max(0, Math.min(finishOptions?.marginPercent ?? 0, 20));
+    const normalizedCrop = Math.max(0, Math.min(finishOptions?.cropPercent ?? 0, 20));
+    const cropZoom = 1 / Math.max(0.2, 1 - ((normalizedCrop * 2) / 100));
+    const outputContentScale = (1 - ((normalizedMargin * 2) / 100)) * cropZoom;
+    const pageNumberFontSize = Math.max(7, Math.min(10, Math.min(renderedPageSize.width, renderedPageSize.height) * 0.05));
+    const watermarkFontSize = Math.max(9, Math.min(18, Math.min(renderedPageSize.width, renderedPageSize.height) * 0.08));
+    const normalizedWatermark = finishOptions?.watermarkText.trim() ?? '';
+    const normalizedHeader = finishOptions?.headerText.trim() ?? '';
+    const normalizedFooter = finishOptions?.footerText.trim() ?? '';
+
+    const canvas = (
+        <canvas
+            ref={canvasRef}
+            className={`${showPageBorder ? 'pdf-preview-output-content absolute' : 'block'} ${loading || error ? 'opacity-0' : 'opacity-100'} transition-opacity motion-reduce:transition-none`}
+            style={showPageBorder ? {
+                left: '50%',
+                top: '50%',
+                width: `${outputContentScale * 100}%`,
+                height: `${outputContentScale * 100}%`,
+                maxWidth: 'none',
+                maxHeight: 'none',
+                transform: 'translate(-50%, -50%)',
+            } : {
+                maxWidth: '100%',
+                maxHeight: '100%',
+                objectFit: 'contain',
+            }}
+        />
+    );
+
     return (
-        <div className={`relative bg-white shadow-sm overflow-hidden flex items-center justify-center ${className}`} style={{ width, height: height || 'auto' }}>
+        <div
+            className={`relative flex items-center justify-center overflow-hidden ${showPageBorder ? 'pdf-preview-workbench' : 'bg-white shadow-sm'} ${className}`}
+            style={{ width, height: height || 'auto' }}
+        >
             {loading && (
                 <div className="absolute inset-0 flex items-center justify-center bg-gray-50">
-                    <div className="w-6 h-6 border-2 border-blue-500 border-t-transparent rounded-full animate-spin"></div>
+                    <div className="h-6 w-6 animate-spin rounded-full border-2 border-blue-500 border-t-transparent motion-reduce:animate-none"></div>
                 </div>
             )}
             {error && (
@@ -277,15 +340,50 @@ export const PdfPreview = ({
                     {t('preview.error')}
                 </div>
             )}
-            <canvas
-                ref={canvasRef}
-                className={`block ${loading || error ? 'opacity-0' : 'opacity-100'} transition-opacity`}
-                style={{
-                    maxWidth: '100%',
-                    maxHeight: '100%',
-                    objectFit: 'contain'
-                }}
-            />
+            {showPageBorder ? (
+                <div
+                    className={`pdf-preview-paper relative overflow-hidden bg-white ${loading || error ? 'invisible' : 'visible'}`}
+                    style={{ width: renderedPageSize.width, height: renderedPageSize.height }}
+                >
+                    {canvas}
+                    {normalizedHeader ? (
+                        <span
+                            aria-hidden="true"
+                            className="pdf-preview-header absolute z-[1] truncate"
+                            style={{ fontSize: pageNumberFontSize }}
+                        >
+                            {normalizedHeader}
+                        </span>
+                    ) : null}
+                    {normalizedWatermark ? (
+                        <span
+                            aria-hidden="true"
+                            className="pdf-preview-watermark absolute z-[1] max-w-[84%] truncate"
+                            style={{ fontSize: watermarkFontSize }}
+                        >
+                            {normalizedWatermark}
+                        </span>
+                    ) : null}
+                    {normalizedFooter ? (
+                        <span
+                            aria-hidden="true"
+                            className="pdf-preview-footer absolute z-[1] truncate"
+                            style={{ fontSize: pageNumberFontSize }}
+                        >
+                            {normalizedFooter}
+                        </span>
+                    ) : null}
+                    {finishOptions?.includePageNumbers ? (
+                        <span
+                            aria-hidden="true"
+                            className="pdf-preview-page-number absolute z-[1] tabular-nums"
+                            style={{ fontSize: pageNumberFontSize }}
+                        >
+                            {finishOptions.pageNumber} / {finishOptions.totalPages}
+                        </span>
+                    ) : null}
+                </div>
+            ) : canvas}
         </div>
     );
 };

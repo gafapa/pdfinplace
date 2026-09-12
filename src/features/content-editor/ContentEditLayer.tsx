@@ -446,6 +446,7 @@ export const ContentEditLayer = ({
                                     transform: `rotate(${block.screenRotation}deg)`,
                                     transformOrigin: 'top left',
                                 }}
+                                title={getBlockLabel(block, labels)}
                                 aria-label={getBlockLabel(block, labels)}
                                 aria-pressed={isSelected}
                                 onPointerDown={(event) => handlePointerDown(event, block)}
@@ -509,6 +510,7 @@ export const ContentEditLayer = ({
                             type="button"
                             onClick={() => startTextEdit(selectedBlock)}
                             className="inline-flex min-h-11 items-center rounded-lg px-3 text-xs font-semibold hover:bg-amber-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-amber-500"
+                            title={labels.editText}
                         >
                             {labels.editText}
                         </button>

@@ -1,7 +1,6 @@
 export interface PersistedAssetRecord {
     id: string;
     name: string;
-    kind: 'signature' | 'stamp';
     dataUrl: string;
     width: number;
     height: number;
