@@ -1138,6 +1138,19 @@ export const PageEditorModal = ({
         { id: 'line', icon: Minus, label: t('modal.line') },
         { id: 'image', icon: ImageIcon, label: t('modal.image') },
     ] as const;
+    const contentModeStatus = activeTool === 'content' ? (
+        <div
+            role="status"
+            aria-live="polite"
+            className="flex h-9 items-center gap-2 whitespace-nowrap rounded-lg border border-amber-200 bg-amber-50 px-2 text-xs font-semibold text-amber-950 sm:px-3"
+        >
+            <FilePenLine aria-hidden="true" className="h-4 w-4 shrink-0" />
+            <span className="sr-only sm:not-sr-only">{t('modal.editContent')}</span>
+            <span className="rounded-full bg-amber-200/70 px-2 py-0.5 tabular-nums">
+                {contentEdits.length}
+            </span>
+        </div>
+    ) : null;
 
     return (
         <div
@@ -1185,6 +1198,7 @@ export const PageEditorModal = ({
                             >
                                 <ChevronLeft aria-hidden="true" className="h-4 w-4" />
                             </button>
+                            {contentModeStatus}
                             <button
                                 type="button"
                                 onClick={() => handleNavigateRequest(1)}
@@ -1196,7 +1210,7 @@ export const PageEditorModal = ({
                                 <ChevronRight aria-hidden="true" className="h-4 w-4" />
                             </button>
                         </div>
-                    ) : <div aria-hidden="true" />}
+                    ) : contentModeStatus ?? <div aria-hidden="true" />}
                     <div className="header-action-group justify-self-end">
                         <button
                             type="button"
@@ -1218,50 +1232,36 @@ export const PageEditorModal = ({
                         </button>
                     </div>
                 </div>
-                {showTextControls || activeTool === 'content' ? (
+                {showTextControls ? (
                     <div className="mt-2 flex min-w-0 justify-center overflow-x-auto">
-                        {showTextControls ? (
-                            <div className="flex w-fit items-center gap-2 whitespace-nowrap rounded-lg border border-gray-200 bg-white p-1">
-                                <select
-                                    value={toolbarFontSize}
-                                    onChange={(e) => {
-                                        const nextSize = Number(e.target.value);
-                                        setFontSize(nextSize);
-                                        if (hasActiveTextAnnotation) {
-                                            applyTextStyleToActive(data => ({ ...data, fontSize: nextSize }));
-                                        }
-                                    }}
-                                    className="h-9 min-w-[86px] shrink-0 rounded border border-gray-300 bg-white px-2 py-1 text-xs text-gray-700 focus:outline-none focus:ring-1 focus:ring-blue-500"
-                                >
-                                    {[12, 16, 20, 24, 32, 48, 64].map(s => <option key={s} value={s}>{s}px</option>)}
-                                </select>
-                                <select
-                                    value={toolbarFontFamily}
-                                    onChange={(e) => {
-                                        const nextFamily = e.target.value as (typeof TEXT_FONTS)[number];
-                                        setTextFontFamily(nextFamily);
-                                        if (hasActiveTextAnnotation) {
-                                            applyTextStyleToActive(data => ({ ...data, fontFamily: nextFamily }));
-                                        }
-                                    }}
-                                    className="h-9 min-w-[130px] shrink-0 rounded border border-gray-300 bg-white px-2 py-1 text-xs text-gray-700 focus:outline-none focus:ring-1 focus:ring-blue-500"
-                                >
-                                    {TEXT_FONTS.map(font => <option key={font} value={font}>{font}</option>)}
-                                </select>
-                            </div>
-                        ) : (
-                            <div
-                                role="status"
-                                aria-live="polite"
-                                className="flex h-9 items-center gap-2 whitespace-nowrap rounded-lg border border-amber-200 bg-amber-50 px-3 text-xs font-semibold text-amber-950"
+                        <div className="flex w-fit items-center gap-2 whitespace-nowrap rounded-lg border border-gray-200 bg-white p-1">
+                            <select
+                                value={toolbarFontSize}
+                                onChange={(e) => {
+                                    const nextSize = Number(e.target.value);
+                                    setFontSize(nextSize);
+                                    if (hasActiveTextAnnotation) {
+                                        applyTextStyleToActive(data => ({ ...data, fontSize: nextSize }));
+                                    }
+                                }}
+                                className="h-9 min-w-[86px] shrink-0 rounded border border-gray-300 bg-white px-2 py-1 text-xs text-gray-700 focus:outline-none focus:ring-1 focus:ring-blue-500"
                             >
-                                <FilePenLine aria-hidden="true" className="h-4 w-4" />
-                                {t('modal.editContent')}
-                                <span className="rounded-full bg-amber-200/70 px-2 py-0.5 tabular-nums">
-                                    {contentEdits.length}
-                                </span>
-                            </div>
-                        )}
+                                {[12, 16, 20, 24, 32, 48, 64].map(s => <option key={s} value={s}>{s}px</option>)}
+                            </select>
+                            <select
+                                value={toolbarFontFamily}
+                                onChange={(e) => {
+                                    const nextFamily = e.target.value as (typeof TEXT_FONTS)[number];
+                                    setTextFontFamily(nextFamily);
+                                    if (hasActiveTextAnnotation) {
+                                        applyTextStyleToActive(data => ({ ...data, fontFamily: nextFamily }));
+                                    }
+                                }}
+                                className="h-9 min-w-[130px] shrink-0 rounded border border-gray-300 bg-white px-2 py-1 text-xs text-gray-700 focus:outline-none focus:ring-1 focus:ring-blue-500"
+                            >
+                                {TEXT_FONTS.map(font => <option key={font} value={font}>{font}</option>)}
+                            </select>
+                        </div>
                     </div>
                 ) : null}
             </div>

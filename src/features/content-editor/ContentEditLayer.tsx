@@ -497,7 +497,7 @@ export const ContentEditLayer = ({
             })}
 
             {selectedBlock ? (
-                <div className="absolute bottom-3 left-1/2 z-50 flex -translate-x-1/2 items-center gap-1 rounded-xl border border-gray-200 bg-white/96 p-1.5 text-gray-700 shadow-xl backdrop-blur">
+                <div className="absolute bottom-1 left-1/2 z-50 flex -translate-x-1/2 items-center gap-1 rounded-xl border border-gray-200 bg-white/96 p-1.5 text-gray-700 shadow-xl backdrop-blur">
                     <span role="status" className="max-w-48 truncate px-2 text-xs font-semibold">
                         {selectedBlock.type === 'text' ? (
                             <><Type aria-hidden="true" className="mr-1 inline h-3.5 w-3.5" />{selectedBlock.originalText}</>
@@ -536,7 +536,7 @@ export const ContentEditLayer = ({
                     </button>
                 </div>
             ) : (
-                <p className="pointer-events-none absolute bottom-3 left-1/2 z-40 -translate-x-1/2 rounded-lg border border-amber-200 bg-amber-50/95 px-3 py-2 text-center text-xs font-medium text-amber-950 shadow-sm">
+                <p className="pointer-events-none absolute bottom-1 left-1/2 z-40 -translate-x-1/2 rounded-lg border border-amber-200 bg-amber-50/95 px-3 py-2 text-center text-xs font-medium text-amber-950 shadow-sm">
                     {labels.hint}
                 </p>
             )}
