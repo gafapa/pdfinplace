@@ -6,6 +6,7 @@ import {
     type KeyboardEvent,
     type PointerEvent,
 } from 'react';
+import { createPortal } from 'react-dom';
 import { ImageIcon, LoaderCircle, RotateCcw, Trash2, Type } from 'lucide-react';
 import type { PDFDocumentProxy } from 'pdfjs-dist';
 import {
@@ -85,6 +86,7 @@ export const ContentEditLayer = ({
     const [selectedBlockId, setSelectedBlockId] = useState<string | null>(null);
     const [editingBlockId, setEditingBlockId] = useState<string | null>(null);
     const [draftText, setDraftText] = useState('');
+    const [editorDialog, setEditorDialog] = useState<HTMLElement | null>(null);
     const layerRef = useRef<HTMLDivElement>(null);
     const blocksRef = useRef<ContentBlock[]>([]);
     const editsRef = useRef(edits);
@@ -92,6 +94,10 @@ export const ContentEditLayer = ({
     const dragFrameRef = useRef<number | null>(null);
     const pendingDragRef = useRef<PendingDragDelta | null>(null);
     const loadedParseKeyRef = useRef<string | null>(null);
+    const handleLayerRef = useCallback((element: HTMLDivElement | null) => {
+        layerRef.current = element;
+        setEditorDialog(element?.closest<HTMLElement>('[role="dialog"]') ?? null);
+    }, []);
 
     useEffect(() => {
         editsRef.current = edits;
@@ -346,22 +352,67 @@ export const ContentEditLayer = ({
     if (!isActive) return null;
 
     const selectedBlock = parsedPage?.blocks.find((block) => block.id === selectedBlockId) ?? null;
+    const contextualInformation = selectedBlock ? (
+        <div className="pointer-events-auto flex max-w-full items-center gap-1 rounded-xl border border-gray-200 bg-white/96 p-1.5 text-gray-700 shadow-xl backdrop-blur">
+            <span role="status" className="min-w-0 flex-1 truncate px-2 text-xs font-semibold sm:max-w-48">
+                {selectedBlock.type === 'text' ? (
+                    <><Type aria-hidden="true" className="mr-1 inline h-3.5 w-3.5" />{selectedBlock.originalText}</>
+                ) : (
+                    <><ImageIcon aria-hidden="true" className="mr-1 inline h-3.5 w-3.5" />{labels.imageElement}</>
+                )}
+            </span>
+            {selectedBlock.type === 'text' && !selectedBlock.deleted ? (
+                <button
+                    type="button"
+                    onClick={() => startTextEdit(selectedBlock)}
+                    className="inline-flex min-h-11 shrink-0 items-center rounded-lg px-3 text-xs font-semibold hover:bg-amber-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-amber-500"
+                    title={labels.editText}
+                >
+                    {labels.editText}
+                </button>
+            ) : null}
+            <button
+                type="button"
+                onClick={() => restoreBlock(selectedBlock.id)}
+                disabled={!selectedBlock.isDirty}
+                className="inline-flex h-11 w-11 shrink-0 items-center justify-center rounded-lg hover:bg-gray-100 disabled:opacity-30 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-amber-500"
+                aria-label={labels.restoreSelection}
+                title={labels.restoreSelection}
+            >
+                <RotateCcw aria-hidden="true" className="h-4 w-4" />
+            </button>
+            <button
+                type="button"
+                onClick={() => deleteBlock(selectedBlock.id)}
+                className="inline-flex h-11 w-11 shrink-0 items-center justify-center rounded-lg text-red-600 hover:bg-red-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-red-500"
+                aria-label={labels.deleteSelection}
+                title={labels.deleteSelection}
+            >
+                <Trash2 aria-hidden="true" className="h-4 w-4" />
+            </button>
+        </div>
+    ) : (
+        <p className="pointer-events-none max-w-full rounded-lg border border-amber-200 bg-amber-50/95 px-3 py-2 text-center text-xs font-medium text-amber-950 shadow-sm">
+            {labels.hint}
+        </p>
+    );
 
     return (
-        <div
-            ref={layerRef}
-            className="absolute inset-0 z-20 overflow-hidden rounded-lg"
-            aria-label={labels.hint}
-            onPointerDown={(event) => {
-                if (event.target === event.currentTarget) setSelectedBlockId(null);
-            }}
-        >
-            {isLoading ? (
-                <div role="status" className="absolute inset-0 z-50 flex items-center justify-center bg-white/72 text-sm font-medium text-gray-700 backdrop-blur-[1px]">
-                    <LoaderCircle aria-hidden="true" className="mr-2 h-5 w-5 animate-spin motion-reduce:animate-none" />
-                    {labels.loading}
-                </div>
-            ) : null}
+        <>
+            <div
+                ref={handleLayerRef}
+                className="absolute inset-0 z-20 overflow-hidden rounded-lg"
+                aria-label={labels.hint}
+                onPointerDown={(event) => {
+                    if (event.target === event.currentTarget) setSelectedBlockId(null);
+                }}
+            >
+                {isLoading ? (
+                    <div role="status" className="absolute inset-0 z-50 flex items-center justify-center bg-white/72 text-sm font-medium text-gray-700 backdrop-blur-[1px]">
+                        <LoaderCircle aria-hidden="true" className="mr-2 h-5 w-5 animate-spin motion-reduce:animate-none" />
+                        {labels.loading}
+                    </div>
+                ) : null}
 
             {!isLoading && parsedPage?.blocks.length === 0 ? (
                 <div role="status" className="absolute left-1/2 top-4 z-50 -translate-x-1/2 rounded-lg border border-gray-200 bg-white/95 px-3 py-2 text-xs font-medium text-gray-700 shadow-lg">
@@ -496,50 +547,13 @@ export const ContentEditLayer = ({
                 );
             })}
 
-            {selectedBlock ? (
-                <div className="absolute bottom-1 left-1/2 z-50 flex -translate-x-1/2 items-center gap-1 rounded-xl border border-gray-200 bg-white/96 p-1.5 text-gray-700 shadow-xl backdrop-blur">
-                    <span role="status" className="max-w-48 truncate px-2 text-xs font-semibold">
-                        {selectedBlock.type === 'text' ? (
-                            <><Type aria-hidden="true" className="mr-1 inline h-3.5 w-3.5" />{selectedBlock.originalText}</>
-                        ) : (
-                            <><ImageIcon aria-hidden="true" className="mr-1 inline h-3.5 w-3.5" />{labels.imageElement}</>
-                        )}
-                    </span>
-                    {selectedBlock.type === 'text' && !selectedBlock.deleted ? (
-                        <button
-                            type="button"
-                            onClick={() => startTextEdit(selectedBlock)}
-                            className="inline-flex min-h-11 items-center rounded-lg px-3 text-xs font-semibold hover:bg-amber-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-amber-500"
-                            title={labels.editText}
-                        >
-                            {labels.editText}
-                        </button>
-                    ) : null}
-                    <button
-                        type="button"
-                        onClick={() => restoreBlock(selectedBlock.id)}
-                        disabled={!selectedBlock.isDirty}
-                        className="inline-flex h-11 w-11 items-center justify-center rounded-lg hover:bg-gray-100 disabled:opacity-30 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-amber-500"
-                        aria-label={labels.restoreSelection}
-                        title={labels.restoreSelection}
-                    >
-                        <RotateCcw aria-hidden="true" className="h-4 w-4" />
-                    </button>
-                    <button
-                        type="button"
-                        onClick={() => deleteBlock(selectedBlock.id)}
-                        className="inline-flex h-11 w-11 items-center justify-center rounded-lg text-red-600 hover:bg-red-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-red-500"
-                        aria-label={labels.deleteSelection}
-                        title={labels.deleteSelection}
-                    >
-                        <Trash2 aria-hidden="true" className="h-4 w-4" />
-                    </button>
-                </div>
-            ) : (
-                <p className="pointer-events-none absolute bottom-1 left-1/2 z-40 -translate-x-1/2 rounded-lg border border-amber-200 bg-amber-50/95 px-3 py-2 text-center text-xs font-medium text-amber-950 shadow-sm">
-                    {labels.hint}
-                </p>
-            )}
-        </div>
+            </div>
+            {editorDialog ? createPortal(
+                <div className="pointer-events-none fixed inset-x-0 bottom-3 z-[75] flex justify-center px-3">
+                    {contextualInformation}
+                </div>,
+                editorDialog,
+            ) : null}
+        </>
     );
 };
