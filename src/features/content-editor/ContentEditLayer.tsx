@@ -7,7 +7,18 @@ import {
     type PointerEvent,
 } from 'react';
 import { createPortal } from 'react-dom';
-import { ImageIcon, LoaderCircle, RotateCcw, Trash2, Type } from 'lucide-react';
+import {
+    ArrowDown,
+    ArrowLeft,
+    ArrowRight,
+    ArrowUp,
+    ImageIcon,
+    LoaderCircle,
+    PencilLine,
+    RotateCcw,
+    Trash2,
+    Type,
+} from 'lucide-react';
 import type { PDFDocumentProxy } from 'pdfjs-dist';
 import {
     parseContentPage,
@@ -23,6 +34,10 @@ interface ContentEditLayerLabels {
     editText: string;
     deleteSelection: string;
     restoreSelection: string;
+    moveLeft: string;
+    moveRight: string;
+    moveUp: string;
+    moveDown: string;
     textElement: string;
     imageElement: string;
     parseFailed: string;
@@ -352,23 +367,47 @@ export const ContentEditLayer = ({
     if (!isActive) return null;
 
     const selectedBlock = parsedPage?.blocks.find((block) => block.id === selectedBlockId) ?? null;
+    const movementControls = selectedBlock ? [
+        { label: labels.moveLeft, icon: ArrowLeft, deltaX: -1, deltaY: 0 },
+        { label: labels.moveUp, icon: ArrowUp, deltaX: 0, deltaY: -1 },
+        { label: labels.moveDown, icon: ArrowDown, deltaX: 0, deltaY: 1 },
+        { label: labels.moveRight, icon: ArrowRight, deltaX: 1, deltaY: 0 },
+    ] : [];
     const contextualInformation = selectedBlock ? (
-        <div className="pointer-events-auto flex max-w-full items-center gap-1 rounded-xl border border-gray-200 bg-white/96 p-1.5 text-gray-700 shadow-xl backdrop-blur">
-            <span role="status" className="min-w-0 flex-1 truncate px-2 text-xs font-semibold sm:max-w-48">
+        <div className="pointer-events-auto flex max-w-[calc(100vw-1.5rem)] flex-col rounded-xl border border-gray-200 bg-white/96 p-1.5 text-gray-700 shadow-xl backdrop-blur sm:flex-row sm:items-center sm:gap-1">
+            <span role="status" className="min-w-0 truncate px-2 py-1 text-xs font-semibold sm:max-w-48 sm:flex-1 sm:py-0">
                 {selectedBlock.type === 'text' ? (
                     <><Type aria-hidden="true" className="mr-1 inline h-3.5 w-3.5" />{selectedBlock.originalText}</>
                 ) : (
                     <><ImageIcon aria-hidden="true" className="mr-1 inline h-3.5 w-3.5" />{labels.imageElement}</>
                 )}
             </span>
+            <div className="flex max-w-full items-center gap-1 overflow-x-auto border-t border-gray-200 pt-1 sm:border-l sm:border-t-0 sm:pl-1 sm:pt-0">
+                {movementControls.map(({ label, icon: Icon, deltaX, deltaY }) => (
+                    <button
+                        key={label}
+                        type="button"
+                        onClick={(event) => {
+                            const step = event.shiftKey ? 10 : 1;
+                            moveBlockBy(selectedBlock.id, deltaX * step, deltaY * step);
+                        }}
+                        disabled={selectedBlock.deleted}
+                        className="inline-flex h-11 w-11 shrink-0 items-center justify-center rounded-lg hover:bg-amber-50 disabled:opacity-30 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-amber-500"
+                        aria-label={label}
+                        title={label}
+                    >
+                        <Icon aria-hidden="true" className="h-4 w-4" />
+                    </button>
+                ))}
             {selectedBlock.type === 'text' && !selectedBlock.deleted ? (
                 <button
                     type="button"
                     onClick={() => startTextEdit(selectedBlock)}
-                    className="inline-flex min-h-11 shrink-0 items-center rounded-lg px-3 text-xs font-semibold hover:bg-amber-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-amber-500"
+                    className="inline-flex h-11 w-11 shrink-0 items-center justify-center rounded-lg hover:bg-amber-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-amber-500"
+                    aria-label={labels.editText}
                     title={labels.editText}
                 >
-                    {labels.editText}
+                    <PencilLine aria-hidden="true" className="h-4 w-4" />
                 </button>
             ) : null}
             <button
@@ -384,12 +423,14 @@ export const ContentEditLayer = ({
             <button
                 type="button"
                 onClick={() => deleteBlock(selectedBlock.id)}
-                className="inline-flex h-11 w-11 shrink-0 items-center justify-center rounded-lg text-red-600 hover:bg-red-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-red-500"
+                disabled={selectedBlock.deleted}
+                className="inline-flex h-11 w-11 shrink-0 items-center justify-center rounded-lg text-red-600 hover:bg-red-50 disabled:opacity-30 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-red-500"
                 aria-label={labels.deleteSelection}
                 title={labels.deleteSelection}
             >
                 <Trash2 aria-hidden="true" className="h-4 w-4" />
             </button>
+            </div>
         </div>
     ) : (
         <p className="pointer-events-none max-w-full rounded-lg border border-amber-200 bg-amber-50/95 px-3 py-2 text-center text-xs font-medium text-amber-950 shadow-sm">
