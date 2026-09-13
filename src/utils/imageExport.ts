@@ -1,4 +1,5 @@
 export type ImageExportFormat = 'jpeg' | 'png' | 'webp';
+export type ImageExportQualityPreset = 'compact' | 'balanced' | 'maximum';
 
 export interface ImageExportFormatDetails {
     extension: 'jpg' | 'png' | 'webp';
@@ -10,6 +11,16 @@ const IMAGE_EXPORT_FORMATS: Record<ImageExportFormat, ImageExportFormatDetails> 
     png: { extension: 'png', mimeType: 'image/png' },
     webp: { extension: 'webp', mimeType: 'image/webp' },
 };
+
+const IMAGE_EXPORT_QUALITY_VALUES: Record<ImageExportQualityPreset, number> = {
+    compact: 55,
+    balanced: 80,
+    maximum: 100,
+};
+
+export const getImageExportQualityValue = (preset: ImageExportQualityPreset) => (
+    IMAGE_EXPORT_QUALITY_VALUES[preset]
+);
 
 export const normalizeImageExportQuality = (quality: number) => {
     if (!Number.isFinite(quality)) return 80;

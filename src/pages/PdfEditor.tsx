@@ -9,6 +9,10 @@ import type { DragEndEvent, DragStartEvent } from '@dnd-kit/core';
 import { useI18n } from '../i18n';
 import { AVAILABLE_LOCALES, type Locale } from '../i18n/locales';
 import { useDialogFocus } from '../hooks/useDialogFocus';
+import {
+    getImageExportQualityValue,
+    type ImageExportQualityPreset,
+} from '../utils/imageExport';
 
 const LazyPageEditorModal = lazy(() =>
     import('../components/PageEditorModal').then((module) => ({ default: module.PageEditorModal }))
@@ -254,7 +258,7 @@ export const PdfEditor = ({ onOpenWelcome }: PdfEditorProps) => {
     const [isExportDialogOpen, setIsExportDialogOpen] = useState(false);
     const [isImageExportDialogOpen, setIsImageExportDialogOpen] = useState(false);
     const [imageExportFormat, setImageExportFormat] = useState<ImageExportOptions['format']>('jpeg');
-    const [imageExportQuality, setImageExportQuality] = useState(80);
+    const [imageExportQualityPreset, setImageExportQualityPreset] = useState<ImageExportQualityPreset>('balanced');
     const [isFinishDialogOpen, setIsFinishDialogOpen] = useState(false);
     const [isProtectDialogOpen, setIsProtectDialogOpen] = useState(false);
     const [isUnlockDialogOpen, setIsUnlockDialogOpen] = useState(false);
@@ -405,7 +409,7 @@ export const PdfEditor = ({ onOpenWelcome }: PdfEditorProps) => {
         closeImageExportDialog();
         await exportPagesAsImages({
             format: imageExportFormat,
-            quality: imageExportQuality,
+            quality: getImageExportQualityValue(imageExportQualityPreset),
         }, {
             failed: t('editor.imageExportFailed'),
             limitExceeded: t('editor.imageExportLimitExceeded'),
@@ -420,7 +424,7 @@ export const PdfEditor = ({ onOpenWelcome }: PdfEditorProps) => {
         closeImageExportDialog,
         exportPagesAsImages,
         imageExportFormat,
-        imageExportQuality,
+        imageExportQualityPreset,
         t,
     ]);
 
@@ -1404,29 +1408,37 @@ export const PdfEditor = ({ onOpenWelcome }: PdfEditorProps) => {
                                 </div>
                             </fieldset>
 
-                            <div>
-                                <div className="flex items-center justify-between gap-4">
-                                    <label htmlFor="image-export-quality" className="text-xs font-semibold text-gray-700">
-                                        {t('editor.imageQuality')}
-                                    </label>
-                                    <output htmlFor="image-export-quality" className="text-sm font-bold tabular-nums text-gray-800">
-                                        {imageExportQuality}%
-                                    </output>
+                            <fieldset>
+                                <legend className="text-xs font-semibold text-gray-700">
+                                    {t('editor.imageQuality')}
+                                </legend>
+                                <div className="mt-2 grid grid-cols-3 gap-2">
+                                    {([
+                                        { value: 'compact', label: t('editor.imageQualityCompact') },
+                                        { value: 'balanced', label: t('editor.imageQualityBalanced') },
+                                        { value: 'maximum', label: t('editor.imageQualityMaximum') },
+                                    ] as const).map((qualityPreset) => (
+                                        <button
+                                            key={qualityPreset.value}
+                                            type="button"
+                                            onClick={() => setImageExportQualityPreset(qualityPreset.value)}
+                                            aria-pressed={imageExportQualityPreset === qualityPreset.value}
+                                            className={`min-h-11 rounded-lg border px-2 text-sm font-semibold transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-600 focus-visible:ring-offset-2 ${
+                                                imageExportQualityPreset === qualityPreset.value
+                                                    ? 'border-blue-600 bg-blue-50 text-blue-800'
+                                                    : 'border-gray-200 bg-white text-gray-700 hover:border-gray-300 hover:bg-gray-50'
+                                            }`}
+                                        >
+                                            {qualityPreset.label}
+                                        </button>
+                                    ))}
                                 </div>
-                                <input
-                                    id="image-export-quality"
-                                    type="range"
-                                    min={30}
-                                    max={100}
-                                    step={5}
-                                    value={imageExportQuality}
-                                    onChange={(event) => setImageExportQuality(Number(event.target.value))}
-                                    className="mt-2 h-11 w-full accent-blue-600"
-                                />
-                                <p className="text-xs leading-5 text-gray-500">
-                                    {t('editor.imageQualityHint')}
+                                <p className="mt-2 text-xs leading-5 text-gray-500">
+                                    {t(imageExportFormat === 'png'
+                                        ? 'editor.imageQualityPngHint'
+                                        : 'editor.imageQualityLossyHint')}
                                 </p>
-                            </div>
+                            </fieldset>
 
                             <button
                                 type="button"

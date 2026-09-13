@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { FilePenLine, LayoutGrid, Lock, ShieldCheck } from 'lucide-react';
+import { FilePenLine, Images, LayoutGrid, Lock, ShieldCheck } from 'lucide-react';
 import { useI18n } from '../i18n';
 import { useDialogFocus } from '../hooks/useDialogFocus';
 import {
@@ -44,6 +44,7 @@ export const WelcomeModal = ({ onClose }: WelcomeModalProps) => {
     };
 
     const features = [
+        { icon: Images, label: t('welcome.featureImageExport'), featured: true },
         { icon: FilePenLine, label: t('welcome.featureEdit') },
         { icon: LayoutGrid, label: t('welcome.featureOrganize') },
         { icon: Lock, label: t('welcome.featureProtect') },
@@ -75,9 +76,18 @@ export const WelcomeModal = ({ onClose }: WelcomeModalProps) => {
 
                 <ul className="mt-6 grid gap-2.5 sm:grid-cols-2">
                     {features.map((feature) => (
-                        <li key={feature.label} className="flex items-start gap-3 rounded-xl bg-gray-50 px-3.5 py-3">
+                        <li
+                            key={feature.label}
+                            className={`flex items-start gap-3 rounded-xl px-3.5 py-3 ${
+                                feature.featured
+                                    ? 'bg-red-50 text-red-900 sm:col-span-2'
+                                    : 'bg-gray-50'
+                            }`}
+                        >
                             <feature.icon aria-hidden="true" className="mt-0.5 h-4 w-4 shrink-0 text-red-600" />
-                            <span className="text-sm font-medium text-gray-700">{feature.label}</span>
+                            <span className={`text-sm font-medium ${feature.featured ? 'text-red-900' : 'text-gray-700'}`}>
+                                {feature.label}
+                            </span>
                         </li>
                     ))}
                 </ul>

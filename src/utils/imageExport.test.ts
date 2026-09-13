@@ -2,11 +2,18 @@ import { describe, expect, it } from 'vitest';
 import {
     getImageExportFilename,
     getImageExportFormatDetails,
+    getImageExportQualityValue,
     getImageExportRenderScale,
     normalizeImageExportQuality,
 } from './imageExport';
 
 describe('image export settings', () => {
+    it('maps understandable presets to export values', () => {
+        expect(getImageExportQualityValue('compact')).toBe(55);
+        expect(getImageExportQualityValue('balanced')).toBe(80);
+        expect(getImageExportQualityValue('maximum')).toBe(100);
+    });
+
     it('clamps quality to the supported range', () => {
         expect(normalizeImageExportQuality(10)).toBe(30);
         expect(normalizeImageExportQuality(84.6)).toBe(85);
