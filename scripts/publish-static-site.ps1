@@ -5,7 +5,10 @@ param(
 
     [switch]$AllowProduction,
 
-    [switch]$SkipBuild
+    [switch]$SkipBuild,
+
+    [ValidateSet("pdfinplace.com")]
+    [string]$Domain
 )
 
 Set-StrictMode -Version Latest
@@ -26,6 +29,13 @@ $deployment = switch ($Environment) {
             Domain = "test.pdfing.gallego.top"
         }
     }
+}
+
+if ($Domain) {
+    if ($Environment -ne "production") {
+        throw "A domain-specific publish is only available for production."
+    }
+    $deployment.Domain = $Domain
 }
 
 $projectRoot = [System.IO.Path]::GetFullPath((Join-Path $PSScriptRoot ".."))
@@ -80,7 +90,7 @@ if (-not (Test-Path -LiteralPath $syncScriptPath -PathType Leaf)) {
 }
 
 if (-not $SkipBuild) {
-    & $stageScript -Environment $Environment
+    & $stageScript -Environment $Environment -Domain $Domain
 }
 
 if (-not (Test-Path -LiteralPath (Join-Path $sitePath "index.html") -PathType Leaf)) {

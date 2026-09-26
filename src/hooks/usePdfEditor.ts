@@ -11,6 +11,7 @@ import type { PDFDocument, PDFFont, PDFPage } from 'pdf-lib';
 import { createId } from '../utils/createId';
 import { clearPersistedSession, loadPersistedSession, savePersistedSession, type PersistedFileRecord } from '../utils/persistedSession';
 import { loadPdfDocumentWithTask, type LoadedPdfDocument } from '../utils/pdfjs';
+import { PDFJS_RESOURCE_VERSION } from '../utils/pdfjsResourceVersion';
 import {
     MAX_ARCHIVE_ENTRIES,
     MAX_ARCHIVE_ENTRY_BYTES,
@@ -72,7 +73,7 @@ let pdfLibPromise: Promise<PdfLibModule> | null = null;
 let contentEditExporterPromise: Promise<typeof import('../features/content-editor/applyContentEdits')> | null = null;
 let unicodeFontBytesPromise: Promise<ArrayBuffer> | null = null;
 const overlayFontCache = new WeakMap<PDFDocument, Promise<PDFFont>>();
-const UNICODE_FONT_PATH = `${import.meta.env.BASE_URL}pdfjs/standard_fonts/LiberationSans-Regular.ttf`;
+const UNICODE_FONT_PATH = `${import.meta.env.BASE_URL}pdfjs/${PDFJS_RESOURCE_VERSION}/standard_fonts/LiberationSans-Regular.ttf`;
 
 const loadPdfLib = async (): Promise<PdfLibModule> => {
     if (!pdfLibPromise) {
@@ -338,6 +339,16 @@ const SESSION_PERSIST_DEBOUNCE_MS = 600;
 const MAX_IMAGE_EXPORT_TOTAL_PIXELS = 160_000_000;
 
 class ImageExportLimitError extends Error {}
+
+class ContentEditExportError extends Error {
+    constructor(pageNumber: number, reason: string) {
+        super(`Content edits on page ${pageNumber} could not be saved: ${reason}`);
+        this.name = 'ContentEditExportError';
+    }
+}
+
+const exportFailureMessage = (error: unknown, fallback: string) =>
+    error instanceof ContentEditExportError ? `${fallback} ${error.message}` : fallback;
 
 const clearSensitiveBrowserData = async () => {
     if (typeof window !== 'undefined') {
@@ -1785,12 +1796,18 @@ export const usePdfEditor = () => {
             let pageToEmbed = srcPage;
 
             if (page.contentEdits.length > 0) {
-                const isolatedPdf = await pdfLib.PDFDocument.create();
-                const [isolatedPage] = await isolatedPdf.copyPages(srcPdf, [page.pageIndex - 1]);
-                isolatedPdf.addPage(isolatedPage);
-                const { applyContentEditsToPdfPage } = await loadContentEditExporter();
-                await applyContentEditsToPdfPage(isolatedPdf, isolatedPage, page.contentEdits);
-                pageToEmbed = isolatedPage;
+                try {
+                    const isolatedPdf = await pdfLib.PDFDocument.create();
+                    const [isolatedPage] = await isolatedPdf.copyPages(srcPdf, [page.pageIndex - 1]);
+                    isolatedPdf.addPage(isolatedPage);
+                    const { applyContentEditsToPdfPage } = await loadContentEditExporter();
+                    await applyContentEditsToPdfPage(isolatedPdf, isolatedPage, page.contentEdits);
+                    pageToEmbed = isolatedPage;
+                } catch (error) {
+                    console.error(`Error applying content edits to page ${pagePosition + 1}:`, error);
+                    const reason = error instanceof Error ? error.message : 'Unknown content rewrite error.';
+                    throw new ContentEditExportError(pagePosition + 1, reason);
+                }
             }
 
             const embeddedPage = await newPdf.embedPage(pageToEmbed);
@@ -1887,7 +1904,7 @@ export const usePdfEditor = () => {
             }
         } catch (error) {
             console.error('Error exporting PDF:', error);
-            notifyError(labels?.failed ?? 'Failed to export PDF.');
+            notifyError(exportFailureMessage(error, labels?.failed ?? 'Failed to export PDF.'));
         } finally {
             setIsProcessing(false);
         }
@@ -2047,7 +2064,7 @@ export const usePdfEditor = () => {
             return true;
         } catch (error) {
             console.error('Error exporting PDF range:', error);
-            notifyError(labels?.failed ?? 'Failed to export PDF.');
+            notifyError(exportFailureMessage(error, labels?.failed ?? 'Failed to export PDF.'));
             return false;
         } finally {
             setIsProcessing(false);
@@ -2080,10 +2097,9 @@ export const usePdfEditor = () => {
 
         setIsProcessing(true);
         try {
-            for (const group of groups) {
-                const pdfBytes = await buildPdfBytes(group.pages);
-                downloadPdfBytes(pdfBytes, group.filename);
-            }
+            const exports = [];
+            for (const group of groups) exports.push({ filename: group.filename, bytes: await buildPdfBytes(group.pages) });
+            for (const item of exports) downloadPdfBytes(item.bytes, item.filename);
             if (labels?.missingPagesWarning && groups.some((group) => group.pages.some((page) => !files[page.fileId]))) {
                 notifyError(labels.missingPagesWarning);
             } else if (labels?.success) {
@@ -2092,7 +2108,7 @@ export const usePdfEditor = () => {
             return true;
         } catch (error) {
             console.error('Error splitting PDF:', error);
-            notifyError(labels?.failed ?? 'Failed to export PDF.');
+            notifyError(exportFailureMessage(error, labels?.failed ?? 'Failed to export PDF.'));
             return false;
         } finally {
             setIsProcessing(false);
@@ -2137,7 +2153,7 @@ export const usePdfEditor = () => {
             return true;
         } catch (error) {
             console.error('Error protecting PDF:', error);
-            notifyError(labels?.failed ?? 'Failed to protect PDF.');
+            notifyError(exportFailureMessage(error, labels?.failed ?? 'Failed to protect PDF.'));
             return false;
         } finally {
             setIsProcessing(false);

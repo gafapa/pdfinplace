@@ -144,7 +144,7 @@ const renderPageToCanvas = async (
     const canvas = document.createElement('canvas');
     canvas.width = Math.ceil(viewport.width);
     canvas.height = Math.ceil(viewport.height);
-    const canvasContext = canvas.getContext('2d');
+    const canvasContext = canvas.getContext('2d', { willReadFrequently: true });
     if (!canvasContext) {
         throw new Error('Canvas rendering is unavailable.');
     }
@@ -189,7 +189,7 @@ const cropCanvasToDataUrl = (
 const sampleCanvasRgb = (sourceCanvas: HTMLCanvasElement, x: number, y: number): RgbColor | null => {
     const sampleX = Math.max(0, Math.min(sourceCanvas.width - 1, Math.round(x)));
     const sampleY = Math.max(0, Math.min(sourceCanvas.height - 1, Math.round(y)));
-    const context = sourceCanvas.getContext('2d');
+    const context = sourceCanvas.getContext('2d', { willReadFrequently: true });
     if (!context) return null;
 
     try {

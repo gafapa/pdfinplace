@@ -11,7 +11,7 @@ permissions:
 jobs:
   quality:
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 20
 
     steps:
       - name: Check out repository
@@ -38,5 +38,27 @@ jobs:
       - name: Test
         run: npm test
 
+      - name: Check PDF.js resource synchronization
+        run: npm run test:pdfjs-resources
+
       - name: Build
         run: npm run build
+
+      - name: Build test environment
+        run: npm run build:test
+
+      - name: Install Chromium for browser smoke test
+        run: npx playwright install --with-deps chromium
+
+      - name: Browser smoke test
+        run: |
+          npm run dev -- --host 127.0.0.1 > /tmp/pdfing-vite.log 2>&1 &
+          for attempt in $(seq 1 30); do
+            if curl --fail --silent http://127.0.0.1:5173/ > /dev/null; then
+              npm run test:browser
+              exit $?
+            fi
+            sleep 1
+          done
+          cat /tmp/pdfing-vite.log
+          exit 1

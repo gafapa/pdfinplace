@@ -1,7 +1,10 @@
 param(
     [Parameter(Mandatory = $true)]
     [ValidateSet("production", "test")]
-    [string]$Environment
+    [string]$Environment,
+
+    [ValidateSet("pdfinplace.com")]
+    [string]$Domain
 )
 
 $ErrorActionPreference = "Stop"
@@ -28,6 +31,14 @@ $deployment = switch ($Environment) {
             ExtraDomains = @()
         }
     }
+}
+
+if ($Domain) {
+    if ($Environment -ne "production") {
+        throw "A domain-specific stage is only available for production."
+    }
+    $deployment.Domain = $Domain
+    $deployment.ExtraDomains = @()
 }
 
 $sitesRoot = [System.IO.Path]::GetFullPath(
@@ -66,6 +77,13 @@ try {
 
 if (-not (Test-Path -LiteralPath (Join-Path $sourcePath "index.html") -PathType Leaf)) {
     throw "Build output is missing dist/index.html."
+}
+
+if ($Domain -eq "pdfinplace.com") {
+    $indexPath = Join-Path $sourcePath "index.html"
+    $index = Get-Content -LiteralPath $indexPath -Raw
+    $index = $index.Replace("https://pdfing.gallego.top/", "https://pdfinplace.com/")
+    Set-Content -LiteralPath $indexPath -Value $index -NoNewline
 }
 
 $forbiddenFiles = Get-ChildItem -LiteralPath $sourcePath -Recurse -Force -File |

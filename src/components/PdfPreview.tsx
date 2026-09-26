@@ -9,7 +9,7 @@ import type {
 import { useI18n } from '../i18n';
 import { getPdfDocument } from '../utils/pdfjs';
 import { getLegacyEditorCanvasSize } from '../utils/pageGeometry';
-import { drawContentEditsPreview } from '../features/content-editor/drawContentEditsPreview';
+import { createRewrittenPreview } from '../features/content-editor/createRewrittenPreview';
 import type { ContentEdit } from '../features/content-editor/types';
 
 type PdfDocumentProxy = import('pdfjs-dist').PDFDocumentProxy;
@@ -41,6 +41,7 @@ interface PdfPreviewProps {
     className?: string;
     annotations?: Annotation[];
     contentEdits?: ContentEdit[];
+    onContentPreview?: (edits: ContentEdit[], valid: boolean, usedFallbackFont?: boolean, errorMessage?: string) => void;
     annotationCanvasWidth?: number;
     annotationCanvasHeight?: number;
     showPageBorder?: boolean;
@@ -57,6 +58,7 @@ export const PdfPreview = ({
     className = "",
     annotations = EMPTY_ANNOTATIONS,
     contentEdits = EMPTY_CONTENT_EDITS,
+    onContentPreview,
     annotationCanvasWidth,
     annotationCanvasHeight,
     showPageBorder = false,
@@ -66,25 +68,59 @@ export const PdfPreview = ({
     const canvasRef = useRef<HTMLCanvasElement>(null);
     const imageCacheRef = useRef<Map<string, HTMLImageElement>>(new Map());
     const [loading, setLoading] = useState(true);
+    const [isUpdating, setIsUpdating] = useState(true);
     const [error, setError] = useState(false);
     const [renderedPageSize, setRenderedPageSize] = useState({ width: 0, height: 0 });
     const renderGenerationRef = useRef(0);
     const renderQueueRef = useRef<Promise<void>>(Promise.resolve());
+    const previewCallbackRef = useRef(onContentPreview);
+    const previewStatusRef = useRef<{ edits: ContentEdit[]; valid: boolean } | null>(null);
+    const rejectedPreviewKeyRef = useRef<string | null>(null);
+    const rejectedPreviewMessageRef = useRef('');
+    const previewSourceRef = useRef<{ document?: PdfDocumentProxy; file?: File; page: number } | null>(null);
+    useEffect(() => { previewCallbackRef.current = onContentPreview; }, [onContentPreview]);
 
     useEffect(() => {
         let isMounted = true;
         let loadedPdf: PdfDocumentProxy | null = null;
         let renderTask: PdfRenderTask | null = null;
         let loadingTask: PdfLoadingTask | null = null;
+        let rewrittenTask: PdfLoadingTask | null = null;
+        let usedFallbackFont = false;
+        let contentRewriteFailed = false;
         const generation = renderGenerationRef.current + 1;
         renderGenerationRef.current = generation;
 
         const isCurrentRender = () => isMounted && renderGenerationRef.current === generation;
 
+        const previousSource = previewSourceRef.current;
+        if (previousSource?.document !== pdfDocument || previousSource?.file !== file || previousSource?.page !== pageIndex) {
+            previewSourceRef.current = { document: pdfDocument, file, page: pageIndex };
+            previewStatusRef.current = null;
+            rejectedPreviewKeyRef.current = null;
+            rejectedPreviewMessageRef.current = '';
+        }
+        const previewKey = JSON.stringify(contentEdits.filter((edit) => edit.isDirty));
+        const reportPreviewStatus = (valid: boolean, errorMessage = '') => {
+            const previous = previewStatusRef.current;
+            if (!isCurrentRender() || previous?.edits === contentEdits && previous.valid === valid) return;
+            previewStatusRef.current = { edits: contentEdits, valid };
+            previewCallbackRef.current?.(contentEdits, valid, usedFallbackFont, errorMessage);
+        };
+
         const renderPreview = async () => {
+            if (!isCurrentRender()) return;
+            if (contentEdits.some((edit) => edit.isDirty) && rejectedPreviewKeyRef.current === previewKey) {
+                setError(true);
+                setLoading(false);
+                setIsUpdating(false);
+                reportPreviewStatus(false, rejectedPreviewMessageRef.current);
+                return;
+            }
             try {
                 if (isMounted) {
-                    setLoading(true);
+                    setIsUpdating(true);
+                    if (!canvasRef.current?.width) setLoading(true);
                     setError(false);
                 }
 
@@ -99,14 +135,30 @@ export const PdfPreview = ({
                 }
 
                 if (!isCurrentRender() || !loadedPdf) {
-                    if (loadingTask) void loadingTask.destroy();
                     return;
                 }
 
-                const page = await loadedPdf.getPage(pageIndex || 1);
+                let renderedDocument = loadedPdf;
+                let renderedPageNumber = pageIndex || 1;
+                if (contentEdits.some((edit) => edit.isDirty)) {
+                    let bytes: Uint8Array;
+                    try {
+                        bytes = await createRewrittenPreview(loadedPdf, renderedPageNumber, contentEdits, diagnostics => {
+                            usedFallbackFont = diagnostics.usedFallbackFont;
+                        });
+                    } catch (rewriteError) {
+                        contentRewriteFailed = true;
+                        throw rewriteError;
+                    }
+                    if (!isCurrentRender()) return;
+                    rewrittenTask = await getPdfDocument({ data: bytes });
+                    renderedDocument = await rewrittenTask.promise;
+                    renderedPageNumber = 1;
+                }
+                if (!isCurrentRender()) return;
+                const page = await renderedDocument.getPage(renderedPageNumber);
 
                 if (!isCurrentRender()) {
-                    if (loadingTask) void loadingTask.destroy();
                     return;
                 }
 
@@ -126,7 +178,7 @@ export const PdfPreview = ({
 
                 const scaledViewport = page.getViewport({ scale, rotation: totalRotation });
 
-                const canvas = canvasRef.current;
+                const canvas = document.createElement('canvas');
                 if (canvas) {
                     const context = canvas.getContext('2d');
                     if (canvas && context) {
@@ -149,16 +201,19 @@ export const PdfPreview = ({
 
                         if (!isCurrentRender()) return;
 
-                        if (contentEdits.length > 0) {
-                            await drawContentEditsPreview(
-                                context,
-                                [...scaledViewport.transform],
-                                contentEdits,
-                            );
-                        }
-
                         // Draw annotations on top if provided
                         if (annotations && annotations.length > 0) {
+                            await Promise.all(annotations.filter((ann) => ann.type === 'image' || ann.type === 'signature').map(async (ann) => {
+                                const { dataUrl } = ann.data as ImageAnnotationData;
+                                let image = imageCacheRef.current.get(dataUrl);
+                                if (!image) {
+                                    image = new Image();
+                                    image.src = dataUrl;
+                                    imageCacheRef.current.set(dataUrl, image);
+                                }
+                                await image.decode();
+                            }));
+                            if (!isCurrentRender()) return;
                             const editorBaseWidth = annotationCanvasWidth ?? getLegacyEditorCanvasSize(totalRotation).width;
                             const editorBaseHeight = annotationCanvasHeight ?? getLegacyEditorCanvasSize(totalRotation).height;
                             const annotationScaleX = canvas.width / editorBaseWidth;
@@ -186,15 +241,7 @@ export const PdfPreview = ({
                                         context.restore();
                                     };
 
-                                    if (image.complete && image.naturalWidth > 0) {
-                                        drawLoadedImage();
-                                    } else {
-                                        image.onload = drawLoadedImage;
-                                        image.onerror = () => {
-                                            if (isMounted) setError(true);
-                                        };
-                                        if (!image.src) image.src = data.dataUrl;
-                                    }
+                                    drawLoadedImage();
                                     return;
                                 }
 
@@ -258,15 +305,47 @@ export const PdfPreview = ({
                                 context.restore();
                             });
                         }
+                        if (!isCurrentRender()) return;
+                        const visibleCanvas = canvasRef.current;
+                        if (visibleCanvas) {
+                            visibleCanvas.width = canvas.width;
+                            visibleCanvas.height = canvas.height;
+                            visibleCanvas.getContext('2d')?.drawImage(canvas, 0, 0);
+                        }
+                        reportPreviewStatus(true);
+                        rejectedPreviewKeyRef.current = null;
+                        rejectedPreviewMessageRef.current = '';
                     }
                 }
             } catch (err: unknown) {
                 if (!(err instanceof Error) || err.name !== 'RenderingCancelledException') {
-                    console.error("Error previewing PDF:", err);
-                    if (isMounted) setError(true);
+                    if (isCurrentRender()) {
+                        const isKnownRewriteError = err instanceof Error && err.name === 'ContentRewriteError';
+                        const isContentRewriteError = contentRewriteFailed || isKnownRewriteError;
+                        rejectedPreviewKeyRef.current = isKnownRewriteError ? previewKey : null;
+                        rejectedPreviewMessageRef.current = isContentRewriteError && err instanceof Error ? err.message : '';
+                        setError(true);
+                        // Only a content-rewrite failure reflects on the edits themselves;
+                        // any other render error (e.g. an annotation image failing to
+                        // decode) must not mark otherwise-valid edits as invalid.
+                        if (isContentRewriteError || !contentEdits.some((edit) => edit.isDirty)) {
+                            reportPreviewStatus(false, rejectedPreviewMessageRef.current);
+                        }
+                    }
                 }
             } finally {
-                if (isMounted) setLoading(false);
+                if (rewrittenTask) {
+                    void rewrittenTask.destroy();
+                    rewrittenTask = null;
+                }
+                if (loadingTask) {
+                    void loadingTask.destroy();
+                    loadingTask = null;
+                }
+                if (isCurrentRender()) {
+                    setLoading(false);
+                    setIsUpdating(false);
+                }
             }
         };
 
@@ -277,9 +356,9 @@ export const PdfPreview = ({
             if (renderTask) {
                 renderTask.cancel();
             }
-            if (loadingTask) {
-                void loadingTask.destroy();
-            }
+            // The render's finally block owns task destruction. Destroying a
+            // loading task while getPage() is pending can strand its promise and
+            // permanently block the sequential preview queue.
         };
     }, [
         file,
@@ -327,6 +406,7 @@ export const PdfPreview = ({
 
     return (
         <div
+            aria-busy={isUpdating}
             className={`relative flex items-center justify-center overflow-hidden ${showPageBorder ? 'pdf-preview-workbench' : 'bg-white shadow-sm'} ${className}`}
             style={{ width, height: height || 'auto' }}
         >
@@ -335,9 +415,9 @@ export const PdfPreview = ({
                     <div className="h-6 w-6 animate-spin rounded-full border-2 border-blue-500 border-t-transparent motion-reduce:animate-none"></div>
                 </div>
             )}
-            {error && (
-                <div className="absolute inset-0 flex items-center justify-center text-red-500 text-xs text-center p-2 bg-gray-50">
-                    {t('preview.error')}
+            {error && !onContentPreview && (
+                <div role="alert" className="absolute inset-x-0 top-0 z-10 flex items-center justify-center bg-white p-2 text-center text-xs text-red-700">
+                    {contentEdits.length ? t('modal.contentRewriteFailed') : t('preview.error')}
                 </div>
             )}
             {showPageBorder ? (

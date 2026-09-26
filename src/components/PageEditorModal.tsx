@@ -25,6 +25,7 @@ import { useI18n } from '../i18n';
 import { createId } from '../utils/createId';
 import { getEditorCanvasSize, getLegacyEditorCanvasSize, scaleAnnotations, transformAnnotationBounds, type EditorCanvasSize } from '../utils/pageGeometry';
 import { readImageDimensions } from '../utils/imageValidation';
+import { getSessionPersistencePreference } from '../utils/sessionPreference';
 import { useDialogFocus } from '../hooks/useDialogFocus';
 import { ContentEditLayer } from '../features/content-editor/ContentEditLayer';
 import type { ContentEdit } from '../features/content-editor/types';
@@ -73,14 +74,8 @@ interface PageEditorModalProps {
 type SavedAsset = PersistedAssetRecord;
 
 const SAVED_ASSETS_STORAGE_KEY = 'pageforge.saved-assets';
-const LOCAL_PERSISTENCE_STORAGE_KEY = 'pageforge.local-persistence-enabled';
-
 const isLocalPersistenceEnabled = () => {
-    if (typeof window === 'undefined') {
-        return false;
-    }
-
-    return localStorage.getItem(LOCAL_PERSISTENCE_STORAGE_KEY) === 'true';
+    return getSessionPersistencePreference();
 };
 
 const getInitialAssetsPanelOpen = () => {
@@ -111,6 +106,9 @@ export const PageEditorModal = ({
     const [activeTool, setActiveTool] = useState<Tool>('select');
     const [annotations, setAnnotations] = useState<Annotation[]>(initialAnnotations);
     const [contentEdits, setContentEdits] = useState<ContentEdit[]>(initialContentEdits);
+    const [validatedContentEdits, setValidatedContentEdits] = useState<ContentEdit[] | null>(null);
+    const [fallbackContentEdits, setFallbackContentEdits] = useState<ContentEdit[] | null>(null);
+    const canSaveContent = contentEdits.length === 0 || validatedContentEdits === contentEdits;
     const [selectedAnnotationId, setSelectedAnnotationId] = useState<string | null>(null);
     const [interactionMode, setInteractionMode] = useState<InteractionMode>('idle');
     const [resizeHandle, setResizeHandle] = useState<ResizeHandle>(null);
@@ -140,6 +138,30 @@ export const PageEditorModal = ({
     const [renamingAssetId, setRenamingAssetId] = useState<string | null>(null);
     const [assetNameDraft, setAssetNameDraft] = useState('');
     const [errorMessage, setErrorMessage] = useState('');
+    // Kept separate from `errorMessage` (and from each other) so an unrelated
+    // error, a content-parse failure, and a content-preview-invalid state
+    // never clobber or hide one another.
+    const [contentParseError, setContentParseError] = useState('');
+    const [contentPreviewInvalid, setContentPreviewInvalid] = useState(false);
+    const [contentPreviewError, setContentPreviewError] = useState('');
+    const handleContentPreview = useCallback((edits: ContentEdit[], valid: boolean, usedFallbackFont = false, errorMessage = '') => {
+        setValidatedContentEdits(valid ? edits : null);
+        setFallbackContentEdits(valid && usedFallbackFont ? edits : null);
+        setContentPreviewInvalid(!valid);
+        setContentPreviewError(valid ? '' : errorMessage);
+    }, []);
+    const handleContentParseError = useCallback((message: string) => {
+        setContentParseError(message);
+    }, []);
+    const displayedErrorMessage = errorMessage
+        || contentParseError
+        || (contentPreviewInvalid ? contentPreviewError || t('modal.contentRewriteFailed') : '');
+    const dismissDisplayedError = useCallback(() => {
+        setErrorMessage('');
+        setContentParseError('');
+        setContentPreviewInvalid(false);
+        setContentPreviewError('');
+    }, []);
     const [isDiscardDialogOpen, setIsDiscardDialogOpen] = useState(false);
 
     const canvasRef = useRef<HTMLCanvasElement>(null);
@@ -474,16 +496,17 @@ export const PageEditorModal = ({
     }, [handleCloseRequest]);
 
     const commitChanges = useCallback(() => {
+        if (!canSaveContent) return false;
         if (editingTextIdRef.current) {
             handleTextEditComplete();
         }
         const finalizedAnnotations = getFinalizedAnnotations(annotations);
         onSave(finalizedAnnotations, contentEdits, { width: canvasWidth, height: canvasHeight });
-    }, [annotations, contentEdits, canvasWidth, canvasHeight, getFinalizedAnnotations, handleTextEditComplete, onSave]);
+        return true;
+    }, [annotations, contentEdits, canSaveContent, canvasWidth, canvasHeight, getFinalizedAnnotations, handleTextEditComplete, onSave]);
 
     const handleNavigateRequest = useCallback((delta: 1 | -1) => {
-        commitChanges();
-        onRequestNavigate?.(delta);
+        if (commitChanges()) onRequestNavigate?.(delta);
     }, [commitChanges, onRequestNavigate]);
 
     const createImageLikeAnnotation = useCallback((
@@ -1119,8 +1142,7 @@ export const PageEditorModal = ({
     };
 
     const handleSave = () => {
-        commitChanges();
-        onClose();
+        if (commitChanges()) onClose();
     };
 
     if (!isOpen) return null;
@@ -1162,12 +1184,12 @@ export const PageEditorModal = ({
             className="workspace-shell fixed inset-0 z-[50] flex flex-col overflow-hidden"
         >
             <div aria-live="assertive" aria-atomic="true">
-                {errorMessage ? (
+                {displayedErrorMessage ? (
                     <div role="alert" className="absolute left-1/2 top-16 z-[80] flex w-[min(92vw,32rem)] -translate-x-1/2 items-start gap-3 rounded-lg border border-red-200 bg-white p-3 text-sm text-red-800 shadow-xl">
-                        <span className="flex-1">{errorMessage}</span>
+                        <span className="flex-1">{displayedErrorMessage}</span>
                         <button
                             type="button"
-                            onClick={() => setErrorMessage('')}
+                            onClick={dismissDisplayedError}
                             className="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-md hover:bg-red-50"
                             title={t('common.close')}
                             aria-label={t('common.close')}
@@ -1191,7 +1213,7 @@ export const PageEditorModal = ({
                             <button
                                 type="button"
                                 onClick={() => handleNavigateRequest(-1)}
-                                disabled={!hasPreviousPage}
+                                disabled={!hasPreviousPage || !canSaveContent}
                                 className="toolbar-button"
                                 title={t('modal.previousPage')}
                                 aria-label={t('modal.previousPage')}
@@ -1202,7 +1224,7 @@ export const PageEditorModal = ({
                             <button
                                 type="button"
                                 onClick={() => handleNavigateRequest(1)}
-                                disabled={!hasNextPage}
+                                disabled={!hasNextPage || !canSaveContent}
                                 className="toolbar-button"
                                 title={t('modal.nextPage')}
                                 aria-label={t('modal.nextPage')}
@@ -1224,6 +1246,7 @@ export const PageEditorModal = ({
                         <button
                             type="button"
                             onClick={handleSave}
+                            disabled={!canSaveContent}
                             className="primary-action h-10 w-10 shrink-0 p-0"
                             title={t('common.save')}
                             aria-label={t('common.save')}
@@ -1232,6 +1255,11 @@ export const PageEditorModal = ({
                         </button>
                     </div>
                 </div>
+                {contentEdits.length > 0 && fallbackContentEdits === contentEdits ? (
+                    <p role="status" className="mx-auto mt-2 max-w-2xl text-center text-sm text-gray-700">
+                        {t('modal.contentFallbackFont')}
+                    </p>
+                ) : null}
                 {showTextControls ? (
                     <div className="mt-2 flex min-w-0 justify-center overflow-x-auto">
                         <div className="flex w-fit items-center gap-2 whitespace-nowrap rounded-lg border border-gray-200 bg-white p-1">
@@ -1537,7 +1565,8 @@ export const PageEditorModal = ({
                                 width={canvasWidth}
                                 height={canvasHeight}
                                 rotation={pageRotation}
-                                contentEdits={activeTool === 'content' ? undefined : contentEdits}
+                                contentEdits={contentEdits}
+                                onContentPreview={handleContentPreview}
                                 className="rounded-lg ring-1 ring-gray-200"
                             />
                             <canvas
@@ -1593,7 +1622,7 @@ export const PageEditorModal = ({
                                     tooManyElements: t('modal.tooManyElements'),
                                 }}
                                 onChange={setContentEdits}
-                                onError={setErrorMessage}
+                                onError={handleContentParseError}
                             />
 
                             {currentEditingText && activeTool !== 'content' && (

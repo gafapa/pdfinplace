@@ -1,8 +1,11 @@
 const CACHE_PREFIX = 'pageforge-cache-';
-const CACHE_NAME = `${CACHE_PREFIX}v8`;
+const CACHE_NAME = `${CACHE_PREFIX}v9`;
+const PDFJS_CACHE_PREFIX = 'pageforge-pdfjs-';
+const MAX_PDFJS_CACHE_VERSIONS = 3;
 const BASE_PATH = new URL(self.registration.scope).pathname;
 const MAX_CACHE_ENTRIES = 80;
 const MAX_CACHEABLE_RESPONSE_BYTES = 5 * 1024 * 1024;
+const MAX_CACHEABLE_FONT_BYTES = 20 * 1024 * 1024;
 const APP_SHELL = [
   BASE_PATH,
   `${BASE_PATH}index.html`,
@@ -34,20 +37,30 @@ const isCacheableStaticRequest = (request, url) => {
   if (APP_SHELL_PATHS.has(url.pathname)) return true;
   const isBuildAsset = url.pathname.startsWith(`${BASE_PATH}assets/`);
   const isPdfJsAsset = url.pathname.startsWith(`${BASE_PATH}pdfjs/`);
-  if (!isBuildAsset && !isPdfJsAsset) return false;
+  const isBundledFont = url.pathname.startsWith(`${BASE_PATH}fonts/`);
+  if (!isBuildAsset && !isPdfJsAsset && !isBundledFont) return false;
 
   return (
     ['script', 'style', 'worker', 'font', 'image'].includes(request.destination) ||
-    /\.(?:bcmap|icc|wasm|ttf|pfb)$/i.test(url.pathname)
+    /\.(?:bcmap|icc|wasm|ttf|otf|pfb)$/i.test(url.pathname)
   );
 };
 
 const isPdfJsRequest = (url) =>
   url.pathname.startsWith(`${BASE_PATH}pdfjs/`);
 
-const fetchAndCache = async (request) => {
+const trimPdfJsCaches = async () => {
+  const keys = await caches.keys();
+  const pdfJsCaches = keys.filter((key) => key.startsWith(PDFJS_CACHE_PREFIX));
+  await Promise.all(pdfJsCaches.slice(0, -MAX_PDFJS_CACHE_VERSIONS).map((key) => caches.delete(key)));
+};
+
+const fetchAndCache = async (request, url) => {
   const response = await fetch(request);
-  if (!await shouldCacheResponse(response)) return response;
+  const maxBytes = url.pathname.startsWith(`${BASE_PATH}fonts/`)
+    ? MAX_CACHEABLE_FONT_BYTES
+    : MAX_CACHEABLE_RESPONSE_BYTES;
+  if (!await shouldCacheResponse(response, maxBytes)) return response;
 
   const cache = await caches.open(CACHE_NAME);
   await cache.put(request, response.clone());
@@ -55,7 +68,20 @@ const fetchAndCache = async (request) => {
   return response;
 };
 
-const shouldCacheResponse = async (response) => {
+const fetchAndCachePdfJs = async (request, url) => {
+  const response = await fetch(request);
+  if (!await shouldCacheResponse(response)) return response;
+
+  // The versioned URL is immutable. Keeping previous version caches lets an
+  // already-open application continue using the worker/resources it loaded.
+  const version = url.pathname.slice(`${BASE_PATH}pdfjs/`.length).split('/')[0];
+  const cache = await caches.open(`${PDFJS_CACHE_PREFIX}${version}`);
+  await cache.put(request, response.clone());
+  await trimPdfJsCaches();
+  return response;
+};
+
+const shouldCacheResponse = async (response, maxBytes = MAX_CACHEABLE_RESPONSE_BYTES) => {
   if (!response || response.status !== 200 || response.type !== 'basic') {
     return false;
   }
@@ -63,11 +89,11 @@ const shouldCacheResponse = async (response) => {
   const contentLengthHeader = response.headers.get('content-length');
   const contentLength = Number(contentLengthHeader);
   if (contentLengthHeader && Number.isFinite(contentLength) && contentLength >= 0) {
-    return contentLength <= MAX_CACHEABLE_RESPONSE_BYTES;
+    return contentLength <= maxBytes;
   }
 
   const responseSize = (await response.clone().blob()).size;
-  return responseSize <= MAX_CACHEABLE_RESPONSE_BYTES;
+  return responseSize <= maxBytes;
 };
 
 self.addEventListener('install', (event) => {
@@ -83,11 +109,11 @@ self.addEventListener('activate', (event) => {
   event.waitUntil(
     caches
       .keys()
-      .then((keys) => Promise.all(
-        keys
-          .filter((key) => key.startsWith(CACHE_PREFIX) && key !== CACHE_NAME)
-          .map((key) => caches.delete(key))
-      ))
+      .then((keys) => {
+        const expiredShellCaches = keys.filter((key) => key.startsWith(CACHE_PREFIX) && key !== CACHE_NAME);
+        return Promise.all(expiredShellCaches.map((key) => caches.delete(key)));
+      })
+      .then(trimPdfJsCaches)
       .then(() => self.clients.claim())
   );
 });
@@ -121,7 +147,7 @@ self.addEventListener('fetch', (event) => {
 
   if (isPdfJsRequest(url)) {
     event.respondWith(
-      fetchAndCache(request).catch(async () => {
+      fetchAndCachePdfJs(request, url).catch(async () => {
         const cached = await caches.match(request);
         if (cached) return cached;
         throw new Error('PDF.js asset is unavailable.');
@@ -135,7 +161,7 @@ self.addEventListener('fetch', (event) => {
       if (cached) return cached;
       if (!isCacheableStaticRequest(request, url)) return fetch(request);
 
-      return fetchAndCache(request)
+      return fetchAndCache(request, url)
         .catch((error) => {
           if (cached) return cached;
           throw error;

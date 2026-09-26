@@ -24,7 +24,7 @@ npm install
 npm run dev
 ```
 
-Node.js `20.19+`, `22.12+`, or `24+` is required.
+Node.js `22.13+` or `24+` is required.
 
 ## Quality Checks
 
@@ -32,12 +32,23 @@ Node.js `20.19+`, `22.12+`, or `24+` is required.
 npm run lint
 npm run check:sw
 npm test
+npm run test:pdfjs-resources
 npm run build
+npm run build:test
 npm audit
 ```
 
 The project includes a local `.npmrc` that points npm to the official npm registry, so `npm audit` works even when a global npm mirror is configured.
-The same checks run automatically in GitHub Actions for pushes to `main` and pull requests.
+Run the browser check with Chromium and a local Vite server:
+
+```bash
+npx playwright install chromium
+npm run dev
+# In another terminal:
+npm run test:browser
+```
+
+GitHub Actions runs these checks for pushes to `main` and pull requests. CI installs Chromium and starts the local Vite server for the browser check.
 
 ## Production Build
 
@@ -94,8 +105,8 @@ The page editor analyzes existing text and raster images only when the **Edit co
 
 Each edited output page is copied into an isolated in-memory PDF before its content changes are applied. This keeps edits independent when the same source page has been duplicated. The existing annotation layer is rendered after content changes.
 
-PDF text editing is inherently approximate when the original embedded font cannot be reused. PDF in Place selects a compatible standard font and uses the bundled Liberation Sans fallback for Unicode text. Image moves use a rendered snapshot, so vector image data is not preserved.
+PDF text editing is inherently approximate when the original embedded font cannot be reused. PDF in Place selects a compatible standard font and embeds a subset of Liberation Sans or Noto Sans CJK for supported Unicode replacement text. Characters absent from the bundled fonts produce an explicit error before saving. Image moves use a rendered snapshot, so vector image data is not preserved.
 
 ## Dependency Notes
 
-Dependencies are kept on compatible semver ranges and audited in CI. TypeScript 7 is intentionally deferred until the TypeScript ESLint toolchain declares support for it.
+Dependencies are kept on compatible semver ranges and audited in CI. TypeScript 7 is deferred until the TypeScript ESLint toolchain declares support for it.

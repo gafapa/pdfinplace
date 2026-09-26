@@ -3,13 +3,16 @@ type PdfDocumentInitParameters = import('pdfjs-dist/types/src/display/api').Docu
 type PdfDocumentProxy = import('pdfjs-dist').PDFDocumentProxy;
 type PdfLoadingTask = import('pdfjs-dist').PDFDocumentLoadingTask;
 
+import { PDFJS_RESOURCE_VERSION } from './pdfjsResourceVersion';
+
 let pdfJsPromise: Promise<PdfJsModule> | null = null;
 let workerPort: Worker | null = null;
+let sharedPdfWorker: InstanceType<PdfJsModule['PDFWorker']> | null = null;
 
 const appendTrailingSlash = (url: string) => url.endsWith('/') ? url : `${url}/`;
 
 const resolvePdfJsAssetBaseUrl = () => {
-    const configuredBaseUrl = `${appendTrailingSlash(import.meta.env.BASE_URL)}pdfjs/`;
+    const configuredBaseUrl = `${appendTrailingSlash(import.meta.env.BASE_URL)}pdfjs/${PDFJS_RESOURCE_VERSION}/`;
     const documentBaseUrl = typeof document === 'undefined'
         ? globalThis.location?.href ?? 'http://localhost/'
         : document.baseURI;
@@ -46,6 +49,9 @@ export const loadPdfJs = async (): Promise<PdfJsModule> => {
             if (!module.GlobalWorkerOptions.workerPort) {
                 module.GlobalWorkerOptions.workerPort = await loadPdfJsWorker();
             }
+            // Loading tasks must not own the shared worker: destroying a temporary
+            // preview must never tear down another document's message handler.
+            sharedPdfWorker = module.PDFWorker.create({ port: module.GlobalWorkerOptions.workerPort });
 
             return module;
         });
@@ -59,6 +65,7 @@ export const getPdfDocument = async (source: PdfDocumentInitParameters): Promise
     return pdfJs.getDocument({
         ...pdfDocumentOptions,
         ...source,
+        worker: source.worker ?? sharedPdfWorker!,
     });
 };
 

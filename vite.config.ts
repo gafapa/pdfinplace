@@ -1,6 +1,11 @@
 import { defineConfig } from 'vite'
 import react from '@vitejs/plugin-react'
 import tailwindcss from '@tailwindcss/vite'
+// @ts-expect-error The synchronizer is intentionally executable Node.js ESM.
+import { syncPdfJsResources } from './scripts/pdfjs-resources.mjs'
+
+// Keep direct `vite` invocations aligned with the dependency, not only npm scripts.
+syncPdfJsResources()
 
 // https://vite.dev/config/
 export default defineConfig({

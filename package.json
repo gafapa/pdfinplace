@@ -4,18 +4,23 @@
   "version": "0.0.0",
   "type": "module",
   "engines": {
-    "node": "^20.19.0 || >=22.12.0"
+    "node": "^22.13.0 || >=24.0.0"
   },
   "scripts": {
-    "dev": "vite",
-    "build": "tsc -b && vite build",
-    "build:test": "tsc -b && vite build --mode staging",
+    "dev": "npm run pdfjs:sync && vite",
+    "build": "npm run pdfjs:sync && tsc -b && vite build && npm run pdfjs:check-dist",
+    "build:test": "npm run pdfjs:sync && tsc -b && vite build --mode staging && npm run pdfjs:check-dist",
     "stage:production": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/stage-static-site.ps1 -Environment production",
     "stage:test": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/stage-static-site.ps1 -Environment test",
     "publish:test": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/publish-static-site.ps1 -Environment test",
     "lint": "eslint .",
     "check:sw": "node --check public/sw.js",
+    "pdfjs:sync": "node scripts/pdfjs-resources.mjs sync",
+    "pdfjs:check": "node scripts/pdfjs-resources.mjs check",
+    "pdfjs:check-dist": "node scripts/pdfjs-resources.mjs check-dist",
+    "test:pdfjs-resources": "node scripts/pdfjs-resources.mjs self-test",
     "test": "vitest run",
+    "test:browser": "node scripts/verify-editor-ui.mjs",
     "test:watch": "vitest",
     "preview": "vite preview"
   },
@@ -23,19 +28,22 @@
     "@dnd-kit/core": "^6.3.1",
     "@dnd-kit/sortable": "^10.0.0",
     "@dnd-kit/utilities": "^3.2.2",
-    "@libpdf/core": "^0.4.1",
+    "@libpdf/core": "^0.5.1",
     "@pdf-lib/fontkit": "^1.1.1",
+    "@pdf-lib/standard-fonts": "^1.0.0",
     "docx-preview": "^0.4.0",
     "html2canvas": "^1.4.1",
     "jszip": "^3.10.1",
     "lucide-react": "^1.33.0",
+    "pako": "^3.0.2",
     "pdf-lib": "^1.17.1",
-    "pdfjs-dist": "^6.2.108",
+    "pdfjs-dist": "^6.3.289",
     "react": "^19.2.8",
     "react-dom": "^19.2.8"
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",
+    "@napi-rs/canvas": "^1.0.9",
     "@tailwindcss/vite": "^4.3.3",
     "@types/node": "^24.13.3",
     "@types/react": "^19.2.18",
@@ -45,10 +53,11 @@
     "eslint-plugin-react-hooks": "^7.1.1",
     "eslint-plugin-react-refresh": "^0.5.4",
     "globals": "^17.11.0",
+    "playwright": "^1.63.0",
     "tailwindcss": "^4.3.3",
     "typescript": "^6.0.3",
     "typescript-eslint": "^8.67.0",
     "vite": "^8.2.1",
-    "vitest": "^4.1.11"
+    "vitest": "^5.0.2"
   }
 }

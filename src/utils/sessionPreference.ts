@@ -3,13 +3,13 @@ const SESSION_PREFERENCE_EVENT = 'pdfinplace:session-persistence-change';
 
 export const getSessionPersistencePreference = () => {
     if (typeof window === 'undefined') {
-        return true;
+        return false;
     }
 
     try {
-        return localStorage.getItem(SESSION_PERSISTENCE_STORAGE_KEY) !== 'false';
+        return localStorage.getItem(SESSION_PERSISTENCE_STORAGE_KEY) === 'true';
     } catch {
-        return true;
+        return false;
     }
 };
 

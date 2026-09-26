@@ -22,10 +22,10 @@ import {
 import type { PDFDocumentProxy } from 'pdfjs-dist';
 import {
     parseContentPage,
-    rgbToCss,
     viewportDeltaToPdfDelta,
 } from './parseContentPage';
 import type { ContentBlock, ContentEdit, ParsedContentPage, TextContentBlock } from './types';
+import { prepareContentRewrite } from './createRewrittenPreview';
 
 interface ContentEditLayerLabels {
     loading: string;
@@ -73,6 +73,11 @@ interface PendingDragDelta {
     deltaY: number;
 }
 
+interface TextEditSession {
+    block: TextContentBlock;
+    cancelled: boolean;
+}
+
 const dirtyEditsFromBlocks = (blocks: ContentBlock[]) =>
     blocks.filter((block) => block.isDirty).map((block) => structuredClone(block));
 
@@ -109,6 +114,8 @@ export const ContentEditLayer = ({
     const dragFrameRef = useRef<number | null>(null);
     const pendingDragRef = useRef<PendingDragDelta | null>(null);
     const loadedParseKeyRef = useRef<string | null>(null);
+    const loadedDocumentRef = useRef<PDFDocumentProxy | undefined>(undefined);
+    const textEditSessionRef = useRef<TextEditSession | null>(null);
     const handleLayerRef = useCallback((element: HTMLDivElement | null) => {
         layerRef.current = element;
         setEditorDialog(element?.closest<HTMLElement>('[role="dialog"]') ?? null);
@@ -120,7 +127,9 @@ export const ContentEditLayer = ({
 
     useEffect(() => {
         if (!isActive || !pdfDocument) return;
-        if (loadedParseKeyRef.current === parseKey) return;
+        // Start loading the rewrite engine before the first keystroke.
+        void prepareContentRewrite(pdfDocument).catch(() => {});
+        if (loadedParseKeyRef.current === parseKey && loadedDocumentRef.current === pdfDocument) return;
 
         let cancelled = false;
 
@@ -139,10 +148,11 @@ export const ContentEditLayer = ({
             if (cancelled) return;
             blocksRef.current = page.blocks;
             loadedParseKeyRef.current = parseKey;
+            loadedDocumentRef.current = pdfDocument;
             setParseResult({ key: parseKey, page });
-        }).catch((error: unknown) => {
+            onError('');
+        }).catch(() => {
             if (cancelled) return;
-            console.error('Failed to analyze the PDF page content:', error);
             setParseResult({ key: parseKey, page: null });
             onError(labels.parseFailed);
         });
@@ -193,24 +203,72 @@ export const ContentEditLayer = ({
 
     const startTextEdit = useCallback((block: TextContentBlock) => {
         if (block.deleted) return;
+        textEditSessionRef.current = {
+            block: structuredClone(block),
+            cancelled: false,
+        };
         setSelectedBlockId(block.id);
         setEditingBlockId(block.id);
         setDraftText(block.text);
     }, []);
 
+    const updateTextPreview = useCallback((blockId: string, text: string) => {
+        const session = textEditSessionRef.current;
+        updateBlocks((blocks) => blocks.map((block) => {
+            if (block.id !== blockId || block.type !== 'text') return block;
+            const wasDirtyBeforeEditing = session?.block.id === blockId
+                ? session.block.isDirty
+                : block.isDirty;
+
+            return {
+                ...block,
+                text,
+                deleted: false,
+                isDirty: wasDirtyBeforeEditing || text !== block.originalText,
+            };
+        }));
+    }, [updateBlocks]);
+
     const commitTextEdit = useCallback(() => {
         if (!editingBlockId) return;
+        const session = textEditSessionRef.current;
+        if (session?.cancelled) {
+            textEditSessionRef.current = null;
+            setEditingBlockId(null);
+            return;
+        }
         updateBlocks((blocks) => blocks.map((block) => {
             if (block.id !== editingBlockId || block.type !== 'text') return block;
+            const wasDirtyBeforeEditing = session?.block.id === editingBlockId
+                ? session.block.isDirty
+                : block.isDirty;
             return {
                 ...block,
                 text: draftText,
                 deleted: draftText.trim().length === 0,
-                isDirty: block.isDirty || draftText !== block.originalText,
+                isDirty: wasDirtyBeforeEditing || draftText !== block.originalText,
             };
         }));
+        textEditSessionRef.current = null;
         setEditingBlockId(null);
     }, [draftText, editingBlockId, updateBlocks]);
+
+    const cancelTextEdit = useCallback(() => {
+        const session = textEditSessionRef.current;
+        if (!editingBlockId || !session || session.block.id !== editingBlockId) {
+            setEditingBlockId(null);
+            return;
+        }
+
+        session.cancelled = true;
+        updateBlocks((blocks) => blocks.map((block) => (
+            block.id === editingBlockId
+                ? structuredClone(session.block)
+                : block
+        )));
+        setDraftText(session.block.text);
+        setEditingBlockId(null);
+    }, [editingBlockId, updateBlocks]);
 
     const deleteBlock = useCallback((blockId: string) => {
         updateBlocks((blocks) => blocks.map((block) => (
@@ -223,6 +281,7 @@ export const ContentEditLayer = ({
                 }
                 : block
         )));
+        textEditSessionRef.current = null;
         setEditingBlockId(null);
     }, [updateBlocks]);
 
@@ -240,6 +299,7 @@ export const ContentEditLayer = ({
                 isDirty: false,
             };
         }));
+        textEditSessionRef.current = null;
         setEditingBlockId(null);
     }, [updateBlocks]);
 
@@ -320,12 +380,12 @@ export const ContentEditLayer = ({
         if (event.currentTarget.hasPointerCapture(event.pointerId)) {
             event.currentTarget.releasePointerCapture(event.pointerId);
         }
-        dragRef.current = null;
         if (dragFrameRef.current !== null) {
             cancelAnimationFrame(dragFrameRef.current);
             dragFrameRef.current = null;
         }
         applyPendingDrag();
+        dragRef.current = null;
     }, [applyPendingDrag]);
 
     const handleBlockKeyDown = useCallback((
@@ -463,65 +523,9 @@ export const ContentEditLayer = ({
 
             {parsedPage?.blocks.map((block) => {
                 const isSelected = selectedBlockId === block.id;
-                const backgroundColor = rgbToCss(block.backgroundColor);
 
                 return (
                     <div key={block.id}>
-                        {block.isDirty ? (
-                            <div
-                                aria-hidden="true"
-                                className="pointer-events-none absolute"
-                                style={{
-                                    left: block.origX - 2,
-                                    top: block.origY - 2,
-                                    width: block.width + 4,
-                                    height: block.height + 4,
-                                    backgroundColor,
-                                    transform: `rotate(${block.screenRotation}deg)`,
-                                    transformOrigin: 'top left',
-                                }}
-                            />
-                        ) : null}
-
-                        {block.isDirty && !block.deleted && block.type === 'text' ? (
-                            <span
-                                aria-hidden="true"
-                                className="pointer-events-none absolute block whitespace-pre"
-                                style={{
-                                    left: block.x,
-                                    top: block.y,
-                                    color: rgbToCss(block.pdfColor),
-                                    fontFamily: block.fontInfo.cssFamily,
-                                    fontSize: block.screenFontSize,
-                                    fontStyle: block.fontInfo.italic ? 'italic' : 'normal',
-                                    fontWeight: block.fontInfo.bold ? 700 : 400,
-                                    lineHeight: 1,
-                                    transform: `rotate(${block.screenRotation}deg) scaleX(${block.screenTextScaleX})`,
-                                    transformOrigin: 'top left',
-                                }}
-                            >
-                                {block.text}
-                            </span>
-                        ) : null}
-
-                        {block.isDirty && !block.deleted && block.type === 'image' ? (
-                            <img
-                                aria-hidden="true"
-                                src={block.imageDataUrl}
-                                alt=""
-                                draggable={false}
-                                className="pointer-events-none absolute object-fill"
-                                style={{
-                                    left: block.x,
-                                    top: block.y,
-                                    width: block.width,
-                                    height: block.height,
-                                    transform: `rotate(${block.screenRotation}deg)`,
-                                    transformOrigin: 'top left',
-                                }}
-                            />
-                        ) : null}
-
                         {!block.deleted ? (
                             <button
                                 type="button"
@@ -570,7 +574,11 @@ export const ContentEditLayer = ({
                                     fontStyle: block.fontInfo.italic ? 'italic' : 'normal',
                                     fontWeight: block.fontInfo.bold ? 700 : 400,
                                 }}
-                                onChange={(event) => setDraftText(event.target.value)}
+                                onChange={(event) => {
+                                    const nextText = event.target.value;
+                                    setDraftText(nextText);
+                                    updateTextPreview(block.id, nextText);
+                                }}
                                 onBlur={commitTextEdit}
                                 onPointerDown={(event) => event.stopPropagation()}
                                 onKeyDown={(event) => {
@@ -579,7 +587,8 @@ export const ContentEditLayer = ({
                                         event.preventDefault();
                                         commitTextEdit();
                                     } else if (event.key === 'Escape') {
-                                        setEditingBlockId(null);
+                                        event.preventDefault();
+                                        cancelTextEdit();
                                     }
                                 }}
                             />
