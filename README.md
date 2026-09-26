@@ -9,7 +9,7 @@ It runs entirely in the browser. Documents remain in memory unless the user enab
 - Import PDF, JPG, PNG, DOCX, and ODT files.
 - Reorder, rotate, duplicate, delete, select, split, and export pages.
 - Export all pages, selected pages, or a page range.
-- Add text, drawings, shapes, images, signatures, and stamps to pages.
+- Add text, drawings, shapes with optional solid fill, images, signatures, and stamps to pages.
 - Edit, move, restore, or remove existing PDF text and raster image content on an individual page.
 - Add watermark, header, footer, margins, crop, and page numbers.
 - Protect exported PDFs with AES-256 encryption.

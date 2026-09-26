@@ -119,6 +119,56 @@ try {
             } finally { if (checkTask) await checkTask.destroy(); await task.destroy(); }
         }, output.toString('base64'));
         assert(canReeditExport, 'The actual exported PDF must support another content edit.');
+        if (!privateFixture) {
+            await openEditor();
+            const annotationCanvas = page.locator('canvas[aria-label^="Lienzo de anotaciones"]');
+            const fillButton = page.getByRole('button', { name: 'Rellenar forma' });
+            const drawFilledShape = async (tool, top, bottom) => {
+                await page.getByRole('button', { name: tool, exact: true }).click();
+                if (await fillButton.getAttribute('aria-pressed') !== 'true') await fillButton.click();
+                await page.getByLabel('Color de relleno').fill('#ff0000');
+                await annotationCanvas.scrollIntoViewIfNeeded();
+                const box = await annotationCanvas.boundingBox();
+                assert(box, 'The annotation canvas must be visible.');
+                await page.mouse.move(box.x + box.width * 0.45, box.y + box.height * top);
+                await page.mouse.down();
+                await page.mouse.move(box.x + box.width * 0.65, box.y + box.height * bottom, { steps: 5 });
+                await page.mouse.up();
+                const pixel = await annotationCanvas.evaluate((element, position) => {
+                    const x = Math.round(element.width * 0.55);
+                    const y = Math.round(element.height * position);
+                    return [...element.getContext('2d').getImageData(x, y, 1, 1).data];
+                }, (top + bottom) / 2);
+                assert(pixel[0] > 200 && pixel[1] < 80 && pixel[2] < 80, `${tool} must render with a red fill.`);
+            };
+            await drawFilledShape('Rectángulo', 0.42, 0.58);
+            await drawFilledShape('Círculo', 0.66, 0.82);
+            await save.click();
+            await page.getByRole('button', { name: 'Exportar', exact: true }).click();
+            const filledDownloadPromise = page.waitForEvent('download');
+            await page.getByRole('button', { name: 'Exportar todo', exact: true }).click();
+            const filledDownload = await filledDownloadPromise;
+            const filledStream = await filledDownload.createReadStream();
+            const filledChunks = [];
+            for await (const chunk of filledStream) filledChunks.push(chunk);
+            const filledOutput = Buffer.concat(filledChunks);
+            const exportedFill = await page.evaluate(async encoded => {
+                const { getPdfDocument } = await import('/src/utils/pdfjs.ts');
+                const task = await getPdfDocument({ data: Uint8Array.from(atob(encoded), character => character.charCodeAt(0)) });
+                try {
+                    const pdfDocument = await task.promise;
+                    const pdfPage = await pdfDocument.getPage(1);
+                    const viewport = pdfPage.getViewport({ scale: 1 });
+                    const outputCanvas = document.createElement('canvas');
+                    outputCanvas.width = Math.ceil(viewport.width);
+                    outputCanvas.height = Math.ceil(viewport.height);
+                    const context = outputCanvas.getContext('2d');
+                    await pdfPage.render({ canvasContext: context, canvas: outputCanvas, viewport }).promise;
+                    return [0.5, 0.74].map(y => [...context.getImageData(Math.round(outputCanvas.width * 0.55), Math.round(outputCanvas.height * y), 1, 1).data]);
+                } finally { await task.destroy(); }
+            }, filledOutput.toString('base64'));
+            assert(exportedFill.every(pixel => pixel[0] > 200 && pixel[1] < 80 && pixel[2] < 80), 'Rectangle and circle fills must survive PDF export.');
+        }
         assert.equal(errors.length, 0, errors.join('\n'));
         assert.equal(wasmErrors.length, 0, 'No incompatible WASM warnings are allowed.');
         assert.equal(unexpectedRequests.length, 0, 'Document editing must remain local.');

@@ -17,7 +17,8 @@ import {
     MousePointer2,
     ChevronLeft,
     ChevronRight,
-    FilePenLine
+    FilePenLine,
+    PaintBucket,
 } from 'lucide-react';
 import type { PDFDocumentProxy } from 'pdfjs-dist';
 import type { Annotation, TextAnnotationData, DrawingAnnotationData, ShapeAnnotationData, ImageAnnotationData } from '../types/annotations';
@@ -118,6 +119,8 @@ export const PageEditorModal = ({
 
     const [currentDrawing, setCurrentDrawing] = useState<{ x: number; y: number }[]>([]);
     const [color, setColor] = useState('#000000');
+    const [fillEnabled, setFillEnabled] = useState(false);
+    const [fillColor, setFillColor] = useState('#000000');
     const [strokeWidth, setStrokeWidth] = useState(2);
     const [fontSize, setFontSize] = useState(24);
     const [textFontFamily, setTextFontFamily] = useState<(typeof TEXT_FONTS)[number]>('Arial');
@@ -427,6 +430,19 @@ export const PageEditorModal = ({
         : textFontFamily;
     const toolbarBold = activeTextData?.bold ?? textBold;
     const toolbarItalic = activeTextData?.italic ?? textItalic;
+    const selectedShapeAnnotation = annotations.find(ann => ann.id === selectedAnnotationId && ann.type === 'shape');
+    const selectedShapeData = selectedShapeAnnotation?.data as ShapeAnnotationData | undefined;
+    const selectedFillableShape = selectedShapeData?.shapeType === 'rectangle' || selectedShapeData?.shapeType === 'circle';
+    const showFillControls = activeTool === 'rectangle' || activeTool === 'circle' || selectedFillableShape;
+    const toolbarFillEnabled = selectedFillableShape ? Boolean(selectedShapeData.fillColor) : fillEnabled;
+    const toolbarFillColor = selectedFillableShape && selectedShapeData.fillColor ? selectedShapeData.fillColor : fillColor;
+
+    const updateSelectedShapeFill = (nextColor: string) => {
+        if (!selectedFillableShape) return;
+        setAnnotations(previous => previous.map(annotation => annotation.id === selectedAnnotationId
+            ? { ...annotation, data: { ...annotation.data, fillColor: nextColor } as ShapeAnnotationData }
+            : annotation));
+    };
 
     const applyTextStyleToActive = useCallback((updater: (data: TextAnnotationData) => TextAnnotationData) => {
         if (!activeTextId) {
@@ -710,10 +726,12 @@ export const PageEditorModal = ({
                 if (data.fillColor) ctx.fillStyle = data.fillColor;
 
                 if (data.shapeType === 'rectangle') {
+                    if (data.fillColor) ctx.fillRect(ann.x, ann.y, ann.width, ann.height);
                     ctx.strokeRect(ann.x, ann.y, ann.width, ann.height);
                 } else if (data.shapeType === 'circle') {
                     ctx.beginPath();
                     ctx.ellipse(ann.x + ann.width / 2, ann.y + ann.height / 2, Math.max(0.1, Math.abs(ann.width / 2)), Math.max(0.1, Math.abs(ann.height / 2)), 0, 0, 2 * Math.PI);
+                    if (data.fillColor) ctx.fill();
                     ctx.stroke();
                 } else if (data.shapeType === 'line') {
                     ctx.beginPath();
@@ -763,6 +781,7 @@ export const PageEditorModal = ({
         if (interactionMode === 'drawing' && currentDrawing.length > 0) {
             ctx.save();
             ctx.strokeStyle = color;
+            ctx.fillStyle = fillColor;
             ctx.lineWidth = strokeWidth;
             ctx.lineCap = 'round';
             ctx.lineJoin = 'round';
@@ -774,6 +793,7 @@ export const PageEditorModal = ({
             } else if (activeTool === 'rectangle') {
                 const start = currentDrawing[0];
                 const end = currentDrawing[currentDrawing.length - 1];
+                if (fillEnabled) ctx.fillRect(start.x, start.y, end.x - start.x, end.y - start.y);
                 ctx.strokeRect(start.x, start.y, end.x - start.x, end.y - start.y);
             } else if (activeTool === 'circle') {
                 const start = currentDrawing[0];
@@ -782,6 +802,7 @@ export const PageEditorModal = ({
                 const h = end.y - start.y;
                 ctx.beginPath();
                 ctx.ellipse(start.x + w / 2, start.y + h / 2, Math.max(0.1, Math.abs(w / 2)), Math.max(0.1, Math.abs(h / 2)), 0, 0, 2 * Math.PI);
+                if (fillEnabled) ctx.fill();
                 ctx.stroke();
             } else if (activeTool === 'line') {
                 const start = currentDrawing[0];
@@ -793,7 +814,7 @@ export const PageEditorModal = ({
             }
             ctx.restore();
         }
-    }, [annotations, selectedAnnotationId, interactionMode, currentDrawing, activeTool, color, strokeWidth, editingTextId, getTextLayout, getCachedImage]);
+    }, [annotations, selectedAnnotationId, interactionMode, currentDrawing, activeTool, color, fillColor, fillEnabled, strokeWidth, editingTextId, getTextLayout, getCachedImage]);
 
     useEffect(() => {
         drawAnnotations();
@@ -1040,7 +1061,7 @@ export const PageEditorModal = ({
                     data: {
                         shapeType: activeTool,
                         strokeColor: color,
-                        fillColor: '',
+                        fillColor: activeTool !== 'line' && fillEnabled ? fillColor : '',
                         strokeWidth,
                         x1: (start.x - Math.min(start.x, end.x)) / Math.max(1, Math.abs(end.x - start.x)),
                         y1: (start.y - Math.min(start.y, end.y)) / Math.max(1, Math.abs(end.y - start.y)),
@@ -1339,6 +1360,36 @@ export const PageEditorModal = ({
                         aria-label={t('modal.color')}
                         className={`h-9 w-9 rounded-md cursor-pointer border border-gray-300 p-0 overflow-hidden bg-white shrink-0 ${activeTool === 'content' ? 'hidden' : ''}`}
                     />
+                    {showFillControls && activeTool !== 'content' ? (
+                        <>
+                            <button
+                                type="button"
+                                onClick={() => {
+                                    const enabled = !toolbarFillEnabled;
+                                    setFillEnabled(enabled);
+                                    updateSelectedShapeFill(enabled ? toolbarFillColor : '');
+                                }}
+                                className={`inline-flex h-11 w-11 shrink-0 items-center justify-center rounded-md border focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-600 ${toolbarFillEnabled ? 'border-blue-600 bg-blue-600 text-white' : 'border-gray-300 bg-white text-gray-700 hover:bg-gray-50'}`}
+                                title={t('modal.fillShape')}
+                                aria-label={t('modal.fillShape')}
+                                aria-pressed={toolbarFillEnabled}
+                            >
+                                <PaintBucket aria-hidden="true" className="h-4 w-4" />
+                            </button>
+                            <input
+                                type="color"
+                                value={toolbarFillColor}
+                                onChange={(event) => {
+                                    setFillColor(event.target.value);
+                                    setFillEnabled(true);
+                                    updateSelectedShapeFill(event.target.value);
+                                }}
+                                title={t('modal.fillColor')}
+                                aria-label={t('modal.fillColor')}
+                                className="h-11 w-11 shrink-0 cursor-pointer overflow-hidden rounded-md border border-gray-300 bg-white p-0 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-600"
+                            />
+                        </>
+                    ) : null}
                     <div className={`w-9 rounded-md border border-gray-300 bg-white p-1 ${activeTool === 'content' ? 'hidden' : ''}`}>
                         <div className="flex flex-col items-center gap-1">
                             {STROKE_GRAPHIC_OPTIONS.map((w) => (

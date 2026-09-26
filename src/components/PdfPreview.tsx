@@ -274,10 +274,12 @@ export const PdfPreview = ({
                                     }
 
                                     if (data.shapeType === 'rectangle') {
+                                        if (data.fillColor) context.fillRect(ann.x, ann.y, ann.width, ann.height);
                                         context.strokeRect(ann.x, ann.y, ann.width, ann.height);
                                     } else if (data.shapeType === 'circle') {
                                         context.beginPath();
                                         context.ellipse(ann.x + ann.width / 2, ann.y + ann.height / 2, Math.abs(ann.width / 2), Math.abs(ann.height / 2), 0, 0, 2 * Math.PI);
+                                        if (data.fillColor) context.fill();
                                         context.stroke();
                                     } else if (data.shapeType === 'line') {
                                         context.beginPath();

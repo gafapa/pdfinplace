@@ -1626,6 +1626,7 @@ export const usePdfEditor = () => {
             } else if (ann.type === 'shape') {
                 const data = ann.data as ShapeAnnotationData;
                 const color = hexToRgb(data.strokeColor, pdfLib.rgb);
+                const fill = data.fillColor ? hexToRgb(data.fillColor, pdfLib.rgb) : undefined;
                 const thickness = data.strokeWidth * Math.min(scaleX, scaleY);
 
                 if (data.shapeType === 'rectangle') {
@@ -1633,6 +1634,18 @@ export const usePdfEditor = () => {
                         const p2 = transformCoords(ann.x + ann.width, ann.y);
                         const p3 = transformCoords(ann.x + ann.width, ann.y + ann.height);
                         const p4 = transformCoords(ann.x, ann.y + ann.height);
+
+                        if (fill) {
+                            const xs = [p1.x, p2.x, p3.x, p4.x];
+                            const ys = [p1.y, p2.y, p3.y, p4.y];
+                            pdfPage.drawRectangle({
+                                x: Math.min(...xs),
+                                y: Math.min(...ys),
+                                width: Math.max(...xs) - Math.min(...xs),
+                                height: Math.max(...ys) - Math.min(...ys),
+                                color: fill,
+                            });
+                        }
 
                         const drawLine = (start: { x: number; y: number }, end: { x: number; y: number }) =>
                             pdfPage.drawLine({ start, end, thickness, color });
@@ -1653,7 +1666,7 @@ export const usePdfEditor = () => {
                             y: center.y,
                             xScale: rx,
                             yScale: ry,
-                            borderColor: color, borderWidth: thickness,
+                            color: fill, borderColor: color, borderWidth: thickness,
                         });
                 } else if (data.shapeType === 'line') {
                         const x1 = ann.x + (data.x1 ?? 0) * ann.width;
