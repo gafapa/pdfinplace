@@ -1823,6 +1823,8 @@ export const usePdfEditor = () => {
                 }
             }
 
+            // pdf-lib cannot embed an otherwise valid blank page without /Contents.
+            if (!pageToEmbed.node.Contents()) pageToEmbed.pushOperators();
             const embeddedPage = await newPdf.embedPage(pageToEmbed);
 
             const { width: srcWidth, height: srcHeight } = embeddedPage;

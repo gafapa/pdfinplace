@@ -22,6 +22,22 @@ else {
 }
 const browser = await playwright.chromium.launch({ executablePath: process.env.CHROME_EXECUTABLE_PATH, headless: true });
 try {
+    const blankPdf = await PDFDocument.create();
+    blankPdf.addPage([420, 550]);
+    const blankPage = await browser.newPage({ locale: 'es-ES' });
+    try {
+        await blankPage.goto(baseUrl);
+        await blankPage.getByRole('button', { name: 'Empezar', exact: true }).click();
+        await blankPage.locator('input[type=file]').first().setInputFiles({ name: 'blank.pdf', mimeType: 'application/pdf', buffer: Buffer.from(await blankPdf.save()) });
+        await blankPage.getByRole('button', { name: 'Exportar', exact: true }).click();
+        const blankDownloadPromise = blankPage.waitForEvent('download');
+        await blankPage.getByRole('button', { name: 'Exportar todo', exact: true }).click();
+        const blankDownload = await blankDownloadPromise;
+        const blankStream = await blankDownload.createReadStream();
+        const blankChunks = [];
+        for await (const chunk of blankStream) blankChunks.push(chunk);
+        assert.equal((await PDFDocument.load(Buffer.concat(blankChunks))).getPageCount(), 1, 'A blank source page must export.');
+    } finally { await blankPage.close(); }
     for (const width of [1440, 390]) {
         const page = await browser.newPage({ viewport: { width, height: 900 }, locale: 'es-ES' });
         const errors = [];
