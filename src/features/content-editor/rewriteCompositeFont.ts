@@ -60,51 +60,45 @@ const decodeUtf16Be = (hex: string) => {
     return value.charCodeAt(0) === 0xfeff ? value.slice(1) : value;
 };
 
-const parseCid = (hex: string) => {
+const parseCode = (hex: string, codeLength: number) => {
     const bytes = decodeHex(hex);
-    return bytes?.length === 2 ? (bytes[0] << 8) | bytes[1] : undefined;
+    return bytes?.length === codeLength ? bytes.reduce((code, byte) => (code << 8) | byte, 0) : undefined;
 };
 
-const addMapping = (mapping: Map<string, number>, cid: number, unicode: string) => {
-    if (!unicode || mapping.size >= MAX_CMAP_MAPPINGS) return false;
-    const existing = mapping.get(unicode);
-    if (existing !== undefined && existing !== cid) return false;
-    mapping.set(unicode, cid);
-    return true;
-};
-
-const parseToUnicode = (source: string) => {
+/**
+ * Parses bfchar/bfrange entries of a ToUnicode CMap whose codes are exactly
+ * `codeLength` bytes long. Returns code → Unicode, or undefined when the CMap
+ * is malformed, too large, or maps one code to conflicting strings.
+ */
+export const parseToUnicodeCodes = (source: string, codeLength: 1 | 2) => {
     if (source.length > MAX_CMAP_SOURCE_LENGTH) return undefined;
     const content = source.replaceAll(/%[^\r\n]*/g, '');
     if (/\busecmap\b/i.test(content)) return undefined;
-    const mappings = new Map<string, number>();
-    const cidToUnicode = new Map<number, string>();
+    const codeToUnicode = new Map<number, string>();
     let valid = true;
-    const add = (cidHex: string, unicodeHex: string) => {
-        const cid = parseCid(cidHex);
-        const unicode = decodeUtf16Be(unicodeHex);
-        if (cid === undefined || unicode === undefined || cidToUnicode.get(cid) && cidToUnicode.get(cid) !== unicode) {
+    const add = (code: number, unicode: string | undefined) => {
+        const existing = codeToUnicode.get(code);
+        if (!unicode || (existing !== undefined && existing !== unicode) || codeToUnicode.size >= MAX_CMAP_MAPPINGS) {
             valid = false;
             return;
         }
-        cidToUnicode.set(cid, unicode);
-        if (!addMapping(mappings, cid, unicode)) valid = false;
+        codeToUnicode.set(code, unicode);
     };
 
     for (const block of content.matchAll(/beginbfchar\s*([\s\S]*?)\s*endbfchar/gi)) {
-        for (const entry of block[1].matchAll(/<([^>]+)>\s*<([^>]+)>/g)) add(entry[1], entry[2]);
+        for (const entry of block[1].matchAll(/<([^>]+)>\s*<([^>]+)>/g)) {
+            const code = parseCode(entry[1], codeLength);
+            if (code === undefined) valid = false;
+            else add(code, decodeUtf16Be(entry[2]));
+        }
     }
 
     for (const block of content.matchAll(/beginbfrange\s*([\s\S]*?)\s*endbfrange/gi)) {
         const entryPattern = /<([^>]+)>\s*<([^>]+)>\s*(\[[\s\S]*?\]|<[^>]+>)/g;
         for (const entry of block[1].matchAll(entryPattern)) {
-            const start = parseCid(entry[1]);
-            const end = parseCid(entry[2]);
-            if (start === undefined || end === undefined || end < start) {
-                valid = false;
-                continue;
-            }
-            if (end - start + 1 > MAX_CMAP_MAPPINGS) {
+            const start = parseCode(entry[1], codeLength);
+            const end = parseCode(entry[2], codeLength);
+            if (start === undefined || end === undefined || end < start || end - start + 1 > MAX_CMAP_MAPPINGS) {
                 valid = false;
                 continue;
             }
@@ -115,15 +109,11 @@ const parseToUnicode = (source: string) => {
                     valid = false;
                     continue;
                 }
-                targets.forEach((unicodeHex, offset) => add(`${((start + offset) >> 8).toString(16).padStart(2, '0')}${((start + offset) & 0xff).toString(16).padStart(2, '0')}`, unicodeHex));
+                targets.forEach((unicodeHex, offset) => add(start + offset, decodeUtf16Be(unicodeHex)));
                 continue;
             }
             const unicode = decodeUtf16Be(target.slice(1, -1));
-            if (!unicode || [...unicode].length !== 1) {
-                valid = false;
-                continue;
-            }
-            const codePoint = unicode.codePointAt(0);
+            const codePoint = unicode && [...unicode].length === 1 ? unicode.codePointAt(0) : undefined;
             if (codePoint === undefined) {
                 valid = false;
                 continue;
@@ -136,17 +126,27 @@ const parseToUnicode = (source: string) => {
                 valid = false;
                 continue;
             }
-            for (let cid = start; cid <= end; cid += 1) {
-                const next = String.fromCodePoint(codePoint + cid - start);
-                add(`${(cid >> 8).toString(16).padStart(2, '0')}${(cid & 0xff).toString(16).padStart(2, '0')}`, Array.from(next).map((character) => character.codePointAt(0)?.toString(16).padStart(4, '0')).join(''));
-            }
+            for (let code = start; code <= end; code += 1) add(code, String.fromCodePoint(codePoint + code - start));
         }
     }
 
-    return valid && mappings.size > 0 ? mappings : undefined;
+    return valid && codeToUnicode.size > 0 ? codeToUnicode : undefined;
 };
 
-const readToUnicode = (font: PDFDict, context: PDFContext) => {
+const parseToUnicode = (source: string) => {
+    const codeToUnicode = parseToUnicodeCodes(source, 2);
+    if (!codeToUnicode) return undefined;
+    // Composite encoding must be reversible: one Unicode string, one CID.
+    const mappings = new Map<string, number>();
+    for (const [cid, unicode] of codeToUnicode) {
+        const existing = mappings.get(unicode);
+        if (existing !== undefined && existing !== cid) return undefined;
+        mappings.set(unicode, cid);
+    }
+    return mappings;
+};
+
+export const readToUnicode = (font: PDFDict, context: PDFContext) => {
     const stream = asStream(font.get(PDFName.of('ToUnicode')), context);
     if (!(stream instanceof PDFRawStream)) return undefined;
     try {

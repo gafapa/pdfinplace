@@ -545,4 +545,83 @@ describe('content stream rewriting', () => {
 
         expect(await savedPageStreams(pdfDocument)).toEqual(before);
     });
+
+    const addSimpleFont = (pdfDocument: PDFDocument, page: PDFPage, font: Record<string, unknown>, toUnicode?: string) => {
+        const ToUnicode = toUnicode === undefined ? undefined : pdfDocument.context.register(pdfDocument.context.flateStream(toUnicode));
+        const ref = pdfDocument.context.register(pdfDocument.context.obj({
+            Type: 'Font', Subtype: 'TrueType', FirstChar: 0, LastChar: 255, Widths: Array.from({ length: 256 }, () => 500), ...font,
+            ...(ToUnicode ? { ToUnicode } : {}),
+        }));
+        return page.node.newFontDictionary('F', ref).toString();
+    };
+    const holaCMap = [
+        'begincmap', '1 begincodespacerange <00> <FF> endcodespacerange',
+        '3 beginbfchar <01> <0048> <02> <006F> <03> <006C> endbfchar',
+        '1 beginbfrange <04> <04> <0061> endbfrange', 'endcmap',
+    ].join('\n');
+
+    it('uses ToUnicode for a subset font with a built-in encoding', async () => {
+        const pdfDocument = await PDFDocument.create();
+        const page = pdfDocument.addPage([300, 300]);
+        const fontKey = addSimpleFont(pdfDocument, page, { BaseFont: 'ABCDEF+Custom' }, holaCMap);
+        appendStream(pdfDocument, page, `BT ${fontKey} 16 Tf 1 0 0 1 40 160 Tm <01020304> Tj ET`);
+
+        await applyContentEditsToPdfPage(pdfDocument, page, [makeTextEdit({ originalText: 'Hola', text: 'aloH' })]);
+
+        expect((await extractTextItems(pdfDocument)).map(item => item.text)).toContain('aloH');
+        expect((await savedPageStreams(pdfDocument))[0]).not.toContain('PDFingFallback');
+    });
+
+    it('falls back instead of using glyphs a subset font may not embed', async () => {
+        const pdfDocument = await PDFDocument.create();
+        const page = pdfDocument.addPage([300, 300]);
+        const fontKey = addSimpleFont(pdfDocument, page, { BaseFont: 'ABCDEF+Custom', Encoding: 'WinAnsiEncoding' }, holaCMap);
+        appendStream(pdfDocument, page, `BT ${fontKey} 16 Tf 1 0 0 1 40 160 Tm <01020304> Tj ET`);
+
+        await applyContentEditsToPdfPage(pdfDocument, page, [makeTextEdit({ originalText: 'Hola', text: 'Hola!' })]);
+
+        expect((await savedPageStreams(pdfDocument))[0]).toContain('PDFingFallback');
+    });
+
+    it('decodes an unsupported named encoding through ToUnicode', async () => {
+        const pdfDocument = await PDFDocument.create();
+        const page = pdfDocument.addPage([300, 300]);
+        const fontKey = addSimpleFont(pdfDocument, page, { BaseFont: 'Custom', Encoding: 'MacRomanEncoding' }, holaCMap);
+        appendStream(pdfDocument, page, `BT ${fontKey} 16 Tf 1 0 0 1 40 160 Tm <01020304> Tj ET`);
+
+        await applyContentEditsToPdfPage(pdfDocument, page, [makeTextEdit({ originalText: 'Hola', text: 'Hola' , pdfX: 60 })]);
+
+        expect((await extractTextItems(pdfDocument)).find(item => item.text === 'Hola')?.transform[4]).toBeCloseTo(60, 2);
+    });
+
+    it('reports an undecodable font at the edit position instead of a missing selection', async () => {
+        const pdfDocument = await PDFDocument.create();
+        const page = pdfDocument.addPage([300, 300]);
+        const fontKey = addSimpleFont(pdfDocument, page, { BaseFont: 'Custom', Encoding: 'MacRomanEncoding' });
+        appendStream(pdfDocument, page, `BT ${fontKey} 16 Tf 1 0 0 1 40 160 Tm (Target) Tj ET`);
+
+        await expect(applyContentEditsToPdfPage(pdfDocument, page, [makeTextEdit()]))
+            .rejects.toThrow('cannot be edited safely');
+    });
+
+    it('rewrites a TrueType font whose encoding dictionary carries /Differences', async () => {
+        const pdfDocument = await PDFDocument.create();
+        const page = pdfDocument.addPage([300, 300]);
+        const font = pdfDocument.context.register(pdfDocument.context.obj({
+            Type: 'Font',
+            Subtype: 'TrueType',
+            BaseFont: 'Calibri',
+            FirstChar: 0,
+            LastChar: 255,
+            Widths: Array.from({ length: 256 }, () => 500),
+            Encoding: { Type: 'Encoding', BaseEncoding: 'WinAnsiEncoding', Differences: [128, 'Euro', 141, 'u008D'] },
+        }));
+        const fontKey = page.node.newFontDictionary('Calibri', font).toString();
+        appendStream(pdfDocument, page, `BT ${fontKey} 16 Tf 1 0 0 1 40 160 Tm (Casta\\361o \\200) Tj ET`);
+
+        await applyContentEditsToPdfPage(pdfDocument, page, [makeTextEdit({ originalText: 'Castaño €', text: 'Pérez €' })]);
+
+        expect((await extractTextItems(pdfDocument)).map(item => item.text).join(' ')).toContain('Pérez €');
+        expect((await savedPageStreams(pdfDocument))[0]).not.toContain('PDFingFallback');
+    });
 });
