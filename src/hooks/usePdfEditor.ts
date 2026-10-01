@@ -549,6 +549,7 @@ export const usePdfEditor = () => {
     const persistedFileCacheRef = useRef<Record<string, PersistedFileRecord>>({});
     const filesRef = useRef<Record<string, EditorFile>>({});
     const isImportingRef = useRef(false);
+    const persistenceGenerationRef = useRef(0);
     const [printOverlayOptions, setPrintOverlayOptions] = useState<PrintOverlayOptions>(loadOverlayOptions);
     const notifyError = useCallback((message: string) => {
         setNotification({ id: createId(), message, tone: 'error' });
@@ -562,6 +563,7 @@ export const usePdfEditor = () => {
         setIsSessionPersistenceEnabled(enabled);
 
         if (!enabled) {
+            persistenceGenerationRef.current += 1;
             persistedFileCacheRef.current = {};
             setHasSavedSession(false);
             setPrintOverlayOptions(DEFAULT_PRINT_OVERLAY_OPTIONS);
@@ -691,6 +693,8 @@ export const usePdfEditor = () => {
             return;
         }
 
+        let isCancelled = false;
+        const persistenceGeneration = persistenceGenerationRef.current;
         const persistSession = async () => {
             if (pages.length === 0 || Object.keys(files).length === 0) {
                 persistedFileCacheRef.current = {};
@@ -735,6 +739,9 @@ export const usePdfEditor = () => {
                     })
                 );
 
+                if (isCancelled || persistenceGeneration !== persistenceGenerationRef.current || !getSessionPersistencePreference()) {
+                    return;
+                }
                 persistedFileCacheRef.current = nextFileCache;
                 await savePersistedSession({
                     files: persistedFiles,
@@ -742,7 +749,9 @@ export const usePdfEditor = () => {
                     pageSize,
                     savedAt: Date.now(),
                 });
-                setHasSavedSession(true);
+                if (!isCancelled && persistenceGeneration === persistenceGenerationRef.current && getSessionPersistencePreference()) {
+                    setHasSavedSession(true);
+                }
             } catch (error) {
                 console.error('Failed to persist session:', error);
             }
@@ -752,7 +761,10 @@ export const usePdfEditor = () => {
             void persistSession();
         }, SESSION_PERSIST_DEBOUNCE_MS);
 
-        return () => window.clearTimeout(timeoutId);
+        return () => {
+            isCancelled = true;
+            window.clearTimeout(timeoutId);
+        };
     }, [files, pages, pageSize, isSessionReady, isSessionPersistenceEnabled]);
 
     useEffect(() => {
@@ -1461,6 +1473,7 @@ export const usePdfEditor = () => {
     }, [setPages]);
 
     const clearAll = useCallback(() => {
+        persistenceGenerationRef.current += 1;
         Object.values(filesRef.current).forEach((fileData) => {
             releasePdfDocument(fileData.pdfDoc);
         });
@@ -2150,7 +2163,7 @@ export const usePdfEditor = () => {
             const securePdf = await SecurePDF.load(rawBytes);
             securePdf.setProtection({
                 userPassword: password,
-                ownerPassword: createId(),
+                ownerPassword: Array.from(crypto.getRandomValues(new Uint8Array(32)), (byte) => byte.toString(16).padStart(2, '0')).join(''),
                 algorithm: 'AES-256',
             });
 

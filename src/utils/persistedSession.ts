@@ -34,45 +34,52 @@ const openSessionDatabase = (): Promise<IDBDatabase> =>
 
         request.onsuccess = () => resolve(request.result);
         request.onerror = () => reject(request.error ?? new Error('Failed to open IndexedDB.'));
+        request.onblocked = () => reject(new Error('The session database is blocked by another tab.'));
     });
 
 const withStore = async <T>(
     mode: IDBTransactionMode,
-    executor: (store: IDBObjectStore, resolve: (value: T) => void, reject: (reason?: unknown) => void) => void,
+    createRequest: (store: IDBObjectStore) => IDBRequest<T>,
 ): Promise<T> => {
     const database = await openSessionDatabase();
 
     return new Promise((resolve, reject) => {
         const transaction = database.transaction(STORE_NAME, mode);
-        const store = transaction.objectStore(STORE_NAME);
-
-        transaction.oncomplete = () => database.close();
+        const request = createRequest(transaction.objectStore(STORE_NAME));
+        transaction.oncomplete = () => {
+            database.close();
+            resolve(request.result);
+        };
+        transaction.onabort = () => {
+            database.close();
+            reject(transaction.error ?? new Error('IndexedDB transaction was aborted.'));
+        };
         transaction.onerror = () => {
             database.close();
             reject(transaction.error ?? new Error('IndexedDB transaction failed.'));
         };
-
-        executor(store, resolve, reject);
     });
 };
 
+let pendingMutation: Promise<void> = Promise.resolve();
+
+const queueMutation = (operation: () => Promise<void>): Promise<void> => {
+    const currentMutation = pendingMutation.then(operation);
+    pendingMutation = currentMutation.catch(() => undefined);
+    return currentMutation;
+};
+
 export const savePersistedSession = async (session: PersistedEditorSession) =>
-    withStore<void>('readwrite', (store, resolve, reject) => {
-        const request = store.put(session, SESSION_KEY);
-        request.onsuccess = () => resolve();
-        request.onerror = () => reject(request.error ?? new Error('Failed to save session.'));
+    queueMutation(async () => {
+        await withStore<IDBValidKey>('readwrite', (store) => store.put(session, SESSION_KEY));
     });
 
-export const loadPersistedSession = async () =>
-    withStore<PersistedEditorSession | null>('readonly', (store, resolve, reject) => {
-        const request = store.get(SESSION_KEY);
-        request.onsuccess = () => resolve((request.result as PersistedEditorSession | undefined) ?? null);
-        request.onerror = () => reject(request.error ?? new Error('Failed to load session.'));
-    });
+export const loadPersistedSession = async () => {
+    const result = await withStore<PersistedEditorSession | undefined>('readonly', (store) => store.get(SESSION_KEY));
+    return result ?? null;
+};
 
 export const clearPersistedSession = async () =>
-    withStore<void>('readwrite', (store, resolve, reject) => {
-        const request = store.delete(SESSION_KEY);
-        request.onsuccess = () => resolve();
-        request.onerror = () => reject(request.error ?? new Error('Failed to clear session.'));
+    queueMutation(async () => {
+        await withStore<undefined>('readwrite', (store) => store.delete(SESSION_KEY));
     });
