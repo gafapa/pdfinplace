@@ -816,6 +816,7 @@ export const PageEditorModal = ({
         }
     }, [annotations, selectedAnnotationId, interactionMode, currentDrawing, activeTool, color, fillColor, fillEnabled, strokeWidth, editingTextId, getTextLayout, getCachedImage]);
 
+    // biome-ignore lint/correctness/useExhaustiveDependencies: Image loading must redraw the canvas even when the callback is stable.
     useEffect(() => {
         drawAnnotations();
     }, [drawAnnotations, imageRenderTick]);

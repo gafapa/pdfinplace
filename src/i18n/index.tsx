@@ -1802,7 +1802,7 @@ export const I18nProvider = ({ children }: { children: ReactNode }) => {
     );
 };
 
-// eslint-disable-next-line react-refresh/only-export-components
+// biome-ignore lint/style/useComponentExportOnlyModules: The locale hook intentionally shares this provider module.
 export const useI18n = () => {
     const context = useContext(I18nContext);
     if (!context) {

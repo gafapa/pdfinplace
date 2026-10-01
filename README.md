@@ -113,4 +113,4 @@ PDF text editing is inherently approximate when the original embedded font canno
 
 ## Dependency Notes
 
-Dependencies are kept on compatible semver ranges and audited in CI. TypeScript 7 is deferred until the TypeScript ESLint toolchain declares support for it.
+Dependencies are audited in CI. TypeScript 7 checks types during the build, while Biome lints TypeScript and React code without depending on the TypeScript compiler API.
