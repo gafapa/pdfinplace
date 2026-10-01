@@ -48,7 +48,11 @@ npm run dev
 npm run test:browser
 ```
 
-GitHub Actions runs these checks for pushes to `main` and pull requests. CI installs Chromium and starts the local Vite server for the browser check.
+GitHub Actions runs these checks for pushes to `main`, pull requests, and manual runs from the Actions tab. CI installs Chromium and starts the local Vite server for the browser check.
+
+CI uses one standard Ubuntu runner with Node.js 24, caches npm downloads, and does not upload artifacts. Each run has a 10-minute timeout, and a newer run on the same branch or pull request cancels the previous run to conserve the free allowance.
+
+Standard GitHub-hosted runners are free for this public repository. If the repository becomes private, its runs count against the owner's monthly Actions allowance (2,000 minutes on GitHub Free). The workflow cannot enforce an account-wide spending limit; use an Actions budget with **Stop usage when budget limit is reached** enabled in the account's billing settings when one is needed. See [GitHub Actions billing](https://docs.github.com/en/billing/concepts/product-billing/github-actions) for current allowances and [budget controls](https://docs.github.com/en/billing/how-tos/set-up-budgets) for spending limits.
 
 ## Production Build
 
