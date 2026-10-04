@@ -548,10 +548,11 @@ describe('content stream rewriting', () => {
 
     const addSimpleFont = (pdfDocument: PDFDocument, page: PDFPage, font: Record<string, unknown>, toUnicode?: string) => {
         const ToUnicode = toUnicode === undefined ? undefined : pdfDocument.context.register(pdfDocument.context.flateStream(toUnicode));
-        const ref = pdfDocument.context.register(pdfDocument.context.obj({
+        const entries = Object.entries({
             Type: 'Font', Subtype: 'TrueType', FirstChar: 0, LastChar: 255, Widths: Array.from({ length: 256 }, () => 500), ...font,
             ...(ToUnicode ? { ToUnicode } : {}),
-        }));
+        }).filter(([, value]) => value !== undefined);
+        const ref = pdfDocument.context.register(pdfDocument.context.obj(Object.fromEntries(entries)));
         return page.node.newFontDictionary('F', ref).toString();
     };
     const holaCMap = [
@@ -602,6 +603,78 @@ describe('content stream rewriting', () => {
 
         await expect(applyContentEditsToPdfPage(pdfDocument, page, [makeTextEdit()]))
             .rejects.toThrow('cannot be edited safely');
+    });
+
+    it('decodes /Differences codes whose glyph another code already shows', async () => {
+        const pdfDocument = await PDFDocument.create();
+        const page = pdfDocument.addPage([300, 300]);
+        const fontKey = addSimpleFont(pdfDocument, page, {
+            Subtype: 'Type1', BaseFont: 'Helvetica', Widths: undefined, FirstChar: undefined, LastChar: undefined,
+            Encoding: { Type: 'Encoding', Differences: [1, 'H', 'o', 'l', 'a'] },
+        });
+        appendStream(pdfDocument, page, `BT ${fontKey} 16 Tf 1 0 0 1 40 160 Tm <01020304> Tj ET`);
+
+        await applyContentEditsToPdfPage(pdfDocument, page, [makeTextEdit({ originalText: 'Hola', text: 'Hola mundo' })]);
+
+        expect((await extractTextItems(pdfDocument)).map(item => item.text).join(' ')).toContain('Hola mundo');
+    });
+
+    it('decodes a Word non-breaking space remapped to /space and keeps encoding spaces as code 32', async () => {
+        const pdfDocument = await PDFDocument.create();
+        const page = pdfDocument.addPage([300, 300]);
+        const fontKey = addSimpleFont(pdfDocument, page, {
+            BaseFont: 'Calibri', Encoding: { Type: 'Encoding', BaseEncoding: 'WinAnsiEncoding', Differences: [160, 'space'] },
+        });
+        appendStream(pdfDocument, page, `BT ${fontKey} 16 Tf 1 0 0 1 40 160 Tm (A\\240B) Tj ET`);
+
+        await applyContentEditsToPdfPage(pdfDocument, page, [makeTextEdit({ originalText: 'A B', text: 'C D' })]);
+
+        const [source] = await savedPageStreams(pdfDocument);
+        expect(source).toContain('(C D)');
+    });
+
+    it('decodes ligature and suffixed glyph names from /Differences', async () => {
+        const pdfDocument = await PDFDocument.create();
+        const page = pdfDocument.addPage([300, 300]);
+        const fontKey = addSimpleFont(pdfDocument, page, {
+            BaseFont: 'Calibri', Encoding: { Type: 'Encoding', BaseEncoding: 'WinAnsiEncoding', Differences: [27, 'fi', 'f_f', 'e.sc'] },
+        });
+        appendStream(pdfDocument, page, `BT ${fontKey} 16 Tf 1 0 0 1 40 160 Tm (\\033sh o\\034ic\\035 o\\034) Tj ET`);
+
+        await applyContentEditsToPdfPage(pdfDocument, page, [makeTextEdit({ originalText: 'fish office off', text: 'oficina' })]);
+
+        expect((await extractTextItems(pdfDocument)).map(item => item.text).join(' ')).toContain('oficina');
+    });
+
+    it('scales Type3 widths through the font matrix', async () => {
+        const pdfDocument = await PDFDocument.create();
+        const page = pdfDocument.addPage([300, 300]);
+        const fontKey = addSimpleFont(pdfDocument, page, {
+            Subtype: 'Type3', BaseFont: undefined, FontMatrix: [0.01, 0, 0, 0.01, 0, 0], FontBBox: [0, 0, 100, 100],
+            Resources: {}, CharProcs: {}, Encoding: { Type: 'Encoding', Differences: [1, 'g1', 'g2', 'g3', 'g4'] },
+            Widths: Array.from({ length: 256 }, () => 50),
+        }, holaCMap);
+        // Each glyph advances 50 * 0.01 * 16 = 8 units, so the second operation starts at x = 48.
+        appendStream(pdfDocument, page, `BT ${fontKey} 16 Tf 1 0 0 1 40 160 Tm <01> Tj <020304> Tj ET`);
+
+        await applyContentEditsToPdfPage(pdfDocument, page, [makeTextEdit({ originalText: 'ola', text: 'alo', origPdfX: 48, pdfX: 48 })]);
+
+        expect((await savedPageStreams(pdfDocument))[0]).toMatch(/<01> Tj[\s\S]*TJ/u);
+    });
+
+    it('does not blame an unmeasurable font when the same text exists at a known position', async () => {
+        const pdfDocument = await PDFDocument.create();
+        const page = pdfDocument.addPage([300, 300]);
+        const fontKey = addSimpleFont(pdfDocument, page, { BaseFont: 'Calibri', Encoding: 'WinAnsiEncoding', FirstChar: 65, Widths: [500] });
+        appendStream(pdfDocument, page, [
+            `BT ${fontKey} 16 Tf 1 0 0 1 40 200 Tm (Target) Tj ET`,
+            `BT ${fontKey} 16 Tf 1 0 0 1 40 100 Tm (Z) Tj (Target) Tj ET`,
+        ].join('\n'));
+
+        const error = await applyContentEditsToPdfPage(pdfDocument, page, [makeTextEdit({ origPdfY: 150, pdfY: 150 })]).catch(caught => caught);
+
+        expect(error).toBeInstanceOf(ContentRewriteError);
+        expect(error.message).not.toContain('cannot be edited safely');
     });
 
     it('rewrites a TrueType font whose encoding dictionary carries /Differences', async () => {

@@ -158,6 +158,14 @@ try {
                 assert(pixel[0] > 200 && pixel[1] < 80 && pixel[2] < 80, `${tool} must render with a red fill.`);
             };
             await drawFilledShape('Rectángulo', 0.42, 0.58);
+            // The drawn rectangle stays selected with its tool active; turning fill
+            // off for the next shape must not unfill it.
+            await fillButton.click();
+            assert.equal(await fillButton.getAttribute('aria-pressed'), 'false');
+            await page.waitForTimeout(100);
+            const keptFill = await annotationCanvas.evaluate(element => [...element.getContext('2d')
+                .getImageData(Math.round(element.width * 0.55), Math.round(element.height * 0.5), 1, 1).data]);
+            assert(keptFill[0] > 200 && keptFill[1] < 80 && keptFill[2] < 80, 'Toggling fill for the next shape must keep the drawn rectangle filled.');
             await drawFilledShape('Círculo', 0.66, 0.82);
             await save.click();
             await page.getByRole('button', { name: 'Exportar', exact: true }).click();

@@ -434,11 +434,15 @@ export const PageEditorModal = ({
     const selectedShapeData = selectedShapeAnnotation?.data as ShapeAnnotationData | undefined;
     const selectedFillableShape = selectedShapeData?.shapeType === 'rectangle' || selectedShapeData?.shapeType === 'circle';
     const showFillControls = activeTool === 'rectangle' || activeTool === 'circle' || selectedFillableShape;
-    const toolbarFillEnabled = selectedFillableShape ? Boolean(selectedShapeData.fillColor) : fillEnabled;
-    const toolbarFillColor = selectedFillableShape && selectedShapeData.fillColor ? selectedShapeData.fillColor : fillColor;
+    // A drawn shape stays selected while its tool is still active; the fill
+    // controls then configure the next shape, and edit the selection only in
+    // the select tool.
+    const editsSelectedShapeFill = activeTool === 'select' && selectedFillableShape;
+    const toolbarFillEnabled = editsSelectedShapeFill ? Boolean(selectedShapeData.fillColor) : fillEnabled;
+    const toolbarFillColor = editsSelectedShapeFill && selectedShapeData.fillColor ? selectedShapeData.fillColor : fillColor;
 
     const updateSelectedShapeFill = (nextColor: string) => {
-        if (!selectedFillableShape) return;
+        if (!editsSelectedShapeFill) return;
         setAnnotations(previous => previous.map(annotation => annotation.id === selectedAnnotationId
             ? { ...annotation, data: { ...annotation.data, fillColor: nextColor } as ShapeAnnotationData }
             : annotation));

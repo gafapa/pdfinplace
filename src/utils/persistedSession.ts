@@ -1,4 +1,5 @@
 import type { EditorPage, PageSize } from '../hooks/usePdfEditor';
+import { runStoreRequest, type KeyValueStoreConfig } from './indexedDbStore';
 
 export interface PersistedFileRecord {
     id: string;
@@ -16,70 +17,39 @@ export interface PersistedEditorSession {
     savedAt: number;
 }
 
-const DB_NAME = 'pageforge-session-db';
-const DB_VERSION = 1;
-const STORE_NAME = 'sessions';
+const SESSION_STORE: KeyValueStoreConfig = {
+    databaseName: 'pageforge-session-db',
+    version: 1,
+    storeName: 'sessions',
+    label: 'session',
+};
 const SESSION_KEY = 'current';
 
-const openSessionDatabase = (): Promise<IDBDatabase> =>
-    new Promise((resolve, reject) => {
-        const request = indexedDB.open(DB_NAME, DB_VERSION);
+const withStore = <T>(mode: IDBTransactionMode, createRequest: (store: IDBObjectStore) => IDBRequest<T>) =>
+    runStoreRequest(SESSION_STORE, mode, createRequest);
 
-        request.onupgradeneeded = () => {
-            const database = request.result;
-            if (!database.objectStoreNames.contains(STORE_NAME)) {
-                database.createObjectStore(STORE_NAME);
-            }
-        };
+let pendingOperation: Promise<void> = Promise.resolve();
 
-        request.onsuccess = () => resolve(request.result);
-        request.onerror = () => reject(request.error ?? new Error('Failed to open IndexedDB.'));
-        request.onblocked = () => reject(new Error('The session database is blocked by another tab.'));
-    });
-
-const withStore = async <T>(
-    mode: IDBTransactionMode,
-    createRequest: (store: IDBObjectStore) => IDBRequest<T>,
-): Promise<T> => {
-    const database = await openSessionDatabase();
-
-    return new Promise((resolve, reject) => {
-        const transaction = database.transaction(STORE_NAME, mode);
-        const request = createRequest(transaction.objectStore(STORE_NAME));
-        transaction.oncomplete = () => {
-            database.close();
-            resolve(request.result);
-        };
-        transaction.onabort = () => {
-            database.close();
-            reject(transaction.error ?? new Error('IndexedDB transaction was aborted.'));
-        };
-        transaction.onerror = () => {
-            database.close();
-            reject(transaction.error ?? new Error('IndexedDB transaction failed.'));
-        };
-    });
-};
-
-let pendingMutation: Promise<void> = Promise.resolve();
-
-const queueMutation = (operation: () => Promise<void>): Promise<void> => {
-    const currentMutation = pendingMutation.then(operation);
-    pendingMutation = currentMutation.catch(() => undefined);
-    return currentMutation;
+// Saves, clears and loads run strictly in call order, so a load never reads a
+// session that an earlier clear is about to delete.
+const enqueue = <T>(operation: () => Promise<T>): Promise<T> => {
+    const current = pendingOperation.then(operation);
+    pendingOperation = current.then(() => undefined, () => undefined);
+    return current;
 };
 
 export const savePersistedSession = async (session: PersistedEditorSession) =>
-    queueMutation(async () => {
+    enqueue(async () => {
         await withStore<IDBValidKey>('readwrite', (store) => store.put(session, SESSION_KEY));
     });
 
-export const loadPersistedSession = async () => {
-    const result = await withStore<PersistedEditorSession | undefined>('readonly', (store) => store.get(SESSION_KEY));
-    return result ?? null;
-};
+export const loadPersistedSession = async () =>
+    enqueue(async () => {
+        const result = await withStore<PersistedEditorSession | undefined>('readonly', (store) => store.get(SESSION_KEY));
+        return result ?? null;
+    });
 
 export const clearPersistedSession = async () =>
-    queueMutation(async () => {
+    enqueue(async () => {
         await withStore<undefined>('readwrite', (store) => store.delete(SESSION_KEY));
     });

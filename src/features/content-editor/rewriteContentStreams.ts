@@ -295,6 +295,10 @@ const findTextCandidates = (
     // Why the operation at the edit's position could not be read; reported
     // instead of "not found" so an unsupported font never looks like a miss.
     let blockedReason: string | undefined;
+    // Matching text whose position was lost is only blamed when no positioned
+    // copy of the same text exists; otherwise the selection is simply elsewhere.
+    let lostPositionReason: string | undefined;
+    let positionedTextSeen = false;
     for (let index = 0; index < tokens.length; index += 1) {
         const token = tokens[index];
         if (token.kind !== 'word') continue;
@@ -387,13 +391,6 @@ const findTextCandidates = (
         const unit = state.fontSize * state.horizontalScale / 1000;
         const before = state.matrix;
         const baseline = before ? translate(multiply(state.ctm, before), -leadingAdjustment * unit, state.rise) : null;
-        if (!before && original.length > 0) {
-            let lostText = '';
-            try { lostText = fonts.decode(state.fontName, original); } catch { /* reported where it was positioned */ }
-            if (lostText && normalizeExtractedText(lostText) === normalizeExtractedText(edit.originalText)) {
-                blockedReason ??= 'Its position follows text whose font has no glyph metrics.';
-            }
-        }
         const atPosition = baseline && equalPosition(baseline[4], edit.origPdfX) && equalPosition(baseline[5], edit.origPdfY);
         let decoded = '';
         if (original.length > 0) {
@@ -402,6 +399,10 @@ const findTextCandidates = (
                 decoded = '';
                 if (atPosition && error instanceof ContentRewriteError) blockedReason ??= error.message;
             }
+        }
+        if (decoded && normalizeExtractedText(decoded) === normalizeExtractedText(edit.originalText)) {
+            if (before) positionedTextSeen = true;
+            else lostPositionReason ??= 'Its position follows text whose font has no glyph metrics.';
         }
         const leadingWhitespace = decoded.match(/^\s*/u)?.[0] ?? '';
         let visiblePosition = false;
@@ -568,29 +569,58 @@ const findTextCandidates = (
         }
         candidates.push({ start, end: index + 1, replacement: [...prefix, ...replacement] });
     }
-    if (!candidates.length && blockedReason) {
-        throw new ContentRewriteError('unsupported-content', `The selected text uses a font that cannot be edited safely. ${blockedReason}`);
+    const reason = blockedReason ?? (positionedTextSeen ? undefined : lostPositionReason);
+    if (!candidates.length && reason) {
+        throw new ContentRewriteError('unsupported-content', `The selected text uses a font that cannot be edited safely. ${reason}`);
     }
     return candidates;
 };
 
-let glyphUnicode: Map<string, number> | undefined;
-/** Resolves a PostScript glyph name from an /Encoding /Differences array to a code point. */
-const glyphNameToCodePoint = (name: string) => {
-    if (!glyphUnicode) {
-        glyphUnicode = new Map();
-        for (const encoding of [Encodings.WinAnsi, Encodings.Symbol, Encodings.ZapfDingbats]) {
-            for (const codePoint of encoding.supportedCodePoints) {
-                const glyph = encoding.encodeUnicodeCodePoint(codePoint);
-                if (!glyphUnicode.has(glyph.name)) glyphUnicode.set(glyph.name, codePoint);
-            }
+let glyphUnicode: Map<string, string> | undefined;
+// Glyph names outside WinAnsi/Symbol/ZapfDingbats that Differences arrays
+// commonly use (StandardEncoding accents and Latin ligatures).
+const extraGlyphNames: [string, number][] = [
+    ['fi', 0xfb01], ['fl', 0xfb02], ['ff', 0xfb00], ['ffi', 0xfb03], ['ffl', 0xfb04],
+    ['dotlessi', 0x0131], ['dotlessj', 0x0237], ['Lslash', 0x0141], ['lslash', 0x0142],
+    ['ring', 0x02da], ['caron', 0x02c7], ['breve', 0x02d8], ['dotaccent', 0x02d9],
+    ['hungarumlaut', 0x02dd], ['ogonek', 0x02db], ['fraction', 0x2044], ['minus', 0x2212],
+    ['nbspace', 0x00a0], ['nonbreakingspace', 0x00a0], ['sfthyphen', 0x00ad], ['middot', 0x00b7],
+];
+const glyphUnicodeTable = () => {
+    if (glyphUnicode) return glyphUnicode;
+    glyphUnicode = new Map();
+    for (const encoding of [Encodings.WinAnsi, Encodings.Symbol, Encodings.ZapfDingbats]) {
+        for (const codePoint of encoding.supportedCodePoints) {
+            const glyph = encoding.encodeUnicodeCodePoint(codePoint);
+            if (!glyphUnicode.has(glyph.name)) glyphUnicode.set(glyph.name, String.fromCodePoint(codePoint));
         }
     }
-    const known = glyphUnicode.get(name);
+    for (const [name, codePoint] of extraGlyphNames) if (!glyphUnicode.has(name)) glyphUnicode.set(name, String.fromCodePoint(codePoint));
+    return glyphUnicode;
+};
+const isScalar = (codePoint: number) => codePoint <= 0x10ffff && (codePoint < 0xd800 || codePoint > 0xdfff);
+const glyphComponentToText = (name: string): string | undefined => {
+    const known = glyphUnicodeTable().get(name);
     if (known !== undefined) return known;
-    const hex = /^uni([0-9A-F]{4})$/u.exec(name)?.[1] ?? /^u([0-9A-F]{4,6})$/u.exec(name)?.[1];
+    const uni = /^uni((?:[0-9A-F]{4})+)$/u.exec(name)?.[1];
+    if (uni) {
+        const codePoints = uni.match(/.{4}/gu)?.map(hex => Number.parseInt(hex, 16)) ?? [];
+        return codePoints.every(isScalar) ? String.fromCodePoint(...codePoints) : undefined;
+    }
+    const hex = /^u([0-9A-F]{4,6})$/u.exec(name)?.[1];
     const codePoint = hex ? Number.parseInt(hex, 16) : undefined;
-    return codePoint !== undefined && codePoint <= 0x10ffff && (codePoint < 0xd800 || codePoint > 0xdfff) ? codePoint : undefined;
+    return codePoint !== undefined && isScalar(codePoint) ? String.fromCodePoint(codePoint) : undefined;
+};
+/**
+ * Resolves a PostScript glyph name from an /Encoding /Differences array to its
+ * Unicode text, following the Adobe Glyph List conventions for suffixes
+ * (`a.sc` → `a`) and ligature components (`f_f_i` → `ffi`).
+ */
+const glyphNameToText = (name: string) => {
+    const base = name.split('.')[0];
+    if (!base) return undefined;
+    const parts = base.split('_').map(glyphComponentToText);
+    return parts.every(part => part !== undefined) ? parts.join('') : undefined;
 };
 
 const getFontResolver = (pdfPage: PDFPage, resourceDictionary = pdfPage.node.Resources(), unicodeFonts: UnicodeFallbackFont[] = []): FontResolver => {
@@ -650,13 +680,14 @@ const getFontResolver = (pdfPage: PDFPage, resourceDictionary = pdfPage.node.Res
             codecs.set(name, composite);
             return composite;
         }
+        const fontSubtype = font.lookupMaybe(PDFName.of('Subtype'), PDFName)?.decodeText();
         const rawBaseFont = font.lookupMaybe(PDFName.of('BaseFont'), PDFName)?.decodeText();
         // A subsetted font's BaseFont carries a 6-uppercase-letter tag prefix
         // (e.g. "ABCDEF+Helvetica"); strip it before matching a Standard-14 name.
         const baseFont = rawBaseFont?.replace(/^[A-Z]{6}\+/, '');
-        const standard = baseFont && Object.values(FontNames).includes(baseFont as FontNames) ? Font.load(baseFont as FontNames) : undefined;
+        const standard = fontSubtype !== 'Type3' && baseFont && Object.values(FontNames).includes(baseFont as FontNames) ? Font.load(baseFont as FontNames) : undefined;
         const glyphNames = new Map<number, string>();
-        // Unicode code point → character code according to /Encoding.
+        // Character code → Unicode text according to /Encoding.
         const buildEncodingMap = () => {
             const declaredEncoding = font.lookup(PDFName.of('Encoding'));
             let encodingName = declaredEncoding instanceof PDFName ? declaredEncoding.decodeText() : undefined;
@@ -672,16 +703,16 @@ const getFontResolver = (pdfPage: PDFPage, resourceDictionary = pdfPage.node.Res
             const intrinsic = !encodingName && baseFont === FontNames.Symbol ? Encodings.Symbol
                 : !encodingName && baseFont === FontNames.ZapfDingbats ? Encodings.ZapfDingbats : Encodings.WinAnsi;
             const standardEncoding = intrinsic === Encodings.WinAnsi && encodingName !== 'WinAnsiEncoding';
-            const characterCodes = new Map<number, number>();
+            const codeText = new Map<number, string>();
             for (const codePoint of intrinsic.supportedCodePoints) {
                 if (standardEncoding && (codePoint < 32 || codePoint > 126 || codePoint === 39 || codePoint === 96)) continue;
                 const glyph = intrinsic.encodeUnicodeCodePoint(codePoint);
                 glyphNames.set(glyph.code, glyph.name);
-                characterCodes.set(codePoint, glyph.code);
+                if (!codeText.has(glyph.code)) codeText.set(glyph.code, String.fromCodePoint(codePoint));
             }
             if (standardEncoding) {
-                glyphNames.set(39, 'quoteright'); characterCodes.set(0x2019, 39);
-                glyphNames.set(96, 'quoteleft'); characterCodes.set(0x2018, 96);
+                glyphNames.set(39, 'quoteright'); codeText.set(39, '’');
+                glyphNames.set(96, 'quoteleft'); codeText.set(96, '‘');
             }
             if (differences) {
                 let code: number | undefined;
@@ -692,18 +723,20 @@ const getFontResolver = (pdfPage: PDFPage, resourceDictionary = pdfPage.node.Res
                         throw new ContentRewriteError('unsupported-content', 'Invalid font encoding differences.');
                     }
                     const glyphName = value.decodeText();
-                    for (const [codePoint, mapped] of characterCodes) if (mapped === code) characterCodes.delete(codePoint);
                     glyphNames.set(code, glyphName);
-                    const codePoint = glyphNameToCodePoint(glyphName);
-                    if (codePoint !== undefined && !characterCodes.has(codePoint)) characterCodes.set(codePoint, code);
+                    // Each code is redefined independently: a glyph that another code
+                    // also shows (e.g. Word's [160 /space]) still decodes here.
+                    const text = glyphNameToText(glyphName);
+                    if (text) codeText.set(code, text);
+                    else codeText.delete(code);
                     code += 1;
                 }
             }
-            return characterCodes;
+            return codeText;
         };
-        let encodingCodes: Map<number, number> | undefined;
+        let encodingText: Map<number, string> | undefined;
         let encodingError: unknown;
-        try { encodingCodes = buildEncodingMap(); }
+        try { encodingText = buildEncodingMap(); }
         catch (error) {
             if (!(error instanceof ContentRewriteError)) throw error;
             encodingError = error;
@@ -713,35 +746,52 @@ const getFontResolver = (pdfPage: PDFPage, resourceDictionary = pdfPage.node.Res
         // (built-in font encodings, MacRoman, private glyph names…).
         const toUnicodeSource = readToUnicode(font, pdfPage.doc.context);
         const toUnicode = toUnicodeSource ? parseToUnicodeCodes(toUnicodeSource, 1) : undefined;
-        if (!encodingCodes && !toUnicode) throw encodingError;
-        const decodeMap = new Map<number, string>();
-        for (const [codePoint, code] of encodingCodes ?? []) if (!decodeMap.has(code)) decodeMap.set(code, String.fromCodePoint(codePoint));
+        if (!encodingText && !toUnicode) throw encodingError;
+        const decodeMap = new Map(encodingText);
         for (const [code, unicode] of toUnicode ?? []) decodeMap.set(code, unicode);
         const encodeMap = new Map<string, number>();
         for (const [code, unicode] of toUnicode ?? []) {
-            if (!encodeMap.has(unicode) || encodingCodes?.get(unicode.codePointAt(0) ?? -1) === code) encodeMap.set(unicode, code);
+            if (!encodeMap.has(unicode) || encodingText?.get(code) === unicode) encodeMap.set(unicode, code);
         }
         // A subset only embeds the glyphs it used, which its ToUnicode lists; other
         // codes of the base encoding would render as missing glyphs.
         const subset = rawBaseFont !== baseFont;
         if (!(subset && toUnicode)) {
-            for (const [codePoint, code] of encodingCodes ?? []) {
-                const character = String.fromCodePoint(codePoint);
-                if (!encodeMap.has(character) && decodeMap.get(code) === character) encodeMap.set(character, code);
+            // Ascending codes prefer the plain code, e.g. space 32 over a remapped 160.
+            for (const [code, text] of [...(encodingText ?? [])].sort((left, right) => left[0] - right[0])) {
+                if (!encodeMap.has(text) && decodeMap.get(code) === text) encodeMap.set(text, code);
             }
         }
-        const encodeEntries = [...encodeMap.entries()].sort((left, right) => right[0].length - left[0].length);
+        // Multi-character entries (ligatures) are tried first; everything else is
+        // a direct lookup of the code point at the current position.
+        const multiCharacterEntries = [...encodeMap.entries()]
+            .filter(([text]) => [...text].length > 1)
+            .sort((left, right) => right[0].length - left[0].length);
         const widths = font.lookupMaybe(PDFName.of('Widths'), PDFArray);
         const firstChar = font.lookupMaybe(PDFName.of('FirstChar'), PDFNumber)?.asNumber();
+        // Simple-font widths are in 1/1000 text space units, except Type3, whose
+        // widths are in glyph space and scale through its /FontMatrix.
+        let widthScale = 1;
+        if (fontSubtype === 'Type3') {
+            const fontMatrix = font.lookupMaybe(PDFName.of('FontMatrix'), PDFArray)?.asArray()
+                .map(value => pdfPage.doc.context.lookupMaybe(value, PDFNumber)?.asNumber());
+            if (!fontMatrix || fontMatrix.length !== 6 || fontMatrix.some(value => value === undefined || !Number.isFinite(value))
+                || fontMatrix[1] !== 0 || fontMatrix[2] !== 0 || !fontMatrix[0]) {
+                throw new ContentRewriteError('unsupported-content', 'Unsupported Type3 font matrix.');
+            }
+            widthScale = (fontMatrix[0] as number) * 1000;
+        }
         const codec: Codec = {
             characterCount: bytes => bytes.length,
             encode: text => {
                 const bytes: number[] = [];
                 for (let index = 0; index < text.length;) {
-                    const match = encodeEntries.find(([unicode]) => text.startsWith(unicode, index));
-                    if (!match) throw new ContentRewriteError('unsupported-content', 'The original font cannot encode a replacement character.');
-                    bytes.push(match[1]);
-                    index += match[0].length;
+                    const multi = multiCharacterEntries.find(([unicode]) => text.startsWith(unicode, index));
+                    const character = multi?.[0] ?? String.fromCodePoint(text.codePointAt(index) ?? 0);
+                    const code = multi?.[1] ?? encodeMap.get(character);
+                    if (code === undefined) throw new ContentRewriteError('unsupported-content', 'The original font cannot encode a replacement character.');
+                    bytes.push(code);
+                    index += character.length;
                 }
                 return Uint8Array.from(bytes);
             },
@@ -760,7 +810,7 @@ const getFontResolver = (pdfPage: PDFPage, resourceDictionary = pdfPage.node.Res
                     width = glyphName ? standard.getWidthOfGlyph(glyphName) ?? undefined : undefined;
                 }
                 if (width === undefined || !Number.isFinite(width)) throw new ContentRewriteError('unsupported-content', 'Missing glyph metrics.');
-                return total + width;
+                return total + width * widthScale;
             }, 0),
         };
         codecs.set(name, codec);

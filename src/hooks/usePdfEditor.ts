@@ -1649,15 +1649,8 @@ export const usePdfEditor = () => {
                         const p4 = transformCoords(ann.x, ann.y + ann.height);
 
                         if (fill) {
-                            const xs = [p1.x, p2.x, p3.x, p4.x];
-                            const ys = [p1.y, p2.y, p3.y, p4.y];
-                            pdfPage.drawRectangle({
-                                x: Math.min(...xs),
-                                y: Math.min(...ys),
-                                width: Math.max(...xs) - Math.min(...xs),
-                                height: Math.max(...ys) - Math.min(...ys),
-                                color: fill,
-                            });
+                            // transformCoords only scales and flips Y, so p4 is the bottom-left corner.
+                            pdfPage.drawRectangle({ x: p4.x, y: p4.y, width: ann.width * scaleX, height: ann.height * scaleY, color: fill });
                         }
 
                         const drawLine = (start: { x: number; y: number }, end: { x: number; y: number }) =>

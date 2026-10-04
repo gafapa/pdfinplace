@@ -21,4 +21,21 @@ describe('persisted session mutations', () => {
 
         expect(await loadPersistedSession()).toBeNull();
     });
+
+    it('does not load a session that an earlier clear is about to delete', async () => {
+        const session: PersistedEditorSession = {
+            files: [],
+            pages: [],
+            pageSize: 'Original',
+            savedAt: 456,
+        };
+        await savePersistedSession(session);
+
+        const save = savePersistedSession({ ...session, savedAt: 789 });
+        const clear = clearPersistedSession();
+        const load = loadPersistedSession();
+        await Promise.all([save, clear]);
+
+        expect(await load).toBeNull();
+    });
 });
