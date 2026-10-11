@@ -1,5 +1,7 @@
+import { readBrowserPreference, writeBrowserPreference } from '../utils/browserPreferences';
 import { createContext, useCallback, useContext, useEffect, useMemo, useState, type ReactNode } from 'react';
 import { AVAILABLE_LOCALES, type Locale } from './locales';
+import { WORKBENCH_MESSAGES } from './workbenchMessages';
 
 type TranslationNode = string | { [key: string]: TranslationNode };
 
@@ -1736,7 +1738,7 @@ const detectLocale = (): Locale => {
         return 'es';
     }
 
-    const stored = window.localStorage.getItem(STORAGE_KEY) ?? window.localStorage.getItem(LEGACY_STORAGE_KEY);
+    const stored = readBrowserPreference(STORAGE_KEY) ?? readBrowserPreference(LEGACY_STORAGE_KEY);
     if (stored && isLocale(stored)) {
         return stored;
     }
@@ -1784,12 +1786,12 @@ export const I18nProvider = ({ children }: { children: ReactNode }) => {
 
     useEffect(() => {
         if (typeof window !== 'undefined') {
-            window.localStorage.setItem(STORAGE_KEY, locale);
+            writeBrowserPreference(STORAGE_KEY, locale);
         }
     }, [locale]);
 
     const t = useCallback((key: string, params?: Record<string, string | number>) => {
-        const template = getByPath(translations[locale], key) ?? getByPath(translations.en, key) ?? getByPath(translations.es, key) ?? key;
+        const template = getByPath(WORKBENCH_MESSAGES[locale], key) ?? getByPath(translations[locale], key) ?? getByPath(translations.en, key) ?? getByPath(translations.es, key) ?? key;
         return interpolate(template, params);
     }, [locale]);
 

@@ -1,6 +1,10 @@
+import { readBrowserPreference, writeBrowserPreference, removeBrowserPreference } from '../utils/browserPreferences';
 import { Suspense, lazy, memo, useCallback, useEffect, useMemo, useRef, useState, type MouseEvent as ReactMouseEvent } from 'react';
 import { usePdfEditor, type EditorFile, type EditorPage, type ImageExportOptions, type PageSize } from '../hooks/usePdfEditor';
 import { PdfPreview, type PdfPreviewFinishOptions } from '../components/PdfPreview';
+import { DeferredPdfPreview } from '../components/DeferredPdfPreview';
+import { SessionStatus } from '../components/SessionStatus';
+import { OperationStatus } from '../components/OperationStatus';
 import { DndContext, closestCenter, KeyboardSensor, PointerSensor, useSensor, useSensors, DragOverlay } from '@dnd-kit/core';
 import { SortableContext, sortableKeyboardCoordinates, rectSortingStrategy, useSortable } from '@dnd-kit/sortable';
 import { CSS } from '@dnd-kit/utilities';
@@ -39,7 +43,7 @@ const getInitialScale = () => {
     if (typeof window === 'undefined') {
         return 1;
     }
-    const savedScale = Number(localStorage.getItem('pageforge.editor.scale') ?? '1');
+    const savedScale = Number(readBrowserPreference('pageforge.editor.scale') ?? '1');
     return Number.isFinite(savedScale) && savedScale >= 0.5 && savedScale <= 2 ? savedScale : 1;
 };
 
@@ -115,7 +119,7 @@ const SortablePage = memo(function SortablePage({
                 onClick={(event) => onClickPage(id, event)}
             >
                 <div>
-                    <PdfPreview
+                    <DeferredPdfPreview
                         key={page.previewRevision ?? 0}
                         pdfDocument={file?.pdfDoc}
                         pageIndex={page.pageIndex}
@@ -221,9 +225,12 @@ export const PdfEditor = ({ onOpenWelcome }: PdfEditorProps) => {
         isProcessing,
         notification,
         dismissNotification,
-        isSessionReady,
-        hasSavedSession,
-        isSessionPersistenceEnabled,
+        sessionSaveStatus,
+        hasUnsavedChanges,
+        retrySessionSave,
+        flushSession,
+        operation,
+        cancelOperation,
         pageSize,
         setPageSize,
         printOverlayOptions,
@@ -293,15 +300,15 @@ export const PdfEditor = ({ onOpenWelcome }: PdfEditorProps) => {
     ].filter(Boolean).length;
 
     useEffect(() => {
-        localStorage.setItem('pageforge.editor.scale', scale.toString());
+        writeBrowserPreference('pageforge.editor.scale', scale.toString());
     }, [scale]);
 
     useEffect(() => {
-        localStorage.setItem('pageforge.editor.page-size', pageSize);
+        writeBrowserPreference('pageforge.editor.page-size', pageSize);
     }, [pageSize]);
 
     useEffect(() => {
-        localStorage.removeItem('pageforge.editor.export-panel-open');
+        removeBrowserPreference('pageforge.editor.export-panel-open');
     }, []);
 
     useEffect(() => {
@@ -314,14 +321,15 @@ export const PdfEditor = ({ onOpenWelcome }: PdfEditorProps) => {
 
     useEffect(() => {
         const handleBeforeUnload = (event: BeforeUnloadEvent) => {
-            if (!isProcessing && pages.length > 0 && !isSessionPersistenceEnabled) {
+            if (operation || hasUnsavedChanges) {
                 event.preventDefault();
                 event.returnValue = '';
+                void flushSession();
             }
         };
         window.addEventListener('beforeunload', handleBeforeUnload);
         return () => window.removeEventListener('beforeunload', handleBeforeUnload);
-    }, [isProcessing, pages.length, isSessionPersistenceEnabled]);
+    }, [operation, hasUnsavedChanges, flushSession]);
 
     const openUnlockDialogForFile = useCallback((file: File) => {
         setUnlockFile(file);
@@ -788,20 +796,12 @@ export const PdfEditor = ({ onOpenWelcome }: PdfEditorProps) => {
                     );
                 })() : null}
             </div>
-            <div role="status" aria-live="polite" className="sr-only">
-                {isProcessing ? t('common.processing') : ''}
-            </div>
-            {isProcessing ? (
-                <div className="pointer-events-none fixed inset-0 z-[90] flex items-start justify-center" aria-hidden="true">
-                    <div className="mt-20 flex items-center gap-3 rounded-xl border border-gray-200 bg-white/95 px-4 py-3 text-sm font-medium text-gray-700 shadow-xl backdrop-blur">
-                        <span className="h-5 w-5 animate-spin rounded-full border-2 border-blue-500 border-t-transparent motion-reduce:animate-none" />
-                        {t('common.processing')}
-                    </div>
-                </div>
-            ) : null}
+            <SessionStatus status={sessionSaveStatus} onRetry={retrySessionSave} />
+            {operation ? <OperationStatus operation={operation} onCancel={cancelOperation} /> : null}
             <input
                 ref={addFilesInputRef}
                 type="file"
+                disabled={isProcessing}
                 multiple
                 accept=".pdf, .jpg, .jpeg, .png, .docx, .odt"
                 className="hidden"
@@ -825,15 +825,6 @@ export const PdfEditor = ({ onOpenWelcome }: PdfEditorProps) => {
                         </div>
                         <div className="hidden min-w-0 flex-col sm:flex">
                             <span className="text-base sm:text-lg font-bold tracking-tight text-gray-900">{t('app.title')}</span>
-                            <span className="text-[11px] text-gray-500">
-                                {!isSessionReady
-                                    ? t('editor.restoringSession')
-                                    : !isSessionPersistenceEnabled
-                                        ? t('editor.sessionPersistenceOff')
-                                        : hasSavedSession
-                                        ? t('editor.sessionSaved')
-                                        : t('editor.sessionEmpty')}
-                            </span>
                         </div>
                     </button>
                     <div className="workspace-preferences">
@@ -857,7 +848,7 @@ export const PdfEditor = ({ onOpenWelcome }: PdfEditorProps) => {
                             <button
                                 type="button"
                                 onClick={undo}
-                                disabled={!canUndo}
+                                disabled={!canUndo || isProcessing}
                                 className={toolbarIconButtonClass}
                                 title={t('editor.undo')}
                                 aria-label={t('editor.undo')}
@@ -867,7 +858,7 @@ export const PdfEditor = ({ onOpenWelcome }: PdfEditorProps) => {
                             <button
                                 type="button"
                                 onClick={redo}
-                                disabled={!canRedo}
+                                disabled={!canRedo || isProcessing}
                                 className={toolbarIconButtonClass}
                                 title={t('editor.redo')}
                                 aria-label={t('editor.redo')}
@@ -943,6 +934,7 @@ export const PdfEditor = ({ onOpenWelcome }: PdfEditorProps) => {
                             <Plus className="w-5 h-5" />
                             <input
                                 type="file"
+                                disabled={isProcessing}
                                 multiple
                                 accept=".pdf, .jpg, .jpeg, .png, .docx, .odt"
                                 className="hidden"

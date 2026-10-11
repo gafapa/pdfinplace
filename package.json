@@ -21,6 +21,8 @@
     "test:pdfjs-resources": "node scripts/pdfjs-resources.mjs self-test",
     "test": "vitest run",
     "test:browser": "node scripts/verify-editor-ui.mjs",
+    "test:browser:all": "node scripts/run-browser-checks.mjs",
+    "test:workbench": "node scripts/verify-workbench.mjs",
     "test:watch": "vitest",
     "preview": "vite preview"
   },

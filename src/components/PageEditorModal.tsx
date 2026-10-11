@@ -1,3 +1,4 @@
+import { readBrowserPreference, writeBrowserPreference, removeBrowserPreference } from '../utils/browserPreferences';
 import { useState, useRef, useEffect, useCallback } from 'react';
 import { PdfPreview } from './PdfPreview';
 import {
@@ -84,7 +85,7 @@ const getInitialAssetsPanelOpen = () => {
         return false;
     }
 
-    const savedValue = localStorage.getItem('pageforge.assets-panel-open');
+    const savedValue = readBrowserPreference('pageforge.assets-panel-open');
     return savedValue === null ? false : savedValue === 'true';
 };
 
@@ -203,12 +204,12 @@ export const PageEditorModal = ({
         const restoreSavedAssets = async () => {
             try {
                 if (!isLocalPersistenceEnabled()) {
-                    localStorage.removeItem(SAVED_ASSETS_STORAGE_KEY);
+                    removeBrowserPreference(SAVED_ASSETS_STORAGE_KEY);
                     await clearPersistedAssets();
                     return;
                 }
 
-                const legacyAssets = localStorage.getItem(SAVED_ASSETS_STORAGE_KEY);
+                const legacyAssets = readBrowserPreference(SAVED_ASSETS_STORAGE_KEY);
                 const parsedLegacyAssets = legacyAssets
                     ? JSON.parse(legacyAssets) as SavedAsset[]
                     : [];
@@ -219,7 +220,7 @@ export const PageEditorModal = ({
                 if (persistedAssets.length === 0 && restoredAssets.length > 0) {
                     await savePersistedAssets(restoredAssets);
                 }
-                localStorage.removeItem(SAVED_ASSETS_STORAGE_KEY);
+                removeBrowserPreference(SAVED_ASSETS_STORAGE_KEY);
                 if (!cancelled) setSavedAssets(restoredAssets.slice(0, MAX_SAVED_ASSETS));
             } catch (error) {
                 console.error('Failed to restore saved assets:', error);
@@ -255,7 +256,7 @@ export const PageEditorModal = ({
     }, [areSavedAssetsReady, savedAssets, t]);
 
     useEffect(() => {
-        localStorage.setItem('pageforge.assets-panel-open', String(isAssetsPanelOpen));
+        writeBrowserPreference('pageforge.assets-panel-open', String(isAssetsPanelOpen));
     }, [isAssetsPanelOpen]);
 
     const getTextLayout = useCallback((data: TextAnnotationData) => {

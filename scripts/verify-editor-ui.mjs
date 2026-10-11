@@ -20,13 +20,16 @@ else {
     page.drawText('Neighbor intact', { x: 60, y: 390, size: 20, font });
     bytes = Buffer.from(await source.save());
 }
-const browser = await playwright.chromium.launch({ executablePath: process.env.CHROME_EXECUTABLE_PATH, headless: true });
+const browserKind = process.env.BROWSER_KIND ?? 'chromium';
+assert(['chromium', 'firefox', 'webkit'].includes(browserKind), 'Unsupported browser engine.');
+const browser = await playwright[browserKind].launch({ executablePath: browserKind === 'chromium' ? process.env.CHROME_EXECUTABLE_PATH : undefined, headless: true });
 try {
     const blankPdf = await PDFDocument.create();
     blankPdf.addPage([420, 550]);
     const blankPage = await browser.newPage({ locale: 'es-ES' });
     try {
         await blankPage.goto(baseUrl);
+        await blankPage.waitForFunction(() => { const status = document.querySelector('[data-session-status]'); return status && status.dataset.sessionStatus !== 'loading'; });
         await blankPage.getByRole('button', { name: 'Empezar', exact: true }).click();
         await blankPage.locator('input[type=file]').first().setInputFiles({ name: 'blank.pdf', mimeType: 'application/pdf', buffer: Buffer.from(await blankPdf.save()) });
         await blankPage.getByRole('button', { name: 'Exportar', exact: true }).click();
@@ -57,6 +60,7 @@ try {
             } else await route.continue();
         });
         await page.goto(baseUrl);
+        await page.waitForFunction(() => { const status = document.querySelector('[data-session-status]'); return status && status.dataset.sessionStatus !== 'loading'; });
         assert.equal(await page.getByRole('checkbox', { name: /Guardar mi sesión/ }).isChecked(), false, 'Session persistence must be opt-in.');
         await page.getByRole('button', { name: 'Empezar', exact: true }).click();
         await page.locator('input[type=file]').first().setInputFiles({ name: 'local-fixture.pdf', mimeType: 'application/pdf', buffer: bytes });
@@ -144,12 +148,39 @@ try {
                 if (await fillButton.getAttribute('aria-pressed') !== 'true') await fillButton.click();
                 await page.getByLabel('Color de relleno').fill('#ff0000');
                 await annotationCanvas.scrollIntoViewIfNeeded();
+                await annotationCanvas.evaluate(async element => {
+                    // Changing tools can reflow the mobile toolbar and resize the
+                    // fitted canvas. Measure only after that layout has settled.
+                    let previous = '';
+                    let stableFrames = 0;
+                    for (let frame = 0; frame < 120; frame++) {
+                        await new Promise(requestAnimationFrame);
+                        const box = element.getBoundingClientRect();
+                        const current = [box.x, box.y, box.width, box.height].map(value => value.toFixed(2)).join(',');
+                        stableFrames = current === previous ? stableFrames + 1 : 0;
+                        if (stableFrames >= 3) return;
+                        previous = current;
+                    }
+                    throw new Error('Annotation canvas geometry did not settle.');
+                });
                 const box = await annotationCanvas.boundingBox();
                 assert(box, 'The annotation canvas must be visible.');
                 await page.mouse.move(box.x + box.width * 0.45, box.y + box.height * top);
+                assert(await annotationCanvas.evaluate((element, position) => {
+                    const box = element.getBoundingClientRect();
+                    return document.elementFromPoint(box.x + box.width * 0.45, box.y + box.height * position) === element;
+                }, top), 'Shape start must be inside the visible annotation canvas.');
                 await page.mouse.down();
                 await page.mouse.move(box.x + box.width * 0.65, box.y + box.height * bottom, { steps: 5 });
                 await page.mouse.up();
+                // React/canvas painting is asynchronous, especially in WebKit.
+                // Wait for the required pixel, not a browser-dependent delay.
+                await page.waitForFunction(position => {
+                    const element = document.querySelector('canvas[aria-label^="Lienzo de anotaciones"]');
+                    if (!element) return false;
+                    const pixel = element.getContext('2d').getImageData(Math.round(element.width * 0.55), Math.round(element.height * position), 1, 1).data;
+                    return pixel[0] > 200 && pixel[1] < 80 && pixel[2] < 80;
+                }, (top + bottom) / 2, { timeout: 5000 });
                 const pixel = await annotationCanvas.evaluate((element, position) => {
                     const x = Math.round(element.width * 0.55);
                     const y = Math.round(element.height * position);

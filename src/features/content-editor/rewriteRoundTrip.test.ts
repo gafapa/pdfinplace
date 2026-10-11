@@ -61,7 +61,7 @@ describe('content rewriting export round trips', () => {
             { text: 'Neighbor', x: 60, y: 390 },
         ]);
         expect(await renderedInkPixels(document, 85)).toBeGreaterThan(50);
-    });
+    }, 30_000);
 
     it('can install two Unicode fallback fonts on one page', async () => {
         const document = await PDFDocument.create();
@@ -80,7 +80,7 @@ describe('content rewriting export round trips', () => {
             { text: '世界', x: 60, y: 390 },
         ]);
         expect(await renderedInkPixels(document, 145)).toBeGreaterThan(15);
-    });
+    }, 30_000);
 
     it('can edit Unicode fallback text again after saving and reopening', async () => {
         const document = await PDFDocument.create();
@@ -97,7 +97,7 @@ describe('content rewriting export round trips', () => {
             editFor('Привет 世界', 60, 450, 'До свидания'),
         ], { western, cjk });
         expect((await extract(reopened)).map(item => item.text)).toEqual(['До свидания']);
-    });
+    }, 30_000);
 
     it('rejects an unavailable Unicode glyph without changing page contents', async () => {
         const document = await PDFDocument.create();

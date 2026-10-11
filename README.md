@@ -14,7 +14,10 @@ It runs entirely in the browser. Documents remain in memory unless the user enab
 - Add watermark, header, footer, margins, crop, and page numbers.
 - Protect exported PDFs with AES-256 encryption.
 - Unlock password-protected PDFs when the user provides the password.
-- Restore the latest local editing session from IndexedDB.
+- Restore the latest local editing session, including output settings, from IndexedDB.
+- See pending saves and storage errors, retry failed saves, and detect conflicting edits in other tabs.
+- Follow import/export progress and cancel operations before their results are committed or downloaded.
+- Render nearby page thumbnails on demand while keeping offscreen page controls available.
 - Install and run as a PWA.
 
 ## Local Development
@@ -39,7 +42,7 @@ npm audit
 ```
 
 The project includes a local `.npmrc` that points npm to the official npm registry, so `npm audit` works even when a global npm mirror is configured.
-Run the browser check with Chromium and a local Vite server:
+Run the existing editing check with Chromium and a local Vite server:
 
 ```bash
 npx playwright install chromium
@@ -48,9 +51,30 @@ npm run dev
 npm run test:browser
 ```
 
-GitHub Actions runs these checks for pushes to `main`, pull requests, and manual runs from the Actions tab. CI installs Chromium and starts the local Vite server for the browser check.
+Run the complete browser suite against both the development server and the built PWA:
 
-CI uses one standard Ubuntu runner with Node.js 24, caches npm downloads, and does not upload artifacts. Each run has a 10-minute timeout, and a newer run on the same branch or pull request cancels the previous run to conserve the free allowance.
+```bash
+npx playwright install chromium firefox webkit
+npm run build
+npm run test:browser:all
+```
+
+The runner starts and closes isolated localhost servers on dynamically allocated ports. It
+checks editing at desktop/mobile sizes, atomic conflicts across tabs, storage quota
+rollback and retry, session restoration, thumbnail deferral, import/export
+cancellation, and warm offline restoration/export in Chromium, Firefox, and WebKit.
+All fixtures are generated locally and contain fictitious text. Optional screenshots
+are written locally when `WORKBENCH_SCREENSHOT_DIR` is set; CI does not upload them.
+Set `BROWSER_KINDS=chromium` for a focused run. `npm run test:workbench` runs only the
+workbench checks and starts its own production preview. The offline test stops that
+server, reloads the app from its real service-worker cache, exports the restored
+session, and restarts the server. `WORKBENCH_TEST_URL` can target an existing local
+preview, using browser offline emulation instead; the owned-server path avoids
+engine-specific emulation differences.
+
+GitHub Actions runs these checks for pushes to `main`, pull requests, and manual runs from the Actions tab. CI installs all three browser engines and runs the complete suite.
+
+CI uses one standard Ubuntu runner with Node.js 24, caches npm downloads, and does not upload artifacts. Each run has a 20-minute timeout, and a newer run on the same branch or pull request cancels the previous run to conserve the free allowance.
 
 Standard GitHub-hosted runners are free for this public repository. If the repository becomes private, its runs count against the owner's monthly Actions allowance (2,000 minutes on GitHub Free). The workflow cannot enforce an account-wide spending limit; use an Actions budget with **Stop usage when budget limit is reached** enabled in the account's billing settings when one is needed. See [GitHub Actions billing](https://docs.github.com/en/billing/concepts/product-billing/github-actions) for current allowances and [budget controls](https://docs.github.com/en/billing/how-tos/set-up-budgets) for spending limits.
 
@@ -85,6 +109,38 @@ PDF in Place does not upload files to a server. The browser stores:
 - PWA shell and same-origin assets in the service worker cache.
 
 The in-app clear action removes the current session, export history, output options, and saved signatures/stamps. Browser site-data controls also remove non-sensitive UI preferences such as language and zoom.
+
+## Save Recovery And Concurrent Tabs
+
+With local persistence enabled, changes are saved after a short debounce and the
+status remains pending until the IndexedDB transaction completes. Hiding the page
+requests an immediate save. Closing the page warns about pending/error/conflicted
+changes or an active operation; an asynchronous save during page shutdown is only
+best effort, so the warning is not treated as a persistence guarantee.
+
+Session writes and ordinary clears compare a monotonic revision inside the same
+IndexedDB transaction as their mutation. A stale tab cannot overwrite, delete, or
+resurrect another tab's saved session. BroadcastChannel notifications and focus
+checks expose conflicts promptly; atomic revision checks remain the authority.
+On a conflict, export the in-memory work before reloading. Storage errors pause
+automatic saves and offer retry. A failed restore remains on disk; retry reloads
+the application instead of silently clearing the saved session.
+
+Turning local persistence off is an explicit site-wide privacy action and clears
+the saved session/assets. Preference changes propagate to other open tabs.
+Output settings are stored with the session, while legacy localStorage output
+settings remain readable for migration.
+
+Optional UI preferences fall back to in-memory defaults when localStorage is denied
+or full, so editing and exporting remain usable without preference storage.
+
+## Operation Cancellation
+
+Cancellation is cooperative between files, pages, and processing stages. The UI
+waits for a library's current non-interruptible call before releasing the operation.
+Cancelled imports release staged documents without adding partial batches.
+Exports check cancellation before emitting a download. Completed downloads cannot
+be recalled. Existing workspace pages remain available after cancellation.
 
 ## Import Limits
 

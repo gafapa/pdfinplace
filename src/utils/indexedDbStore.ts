@@ -5,7 +5,7 @@ export interface KeyValueStoreConfig {
     label: string;
 }
 
-const openDatabase = ({ databaseName, version, storeName, label }: KeyValueStoreConfig): Promise<IDBDatabase> =>
+export const openDatabase = ({ databaseName, version, storeName, label }: KeyValueStoreConfig): Promise<IDBDatabase> =>
     new Promise((resolve, reject) => {
         const request = indexedDB.open(databaseName, version);
         let rejected = false;

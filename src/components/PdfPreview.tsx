@@ -31,7 +31,7 @@ export interface PdfPreviewFinishOptions {
     totalPages: number;
 }
 
-interface PdfPreviewProps {
+export interface PdfPreviewProps {
     file?: File;
     pdfDocument?: PdfDocumentProxy;
     pageIndex?: number;

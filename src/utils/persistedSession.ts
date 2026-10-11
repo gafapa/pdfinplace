@@ -1,5 +1,5 @@
-import type { EditorPage, PageSize } from '../hooks/usePdfEditor';
-import { runStoreRequest, type KeyValueStoreConfig } from './indexedDbStore';
+import type { EditorPage, PageSize, PrintOverlayOptions } from '../hooks/usePdfEditor';
+import { openDatabase, type KeyValueStoreConfig } from './indexedDbStore';
 
 export interface PersistedFileRecord {
     id: string;
@@ -15,6 +15,7 @@ export interface PersistedEditorSession {
     pages: EditorPage[];
     pageSize: PageSize;
     savedAt: number;
+    printOverlayOptions?: PrintOverlayOptions;
 }
 
 const SESSION_STORE: KeyValueStoreConfig = {
@@ -25,8 +26,60 @@ const SESSION_STORE: KeyValueStoreConfig = {
 };
 const SESSION_KEY = 'current';
 
-const withStore = <T>(mode: IDBTransactionMode, createRequest: (store: IDBObjectStore) => IDBRequest<T>) =>
-    runStoreRequest(SESSION_STORE, mode, createRequest);
+const REVISION_KEY = 'revision';
+
+export class SessionConflictError extends Error {
+    constructor() {
+        super('Another tab changed the saved session. Export your work before reloading.');
+        this.name = 'SessionConflictError';
+    }
+}
+
+export interface SessionSnapshot {
+    session: PersistedEditorSession | null;
+    revision: number;
+}
+
+// Compare and write in ONE IndexedDB transaction. A JS queue alone cannot
+// serialize writers running in different tabs (or different module instances).
+const transact = async (mode: IDBTransactionMode, session?: PersistedEditorSession | null, expectedRevision?: number): Promise<SessionSnapshot> => {
+    const database = await openDatabase(SESSION_STORE);
+    return new Promise((resolve, reject) => {
+        const transaction = database.transaction(SESSION_STORE.storeName, mode);
+        const store = transaction.objectStore(SESSION_STORE.storeName);
+        let result: SessionSnapshot = { session: null, revision: 0 };
+        let conflict = false;
+        let failure: unknown;
+        transaction.oncomplete = () => { database.close(); resolve(result); };
+        transaction.onabort = () => {
+            database.close();
+            reject(conflict ? new SessionConflictError() : failure ?? transaction.error ?? new Error('Session transaction aborted.'));
+        };
+        const revisionRequest = store.get(REVISION_KEY);
+        revisionRequest.onsuccess = () => {
+            try {
+            const revision = typeof revisionRequest.result === 'number' ? revisionRequest.result : 0;
+            if (mode === 'readwrite') {
+                if (expectedRevision !== undefined && expectedRevision !== revision) {
+                    conflict = true;
+                    transaction.abort();
+                    return;
+                }
+                result = { session: session ?? null, revision: revision + 1 };
+                store.put(result.revision, REVISION_KEY);
+                if (session) store.put(session, SESSION_KEY);
+                else store.delete(SESSION_KEY);
+            } else {
+                const request = store.get(SESSION_KEY);
+                request.onsuccess = () => { result = { revision, session: request.result ?? null }; };
+            }
+            } catch (error) {
+                failure = error;
+                transaction.abort();
+            }
+        };
+    });
+};
 
 let pendingOperation: Promise<void> = Promise.resolve();
 
@@ -38,18 +91,13 @@ const enqueue = <T>(operation: () => Promise<T>): Promise<T> => {
     return current;
 };
 
-export const savePersistedSession = async (session: PersistedEditorSession) =>
-    enqueue(async () => {
-        await withStore<IDBValidKey>('readwrite', (store) => store.put(session, SESSION_KEY));
-    });
+export const savePersistedSession = (session: PersistedEditorSession, expectedRevision?: number) =>
+    enqueue(() => transact('readwrite', session, expectedRevision));
+
+export const loadSessionSnapshot = () => enqueue(() => transact('readonly'));
 
 export const loadPersistedSession = async () =>
-    enqueue(async () => {
-        const result = await withStore<PersistedEditorSession | undefined>('readonly', (store) => store.get(SESSION_KEY));
-        return result ?? null;
-    });
+    (await loadSessionSnapshot()).session;
 
-export const clearPersistedSession = async () =>
-    enqueue(async () => {
-        await withStore<undefined>('readwrite', (store) => store.delete(SESSION_KEY));
-    });
+export const clearPersistedSession = (expectedRevision?: number) =>
+    enqueue(() => transact('readwrite', null, expectedRevision));
