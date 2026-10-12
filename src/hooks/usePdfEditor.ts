@@ -1,8 +1,10 @@
-import { readBrowserPreference, removeBrowserPreference } from '../utils/browserPreferences';
+import { readBrowserPreference, removeBrowserPreference, writeBrowserPreference } from '../utils/browserPreferences';
 import { useState, useCallback, useEffect, useRef } from 'react';
 import { arrayMove } from '@dnd-kit/sortable';
 import type { Annotation } from '../types/annotations';
 import type { ContentEdit } from '../features/content-editor/types';
+import type { ImageCompressionLevel } from '../features/export/compressImages';
+import type { FormValues } from '../features/forms/formTypes';
 import { createId } from '../utils/createId';
 import { getSessionPersistencePreference } from '../utils/sessionPreference';
 import type { EditorFile, EditorPage, PageSize, PrintOverlayOptions, EditorNotification } from './editorTypes';
@@ -15,6 +17,13 @@ import { useEditorOperation } from './useEditorOperation';
 import { useSessionPersistence, DEFAULT_PRINT_OVERLAY_OPTIONS } from './useSessionPersistence';
 
 const OVERLAY_OPTIONS_STORAGE_KEY = 'pageforge.overlay-options';
+const IMAGE_COMPRESSION_STORAGE_KEY = 'pageforge.editor.image-compression';
+
+const getInitialImageCompression = (): ImageCompressionLevel => {
+    if (typeof window === 'undefined') return 'none';
+    const saved = readBrowserPreference(IMAGE_COMPRESSION_STORAGE_KEY);
+    return saved === 'balanced' || saved === 'strong' ? saved : 'none';
+};
 
 const loadOverlayOptions = (): PrintOverlayOptions => {
     if (typeof window === 'undefined' || !getSessionPersistencePreference()) {
@@ -75,6 +84,10 @@ export const usePdfEditor = () => {
     const { isProcessing, operation, cancelOperation } = operationController;
     const [notification, setNotification] = useState<EditorNotification | null>(null);
     const [pageSize, setPageSize] = useState<PageSize>(getInitialPageSize);
+    const [imageCompression, setImageCompression] = useState<ImageCompressionLevel>(getInitialImageCompression);
+    useEffect(() => {
+        writeBrowserPreference(IMAGE_COMPRESSION_STORAGE_KEY, imageCompression);
+    }, [imageCompression]);
     const filesRef = useRef<Record<string, EditorFile>>({});
     const [printOverlayOptions, setPrintOverlayOptions] = useState<PrintOverlayOptions>(loadOverlayOptions);
     const notifyError = useCallback((message: string) => {
@@ -198,27 +211,36 @@ export const usePdfEditor = () => {
         setPrintOverlayOptions(DEFAULT_PRINT_OVERLAY_OPTIONS);
     }, [clearSession, setPagesHistory, setPagesCurrentIndex]);
 
-    const { exportPdf, exportPagesAsImages, exportPageRange, splitPdf, exportProtectedPdf, unlockPdfFile } = usePdfExport({ files, pages, pageSize, printOverlayOptions, operationController, notifyError, notifySuccess });
+    const { exportPdf, exportPagesAsImages, exportPageRange, splitPdf, exportProtectedPdf, unlockPdfFile } = usePdfExport({ files, pages, pageSize, printOverlayOptions, imageCompression, operationController, notifyError, notifySuccess });
 
     const updatePageAnnotations = useCallback((
         pageId: string,
         annotations: Annotation[],
         contentEdits: ContentEdit[],
         canvasSize?: { width: number; height: number },
+        formValues?: FormValues,
     ) => {
-        setPages(prev => prev.map(page => {
-            if (page.id === pageId) {
-                return {
-                    ...page,
-                    annotations,
-                    contentEdits,
-                    annotationCanvasWidth: canvasSize?.width ?? page.annotationCanvasWidth,
-                    annotationCanvasHeight: canvasSize?.height ?? page.annotationCanvasHeight,
-                    previewRevision: (page.previewRevision ?? 0) + 1,
-                };
-            }
-            return page;
-        }));
+        setPages(prev => {
+            const fileId = prev.find(page => page.id === pageId)?.fileId;
+            return prev.map(page => {
+                if (page.id === pageId) {
+                    return {
+                        ...page,
+                        annotations,
+                        contentEdits,
+                        annotationCanvasWidth: canvasSize?.width ?? page.annotationCanvasWidth,
+                        annotationCanvasHeight: canvasSize?.height ?? page.annotationCanvasHeight,
+                        previewRevision: (page.previewRevision ?? 0) + 1,
+                        ...(formValues ? { formValues } : {}),
+                    };
+                }
+                // Form values belong to the whole file: every page of it shows them.
+                if (formValues && page.fileId === fileId && page.formValues !== formValues) {
+                    return { ...page, formValues };
+                }
+                return page;
+            });
+        });
     }, [setPages]);
 
     return {
@@ -239,6 +261,8 @@ export const usePdfEditor = () => {
         setSessionPersistenceEnabled,
         pageSize,
         setPageSize,
+        imageCompression,
+        setImageCompression,
         printOverlayOptions,
         setPrintOverlayOptions,
         addFiles,

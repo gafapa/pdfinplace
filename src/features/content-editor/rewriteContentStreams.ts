@@ -15,7 +15,7 @@ import type { UnicodeFallbackFont } from './unicodeFallback';
 import { BoundedPdfStreamError, decodeBoundedPdfStream } from './decodeBoundedPdfStream';
 
 export class ContentRewriteError extends Error {
-    readonly code: 'ambiguous-source' | 'unsupported-content' | 'source-not-found' | 'fallback-needed';
+    readonly code: 'ambiguous-source' | 'unsupported-content' | 'unsupported-font' | 'unsupported-character' | 'source-not-found' | 'fallback-needed';
 
     constructor(code: ContentRewriteError['code'], message: string) {
         super(message);
@@ -571,7 +571,7 @@ const findTextCandidates = (
     }
     const reason = blockedReason ?? (positionedTextSeen ? undefined : lostPositionReason);
     if (!candidates.length && reason) {
-        throw new ContentRewriteError('unsupported-content', `The selected text uses a font that cannot be edited safely. ${reason}`);
+        throw new ContentRewriteError('unsupported-font', `The selected text uses a font that cannot be edited safely. ${reason}`);
     }
     return candidates;
 };
@@ -627,9 +627,9 @@ const getFontResolver = (pdfPage: PDFPage, resourceDictionary = pdfPage.node.Res
     const resources = resourceDictionary?.lookupMaybe(PDFName.Font, PDFDict);
     type Codec = { encode(text: string): Uint8Array; decode(bytes: Uint8Array): string; width(bytes: Uint8Array): number; characterCount(bytes: Uint8Array): number };
     const codecs = new Map<string, Codec>();
-    let fallbackFontName = 'PDFingFallback';
+    let fallbackFontName = 'PdfInPlaceFallback';
     for (let suffix = 1; resources?.has(PDFName.of(fallbackFontName)); suffix += 1) {
-        fallbackFontName = `PDFingFallback${suffix}`;
+        fallbackFontName = `PdfInPlaceFallback${suffix}`;
     }
     let fallbackCodec: Codec | undefined;
     const getFallbackCodec = () => {
@@ -839,7 +839,7 @@ const getFontResolver = (pdfPage: PDFPage, resourceDictionary = pdfPage.node.Res
             const font = unicodeFonts.find(candidate => candidate.supports(text));
             if (!font) {
                 const missing = [...text].find(character => unicodeFonts.every(candidate => !candidate.supports(character)));
-                throw new ContentRewriteError('unsupported-content', missing
+                throw new ContentRewriteError('unsupported-character', missing
                     ? `No bundled Unicode font contains “${missing}”.`
                     : 'No bundled Unicode font can encode this combination of characters.');
             }

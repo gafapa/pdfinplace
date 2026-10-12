@@ -69,7 +69,7 @@ export const prepareUnicodeFallbackFonts = async (
         const font = await document.embedFont(bytes, { subset: true });
         const widths = new Map<string, number>();
         const fallback: UnicodeFallbackFont = {
-            name: `${id === 'western' ? 'PDFingUnicode' : 'PDFingCJK'}${font.ref.objectNumber}`,
+            name: `${id === 'western' ? 'PdfInPlaceUnicode' : 'PdfInPlaceCJK'}${font.ref.objectNumber}`,
             font,
             supports,
             encode: text => {
@@ -96,7 +96,7 @@ export const prepareUnicodeFallbackFonts = async (
     if (!fonts.length) {
         const missing = pendingText.flatMap(edit => [...edit.text]).find(character =>
             availableCharacterSets.every(characterSet => !characterSet.has(character.codePointAt(0) ?? 0)));
-        throw new ContentRewriteError('unsupported-content', missing
+        throw new ContentRewriteError('unsupported-character', missing
             ? `No bundled Unicode font contains “${missing}”.`
             : 'No bundled Unicode font can encode this combination of characters.');
     }

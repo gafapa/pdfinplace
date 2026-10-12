@@ -7,10 +7,14 @@ import type {
     ImageAnnotationData
 } from '../types/annotations';
 import { useI18n } from '../i18n';
-import { getPdfDocument } from '../utils/pdfjs';
+import { getPdfDocument, loadPdfJs } from '../utils/pdfjs';
 import { getLegacyEditorCanvasSize } from '../utils/pageGeometry';
+import { drawShapeOnCanvas } from '../utils/shapeGeometry';
+import { getContentEditErrorCode } from '../features/content-editor/errorMessages';
 import { createRewrittenPreview } from '../features/content-editor/createRewrittenPreview';
 import type { ContentEdit } from '../features/content-editor/types';
+import type { FormValues } from '../features/forms/formTypes';
+import { applyFormValuesToStorage, loadFormWidgets } from '../features/forms/formWidgets';
 
 type PdfDocumentProxy = import('pdfjs-dist').PDFDocumentProxy;
 type PdfRenderTask = import('pdfjs-dist').RenderTask;
@@ -41,11 +45,14 @@ export interface PdfPreviewProps {
     className?: string;
     annotations?: Annotation[];
     contentEdits?: ContentEdit[];
-    onContentPreview?: (edits: ContentEdit[], valid: boolean, usedFallbackFont?: boolean, errorMessage?: string) => void;
+    /** `errorCode` is the ContentRewriteError code of a rejected preview, for a localized message. */
+    onContentPreview?: (edits: ContentEdit[], valid: boolean, usedFallbackFont?: boolean, errorCode?: string) => void;
     annotationCanvasWidth?: number;
     annotationCanvasHeight?: number;
     showPageBorder?: boolean;
     finishOptions?: PdfPreviewFinishOptions;
+    /** Filled form values of the page's file, drawn into the form fields. */
+    formValues?: FormValues;
 }
 
 export const PdfPreview = ({
@@ -63,6 +70,7 @@ export const PdfPreview = ({
     annotationCanvasHeight,
     showPageBorder = false,
     finishOptions,
+    formValues,
 }: PdfPreviewProps) => {
     const { t } = useI18n();
     const canvasRef = useRef<HTMLCanvasElement>(null);
@@ -157,6 +165,8 @@ export const PdfPreview = ({
                 }
                 if (!isCurrentRender()) return;
                 const page = await renderedDocument.getPage(renderedPageNumber);
+                const formWidgets = await loadFormWidgets(renderedDocument);
+                const { AnnotationMode } = await loadPdfJs();
 
                 if (!isCurrentRender()) {
                     return;
@@ -196,7 +206,10 @@ export const PdfPreview = ({
                             canvasContext: context,
                             viewport: scaledViewport,
                         };
-                        renderTask = page.render(renderContext);
+                        // The document's annotation storage is shared by every preview of
+                        // the file; pdf.js snapshots it synchronously in render().
+                        applyFormValuesToStorage(renderedDocument, formWidgets, formValues);
+                        renderTask = page.render({ ...renderContext, annotationMode: AnnotationMode.ENABLE_STORAGE });
                         await renderTask.promise;
 
                         if (!isCurrentRender()) return;
@@ -266,31 +279,7 @@ export const PdfPreview = ({
                                     });
                                     context.stroke();
                                 } else if (ann.type === 'shape') {
-                                    const data = ann.data as ShapeAnnotationData;
-                                    context.strokeStyle = data.strokeColor;
-                                    context.lineWidth = data.strokeWidth;
-                                    if (data.fillColor) {
-                                        context.fillStyle = data.fillColor;
-                                    }
-
-                                    if (data.shapeType === 'rectangle') {
-                                        if (data.fillColor) context.fillRect(ann.x, ann.y, ann.width, ann.height);
-                                        context.strokeRect(ann.x, ann.y, ann.width, ann.height);
-                                    } else if (data.shapeType === 'circle') {
-                                        context.beginPath();
-                                        context.ellipse(ann.x + ann.width / 2, ann.y + ann.height / 2, Math.abs(ann.width / 2), Math.abs(ann.height / 2), 0, 0, 2 * Math.PI);
-                                        if (data.fillColor) context.fill();
-                                        context.stroke();
-                                    } else if (data.shapeType === 'line') {
-                                        context.beginPath();
-                                        const x1 = ann.x + (data.x1 ?? 0) * ann.width;
-                                        const y1 = ann.y + (data.y1 ?? 0) * ann.height;
-                                        const x2 = ann.x + (data.x2 ?? 1) * ann.width;
-                                        const y2 = ann.y + (data.y2 ?? 1) * ann.height;
-                                        context.moveTo(x1, y1);
-                                        context.lineTo(x2, y2);
-                                        context.stroke();
-                                    }
+                                    drawShapeOnCanvas(context, ann, ann.data as ShapeAnnotationData);
                                 } else if (ann.type === 'text') {
                                     const data = ann.data as TextAnnotationData;
                                     context.fillStyle = data.color;
@@ -325,7 +314,7 @@ export const PdfPreview = ({
                         const isKnownRewriteError = err instanceof Error && err.name === 'ContentRewriteError';
                         const isContentRewriteError = contentRewriteFailed || isKnownRewriteError;
                         rejectedPreviewKeyRef.current = isKnownRewriteError ? previewKey : null;
-                        rejectedPreviewMessageRef.current = isContentRewriteError && err instanceof Error ? err.message : '';
+                        rejectedPreviewMessageRef.current = isContentRewriteError ? getContentEditErrorCode(err) ?? 'unknown' : '';
                         setError(true);
                         // Only a content-rewrite failure reflects on the edits themselves;
                         // any other render error (e.g. an annotation image failing to
@@ -374,6 +363,7 @@ export const PdfPreview = ({
         annotationCanvasWidth,
         annotationCanvasHeight,
         showPageBorder,
+        formValues,
     ]);
 
     const normalizedMargin = Math.max(0, Math.min(finishOptions?.marginPercent ?? 0, 20));

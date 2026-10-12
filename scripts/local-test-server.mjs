@@ -32,10 +32,11 @@ export const startLocalTestServer = async (mode = 'dev') => {
         child.stdout.on('data', data => { output = (output + data).slice(-4000); });
         child.stderr.on('data', data => { output = (output + data).slice(-4000); });
         try {
-            for (let attempt = 0; attempt < 100; attempt++) {
+            for (let attempt = 0; attempt < 240; attempt++) {
                 if (spawnError) throw spawnError;
                 if (child.exitCode !== null) throw new Error(`Local test server exited: ${output}`);
-                if (output.includes(url)) {
+                // Terminals that force colour split the URL with ANSI escape codes.
+                if (output.replace(/\u001b\[[0-9;]*m/g, '').includes(url)) {
                     try { if ((await fetch(url, { signal: AbortSignal.timeout(1000) })).ok) return; } catch { /* Wait for the owned local server. */ }
                 }
                 await delay(250);

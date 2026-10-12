@@ -1,18 +1,27 @@
 import { readBrowserPreference, writeBrowserPreference, removeBrowserPreference } from '../utils/browserPreferences';
 import { Suspense, lazy, memo, useCallback, useEffect, useMemo, useRef, useState, type MouseEvent as ReactMouseEvent } from 'react';
-import { usePdfEditor, type EditorFile, type EditorPage, type ImageExportOptions, type PageSize } from '../hooks/usePdfEditor';
+import { usePdfEditor, type EditorFile, type EditorPage, type ImageExportOptions } from '../hooks/usePdfEditor';
 import { PdfPreview, type PdfPreviewFinishOptions } from '../components/PdfPreview';
 import { DeferredPdfPreview } from '../components/DeferredPdfPreview';
-import { SessionStatus } from '../components/SessionStatus';
+import { SessionAlert, SessionPill } from '../components/SessionStatus';
+import { StartScreen } from '../components/StartScreen';
+import { ZoomControl } from '../components/ZoomControl';
+import { DisclosureMenu } from '../components/DisclosureMenu';
 import { OperationStatus } from '../components/OperationStatus';
 import { DndContext, closestCenter, KeyboardSensor, PointerSensor, useSensor, useSensors, DragOverlay } from '@dnd-kit/core';
 import { SortableContext, sortableKeyboardCoordinates, rectSortingStrategy, useSortable } from '@dnd-kit/sortable';
 import { CSS } from '@dnd-kit/utilities';
-import { Upload, RotateCw, Trash2, Download, Plus, ZoomIn, ZoomOut, Undo, Redo, FileText, Lock, LockOpen, Check, X, Copy, SplitSquareVertical, CheckSquare2, Square, SlidersHorizontal, Pencil, Images } from 'lucide-react';
+import { RotateCw, Trash2, Download, Plus, Undo, Redo, FileText, X, Copy, CheckSquare2, SlidersHorizontal, Pencil, Images, MoreHorizontal } from 'lucide-react';
 import type { DragEndEvent, DragStartEvent } from '@dnd-kit/core';
 import { useI18n } from '../i18n';
 import { AVAILABLE_LOCALES, type Locale } from '../i18n/locales';
 import { useDialogFocus } from '../hooks/useDialogFocus';
+import { contentEditErrorMessageKey } from '../features/content-editor/errorMessages';
+import { useLaunchedFiles } from '../hooks/useLaunchedFiles';
+import { useMediaQuery, useViewportWidth } from '../hooks/useMediaQuery';
+import { MIN_ZOOM, nextZoomStep } from '../utils/zoomSteps';
+import type { ImageCompressionResult } from '../features/export/compressImages';
+import { ClearAllDialog, ExportDialog, FinishDialog, ImageExportDialog, ProtectDialog, UnlockDialog } from './EditorDialogs';
 import {
     getImageExportQualityValue,
     type ImageExportQualityPreset,
@@ -39,6 +48,8 @@ const getDocumentColor = (fileId: string, fileIds: string[]): string => {
     return DOCUMENT_COLORS[index % DOCUMENT_COLORS.length];
 };
 
+const MAX_GRID_ZOOM = 2;
+
 const getInitialScale = () => {
     if (typeof window === 'undefined') {
         return 1;
@@ -55,17 +66,12 @@ interface SortablePageProps {
     onDelete: (pageId: string) => void;
     onClickPage: (pageId: string, event: ReactMouseEvent<HTMLDivElement>) => void;
     onOpenEditor: (pageId: string) => void;
-    scale: number;
+    thumbnailSize: number;
     newPageIndex: number;
     documentColor: string;
-    rotateLabel: string;
-    deleteLabel: string;
     isSelected: boolean;
     selectionOrder: number | null;
     onToggleSelection: (pageId: string, shouldSelect: boolean) => void;
-    selectLabel: string;
-    deselectLabel: string;
-    editLabel: string;
     finishSettings: Pick<PdfPreviewFinishOptions, 'watermarkText' | 'headerText' | 'footerText' | 'includePageNumbers' | 'cropPercent' | 'marginPercent'>;
     totalPages: number;
 }
@@ -79,20 +85,16 @@ const SortablePage = memo(function SortablePage({
     onDelete,
     onClickPage,
     onOpenEditor,
-    scale,
+    thumbnailSize,
     newPageIndex,
     documentColor,
-    rotateLabel,
-    deleteLabel,
     isSelected,
     selectionOrder,
     onToggleSelection,
-    selectLabel,
-    deselectLabel,
-    editLabel,
     finishSettings,
     totalPages,
 }: SortablePageProps) {
+    const { t } = useI18n();
     const {
         attributes,
         listeners,
@@ -108,29 +110,33 @@ const SortablePage = memo(function SortablePage({
         opacity: isDragging ? 0.5 : 1,
         touchAction: 'none',
     };
+    const fileName = file?.file.name ?? '';
+    const positionLabel = t('editor.positionBadge', { position: newPageIndex });
+    const sourceLabel = t('editor.sourcePageBadge', { page: page.pageIndex });
+    const selectionLabel = isSelected ? t('editor.deselectPage') : t('editor.selectPage');
 
     return (
-        <div ref={setNodeRef} style={style} className="relative group">
+        <div ref={setNodeRef} style={style} className="page-item">
             <div
-                className={`document-card cursor-pointer ${isSelected ? 'ring-4 ring-blue-200 shadow-md' : ''}`}
-                style={{ border: `3px solid ${isSelected ? '#2563EB' : documentColor}` }}
+                className={`document-card ${isSelected ? 'document-card--selected' : ''}`}
                 {...attributes}
                 {...listeners}
                 onClick={(event) => onClickPage(id, event)}
             >
-                <div>
+                <div className="page-thumb">
                     <DeferredPdfPreview
                         key={page.previewRevision ?? 0}
                         pdfDocument={file?.pdfDoc}
                         pageIndex={page.pageIndex}
-                        width={180 * scale}
-                        height={180 * scale}
+                        width={thumbnailSize}
+                        height={thumbnailSize}
                         rotation={page.rotation}
                         className="pointer-events-none"
                         annotations={page.annotations}
                         contentEdits={page.contentEdits}
                         annotationCanvasWidth={page.annotationCanvasWidth}
                         annotationCanvasHeight={page.annotationCanvasHeight}
+                        formValues={page.formValues}
                         showPageBorder
                         finishOptions={{
                             ...finishSettings,
@@ -139,31 +145,35 @@ const SortablePage = memo(function SortablePage({
                         }}
                     />
                 </div>
+                <div className="page-caption">
+                    {/* Position in the exported document, then the file and page it comes from. */}
+                    <span className="page-caption-position" title={positionLabel}>
+                        <span aria-hidden="true">{newPageIndex}</span>
+                        <span className="sr-only">{positionLabel}</span>
+                    </span>
+                    <span className="file-dot" style={{ backgroundColor: documentColor }} aria-hidden="true" />
+                    <span className="page-caption-source" title={`${fileName} · ${sourceLabel}`}>
+                        {t('editor.sourceCaption', { file: fileName, page: page.pageIndex })}
+                    </span>
+                </div>
             </div>
 
-            <div className="absolute top-1 left-1 flex items-center gap-1">
-                <button
-                    type="button"
-                    onPointerDown={(event) => event.stopPropagation()}
-                    onClick={(event) => {
-                        event.stopPropagation();
-                        onToggleSelection(id, !isSelected);
-                    }}
-                    className={`flex h-6 min-w-6 items-center justify-center rounded-full border px-1 text-[11px] font-semibold shadow-sm transition-colors ${isSelected ? 'border-blue-600 bg-blue-600 text-white hover:bg-blue-700' : 'border-gray-200 bg-white text-gray-500 hover:border-blue-300 hover:text-blue-600'}`}
-                    title={isSelected ? deselectLabel : selectLabel}
-                    aria-label={isSelected ? deselectLabel : selectLabel}
-                >
-                    {isSelected ? <Check className="h-3.5 w-3.5" /> : <Square className="h-3.5 w-3.5" />}
-                </button>
-                {selectionOrder ? (
-                    <div className="flex h-6 min-w-6 items-center justify-center rounded-full bg-blue-50 px-1 text-[11px] font-semibold text-blue-700 shadow-sm">
-                        {selectionOrder}
-                    </div>
-                ) : null}
-            </div>
+            <button
+                type="button"
+                onPointerDown={(event) => event.stopPropagation()}
+                onClick={(event) => {
+                    event.stopPropagation();
+                    onToggleSelection(id, !isSelected);
+                }}
+                className={`page-tick ${isSelected ? 'page-tick--selected' : ''}`}
+                title={selectionLabel}
+                aria-label={selectionLabel}
+            >
+                {selectionOrder ?? ''}
+            </button>
 
-            {/* Overlay Actions */}
-            <div className="absolute top-1 right-1 flex gap-1 opacity-0 group-hover:opacity-100 group-focus-within:opacity-100 transition-opacity motion-reduce:transition-none">
+            {/* Revealed on hover or focus; touch screens get the menu below instead. */}
+            <div className="page-actions">
                 <button
                     type="button"
                     onPointerDown={(event) => event.stopPropagation()}
@@ -171,53 +181,66 @@ const SortablePage = memo(function SortablePage({
                         event.stopPropagation();
                         onOpenEditor(id);
                     }}
-                    className="inline-flex h-8 w-8 items-center justify-center rounded bg-white text-gray-700 shadow hover:bg-blue-50 hover:text-blue-600 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-600"
-                    title={editLabel}
-                    aria-label={editLabel}
+                    className="page-action"
+                    title={t('editor.editPage')}
+                    aria-label={t('editor.editPage')}
                 >
                     <Pencil aria-hidden="true" className="h-4 w-4" />
                 </button>
                 <button
                     type="button"
                     onPointerDown={(event) => event.stopPropagation()}
-                    onClick={(e) => { e.stopPropagation(); onRotate(id); }}
-                    className="inline-flex h-8 w-8 items-center justify-center rounded bg-white text-gray-700 shadow hover:bg-blue-50 hover:text-blue-600 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-600"
-                    title={rotateLabel}
-                    aria-label={rotateLabel}
+                    onClick={(event) => { event.stopPropagation(); onRotate(id); }}
+                    className="page-action"
+                    title={t('editor.rotate')}
+                    aria-label={t('editor.rotate')}
                 >
-                    <RotateCw aria-hidden="true" className="w-4 h-4" />
+                    <RotateCw aria-hidden="true" className="h-4 w-4" />
                 </button>
                 <button
                     type="button"
                     onPointerDown={(event) => event.stopPropagation()}
-                    onClick={(e) => { e.stopPropagation(); onDelete(id); }}
-                    className="inline-flex h-8 w-8 items-center justify-center rounded bg-white text-gray-700 shadow hover:bg-red-50 hover:text-red-600 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-red-600"
-                    title={deleteLabel}
-                    aria-label={deleteLabel}
+                    onClick={(event) => { event.stopPropagation(); onDelete(id); }}
+                    className="page-action page-action--danger"
+                    title={t('editor.deletePage')}
+                    aria-label={t('editor.deletePage')}
                 >
-                    <Trash2 aria-hidden="true" className="w-4 h-4" />
+                    <Trash2 aria-hidden="true" className="h-4 w-4" />
                 </button>
             </div>
-            {/* Original page number (from source file) */}
-            <div
-                className="absolute bottom-1 left-1 text-white text-xs font-bold px-1.5 py-0.5 rounded"
-                style={{ backgroundColor: documentColor }}
+            <DisclosureMenu
+                label={t('editor.pageActions', { page: newPageIndex })}
+                icon={<span className="page-more-icon"><MoreHorizontal aria-hidden="true" className="h-4 w-4" /></span>}
+                className="page-more-anchor"
+                buttonClassName="page-more"
+                panelClassName="page-menu"
             >
-                {page.pageIndex}
-            </div>
-            {/* New page number in current document */}
-            <div className="absolute bottom-1 right-1 bg-black/50 text-white text-xs px-1.5 py-0.5 rounded backdrop-blur-sm">
-                #{newPageIndex}
-            </div>
+                {(close) => (
+                    <>
+                        <button type="button" className="menu-item" onClick={() => { close(); onOpenEditor(id); }}>
+                            <Pencil aria-hidden="true" className="h-4 w-4" />
+                            {t('editor.editPage')}
+                        </button>
+                        <button type="button" className="menu-item" onClick={() => { close(); onRotate(id); }}>
+                            <RotateCw aria-hidden="true" className="h-4 w-4" />
+                            {t('editor.rotate')}
+                        </button>
+                        <button type="button" className="menu-item menu-item--danger" onClick={() => { close(); onDelete(id); }}>
+                            <Trash2 aria-hidden="true" className="h-4 w-4" />
+                            {t('editor.deletePage')}
+                        </button>
+                    </>
+                )}
+            </DisclosureMenu>
         </div>
     );
 });
 
 interface PdfEditorProps {
-    onOpenWelcome: () => void;
+    onOpenInfo: () => void;
 }
 
-export const PdfEditor = ({ onOpenWelcome }: PdfEditorProps) => {
+export const PdfEditor = ({ onOpenInfo }: PdfEditorProps) => {
     const { locale, setLocale, t } = useI18n();
     const {
         files,
@@ -233,6 +256,8 @@ export const PdfEditor = ({ onOpenWelcome }: PdfEditorProps) => {
         cancelOperation,
         pageSize,
         setPageSize,
+        imageCompression,
+        setImageCompression,
         printOverlayOptions,
         setPrintOverlayOptions,
         addFiles,
@@ -253,7 +278,8 @@ export const PdfEditor = ({ onOpenWelcome }: PdfEditorProps) => {
         redo,
         canUndo,
         canRedo,
-        updatePageAnnotations
+        updatePageAnnotations,
+        isSessionReady,
     } = usePdfEditor();
     const [activeId, setActiveId] = useState<string | null>(null);
     const [scale, setScale] = useState(getInitialScale);
@@ -286,8 +312,48 @@ export const PdfEditor = ({ onOpenWelcome }: PdfEditorProps) => {
         [selectedPageIdsValid],
     );
 
-    const toolbarButtonClass = "toolbar-button text-xs font-medium whitespace-nowrap motion-reduce:transition-none";
-    const toolbarIconButtonClass = toolbarButtonClass;
+    const finishSettings = useMemo(() => ({
+        watermarkText: printOverlayOptions.watermarkText,
+        headerText: printOverlayOptions.headerText,
+        footerText: printOverlayOptions.footerText,
+        includePageNumbers: printOverlayOptions.includePageNumbers,
+        cropPercent: printOverlayOptions.cropPercent,
+        marginPercent: printOverlayOptions.marginPercent,
+    }), [printOverlayOptions]);
+    const fileIds = useMemo(() => [...new Set(pages.map(page => page.fileId))], [pages]);
+    const pageCountByFile = useMemo(() => {
+        const counts = new Map<string, number>();
+        for (const page of pages) counts.set(page.fileId, (counts.get(page.fileId) ?? 0) + 1);
+        return counts;
+    }, [pages]);
+    const exportLabels = useMemo(() => ({
+        failed: t('editor.exportFailed'),
+        downloadPrefix: t('editor.downloadPrefix'),
+        editedSuffix: t('editor.editedFileSuffix'),
+        missingPagesWarning: t('editor.missingPagesWarning'),
+        success: t('editor.exportSuccess'),
+        contentEditFailed: (pageNumber: number, code?: string) =>
+            t('editor.contentEditPageFailed', { page: pageNumber, reason: t(contentEditErrorMessageKey(code)) }),
+        formFillFailed: (fieldName: string) => t('editor.formFillFailed', { field: fieldName }),
+        compressionResult: (result: ImageCompressionResult) => {
+            if (result.compressedImages === 0) return t('editor.compressionNothing');
+            const number = new Intl.NumberFormat(locale, { maximumFractionDigits: 1 });
+            const formatSize = (bytes: number) => bytes < 1024 * 1024
+                ? `${number.format(Math.max(1, Math.round(bytes / 1024)))} KB`
+                : `${number.format(bytes / (1024 * 1024))} MB`;
+            return t('editor.compressionResult', { before: formatSize(result.bytesBefore), after: formatSize(result.bytesAfter) });
+        },
+    }), [t, locale]);
+
+    const hasPages = pages.length > 0;
+    const sessionFailed = sessionSaveStatus === 'error' || sessionSaveStatus === 'conflict';
+    const isNarrow = useMediaQuery('(max-width: 639px)');
+    const viewportWidth = useViewportWidth();
+    // Phones show two columns: half the width, minus the gutters and the card padding.
+    const thumbnailSize = isNarrow ? Math.max(96, Math.floor((viewportWidth - 44) / 2) - 24) : Math.round(180 * scale);
+    const selectedCountLabel = selectedPageIdsValid.length === 1
+        ? t('editor.selectedCountOne')
+        : t('editor.selectedCount', { count: selectedPageIdsValid.length });
     const canExport = pages.length > 0 && !isProcessing;
     const hasSelectedPages = selectedPageIdsValid.length > 0 && !isProcessing;
     const activeOverlayCount = [
@@ -298,6 +364,26 @@ export const PdfEditor = ({ onOpenWelcome }: PdfEditorProps) => {
         printOverlayOptions.cropPercent > 0,
         printOverlayOptions.marginPercent > 0,
     ].filter(Boolean).length;
+    const renderOverlayBadge = (className: string) => activeOverlayCount > 0 ? (
+        <span className={`min-w-4 rounded-full bg-blue-600 px-1 text-center text-[10px] font-bold leading-4 text-white ${className}`}>
+            {activeOverlayCount}
+        </span>
+    ) : null;
+    const renderLanguageSelect = (id: string) => (
+        <select
+            id={id}
+            value={locale}
+            onChange={(e) => setLocale(e.target.value as Locale)}
+            className="preference-control w-[4.25rem] shrink-0 px-2 uppercase"
+            title={t(`language.${locale}`)}
+        >
+            {AVAILABLE_LOCALES.map((lang) => (
+                <option key={lang} value={lang} aria-label={t(`language.${lang}`)}>
+                    {lang.toUpperCase()}
+                </option>
+            ))}
+        </select>
+    );
 
     useEffect(() => {
         writeBrowserPreference('pageforge.editor.scale', scale.toString());
@@ -345,9 +431,16 @@ export const PdfEditor = ({ onOpenWelcome }: PdfEditorProps) => {
         unsupported: t('editor.importUnsupported'),
         fileSize: t('editor.importFileSize'),
         batchSize: t('editor.importBatchSize'),
+        pageLimit: t('editor.importPageLimit'),
+        imageTooLarge: t('editor.importImageTooLarge'),
+        unreadable: t('editor.importUnreadable'),
+        officeRasterized: t('editor.importOfficeRasterized'),
         success: t('editor.importSuccess'),
         onPasswordRequired: openUnlockDialogForFile,
     }), [openUnlockDialogForFile, t]);
+
+    // Files opened with the installed app (file handler) or shared to it (share target).
+    useLaunchedFiles(isSessionReady, useCallback((launched: File[]) => addFiles(launched, getImportLabels()), [addFiles, getImportLabels]));
 
     const handleFilesPicked = useCallback((filesList: FileList | null) => {
         if (!filesList || isProcessing) {
@@ -367,6 +460,13 @@ export const PdfEditor = ({ onOpenWelcome }: PdfEditorProps) => {
         setIsExportDialogOpen(false);
     }, []);
 
+    const openExportDialog = useCallback(() => {
+        // The range starts as the whole document.
+        setRangeStart('1');
+        setRangeEnd(String(Math.max(1, pages.length)));
+        setIsExportDialogOpen(true);
+    }, [pages.length]);
+
     const closeImageExportDialog = useCallback(() => {
         setIsImageExportDialogOpen(false);
     }, []);
@@ -381,18 +481,12 @@ export const PdfEditor = ({ onOpenWelcome }: PdfEditorProps) => {
         }
 
         closeExportDialog();
-        exportPdf({
-            failed: t('editor.exportFailed'),
-            downloadPrefix: t('editor.downloadPrefix'),
-            originalName: t('editor.originalSizeName'),
-            missingPagesWarning: t('editor.missingPagesWarning'),
-            success: t('editor.exportSuccess'),
-        });
+        exportPdf(exportLabels);
     }, [
         canExport,
         closeExportDialog,
         exportPdf,
-        t
+        exportLabels,
     ]);
 
     const handleExportSelection = useCallback(() => {
@@ -400,14 +494,8 @@ export const PdfEditor = ({ onOpenWelcome }: PdfEditorProps) => {
             return;
         }
 
-        exportPdf({
-            failed: t('editor.exportFailed'),
-            downloadPrefix: t('editor.downloadPrefix'),
-            originalName: t('editor.originalSizeName'),
-            missingPagesWarning: t('editor.missingPagesWarning'),
-            success: t('editor.exportSuccess'),
-        }, selectedPageIdsValid);
-    }, [selectedPageIdsValid, isProcessing, exportPdf, t]);
+        exportPdf(exportLabels, selectedPageIdsValid);
+    }, [selectedPageIdsValid, isProcessing, exportPdf, exportLabels]);
 
     const handleExportSelectionAsImages = useCallback(async () => {
         if (selectedPageIdsValid.length === 0 || isProcessing) {
@@ -424,7 +512,10 @@ export const PdfEditor = ({ onOpenWelcome }: PdfEditorProps) => {
             missingPagesWarning: t('editor.missingPagesWarning'),
             pagePrefix: t('editor.imagePagePrefix'),
             downloadPrefix: t('editor.imageDownloadPrefix'),
+            imagesSuffix: t('editor.imagesFileSuffix'),
             success: t('editor.imageExportSuccess'),
+            contentEditFailed: exportLabels.contentEditFailed,
+            formFillFailed: exportLabels.formFillFailed,
         }, selectedPageIdsValid);
     }, [
         selectedPageIdsValid,
@@ -433,6 +524,7 @@ export const PdfEditor = ({ onOpenWelcome }: PdfEditorProps) => {
         exportPagesAsImages,
         imageExportFormat,
         imageExportQualityPreset,
+        exportLabels,
         t,
     ]);
 
@@ -454,44 +546,20 @@ export const PdfEditor = ({ onOpenWelcome }: PdfEditorProps) => {
         }
 
         closeExportDialog();
-        await exportPageRange(start, end, {
-            failed: t('editor.exportFailed'),
-            downloadPrefix: t('editor.downloadPrefix'),
-            originalName: t('editor.originalSizeName'),
-            missingPagesWarning: t('editor.missingPagesWarning'),
-            success: t('editor.exportSuccess'),
-        });
-    }, [closeExportDialog, rangeStart, rangeEnd, pages.length, exportPageRange, t]);
+        await exportPageRange(start, end, exportLabels);
+    }, [closeExportDialog, rangeStart, rangeEnd, pages.length, exportPageRange, exportLabels, t]);
 
-    const handleSplitSingle = useCallback(async () => {
+    const handleSplit = useCallback(async (mode: 'single' | 'odd-even') => {
         closeExportDialog();
-        await splitPdf('single', {
-            failed: t('editor.exportFailed'),
-            downloadPrefix: t('editor.downloadPrefix'),
-            originalName: t('editor.originalSizeName'),
-            missingPagesWarning: t('editor.missingPagesWarning'),
-            success: t('editor.exportSuccess'),
+        await splitPdf(mode, {
+            ...exportLabels,
             splitDownloadPrefix: t('editor.splitDownloadPrefix'),
+            splitSuffix: t('editor.splitFileSuffix'),
             oddSuffix: t('editor.splitOddFile'),
             evenSuffix: t('editor.splitEvenFile'),
             pageSuffix: t('editor.splitPageFile'),
         });
-    }, [closeExportDialog, splitPdf, t]);
-
-    const handleSplitOddEven = useCallback(async () => {
-        closeExportDialog();
-        await splitPdf('odd-even', {
-            failed: t('editor.exportFailed'),
-            downloadPrefix: t('editor.downloadPrefix'),
-            originalName: t('editor.originalSizeName'),
-            missingPagesWarning: t('editor.missingPagesWarning'),
-            success: t('editor.exportSuccess'),
-            splitDownloadPrefix: t('editor.splitDownloadPrefix'),
-            oddSuffix: t('editor.splitOddFile'),
-            evenSuffix: t('editor.splitEvenFile'),
-            pageSuffix: t('editor.splitPageFile'),
-        });
-    }, [closeExportDialog, splitPdf, t]);
+    }, [closeExportDialog, splitPdf, exportLabels, t]);
 
     const clearSelection = useCallback(() => {
         setSelectedPageIds([]);
@@ -658,17 +726,18 @@ export const PdfEditor = ({ onOpenWelcome }: PdfEditorProps) => {
             return;
         }
 
-        if (protectPassword.trim() !== protectPasswordConfirm.trim()) {
+        // Spaces are part of the password, so both entries must match exactly.
+        if (protectPassword !== protectPasswordConfirm) {
             setUiError(t('editor.passwordMismatch'));
             return;
         }
 
         const success = await exportProtectedPdf(protectPassword, {
+            ...exportLabels,
             failed: t('editor.protectFailed'),
             invalidPassword: t('editor.invalidPassword'),
             downloadPrefix: t('editor.protectedDownloadPrefix'),
-            originalName: t('editor.originalSizeName'),
-            missingPagesWarning: t('editor.missingPagesWarning'),
+            protectedSuffix: t('editor.protectedFileSuffix'),
             success: t('editor.protectSuccess'),
         });
 
@@ -680,6 +749,7 @@ export const PdfEditor = ({ onOpenWelcome }: PdfEditorProps) => {
         protectPassword,
         protectPasswordConfirm,
         exportProtectedPdf,
+        exportLabels,
         t,
         closeProtectDialog,
     ]);
@@ -762,7 +832,7 @@ export const PdfEditor = ({ onOpenWelcome }: PdfEditorProps) => {
             onDrop={handleDrop}
         >
             <div
-                className="pointer-events-none fixed left-1/2 top-3 z-[100] w-[min(92vw,36rem)] -translate-x-1/2"
+                className="pointer-events-none fixed left-1/2 top-[6.5rem] z-[100] w-[min(92vw,36rem)] -translate-x-1/2 sm:top-3"
                 aria-live="assertive"
                 aria-atomic="true"
             >
@@ -796,7 +866,6 @@ export const PdfEditor = ({ onOpenWelcome }: PdfEditorProps) => {
                     );
                 })() : null}
             </div>
-            <SessionStatus status={sessionSaveStatus} onRetry={retrySessionSave} />
             {operation ? <OperationStatus operation={operation} onCancel={cancelOperation} /> : null}
             <input
                 ref={addFilesInputRef}
@@ -810,142 +879,164 @@ export const PdfEditor = ({ onOpenWelcome }: PdfEditorProps) => {
                     e.target.value = '';
                 }}
             />
-            {/* Toolbar */}
-            <div className="workspace-header">
-                <div className="workspace-header-top">
+            <header className="workspace-header app-header">
+                <div className="app-header-start">
                     <button
                         type="button"
-                        onClick={onOpenWelcome}
-                        className="flex min-w-0 shrink items-center gap-2 rounded-lg text-left"
+                        onClick={onOpenInfo}
+                        className="brand-button"
                         title={t('welcome.open')}
                         aria-label={t('welcome.open')}
                     >
-                        <div className="brand-mark">
+                        <span className="brand-mark">
                             <FileText aria-hidden="true" className="h-5 w-5" />
-                        </div>
-                        <div className="hidden min-w-0 flex-col sm:flex">
-                            <span className="text-base sm:text-lg font-bold tracking-tight text-gray-900">{t('app.title')}</span>
-                        </div>
+                        </span>
+                        <span className={`brand-name ${hasPages ? 'hidden md:inline' : ''}`}>{t('app.title')}</span>
                     </button>
-                    <div className="workspace-preferences">
-                        <div className="header-action-group header-finish-actions">
+                    {sessionFailed ? null : <SessionPill status={sessionSaveStatus} onOpenSettings={onOpenInfo} />}
+                </div>
+                <div className="app-header-actions">
+                    {hasPages ? (
+                        <>
+                            <div role="group" aria-label={t('editor.history')} className="flex items-center gap-1">
+                                <button
+                                    type="button"
+                                    onClick={undo}
+                                    disabled={!canUndo || isProcessing}
+                                    className="toolbar-button toolbar-button--ghost"
+                                    title={t('editor.undo')}
+                                    aria-label={t('editor.undo')}
+                                >
+                                    <Undo aria-hidden="true" className="h-4 w-4" />
+                                </button>
+                                <button
+                                    type="button"
+                                    onClick={redo}
+                                    disabled={!canRedo || isProcessing}
+                                    className="toolbar-button toolbar-button--ghost"
+                                    title={t('editor.redo')}
+                                    aria-label={t('editor.redo')}
+                                >
+                                    <Redo aria-hidden="true" className="h-4 w-4" />
+                                </button>
+                            </div>
+                            <span className="header-divider desktop-only" aria-hidden="true" />
                             <button
                                 type="button"
                                 onClick={() => setIsFinishDialogOpen(true)}
-                                className={`${toolbarIconButtonClass} relative`}
+                                className="toolbar-button toolbar-button--labelled desktop-only relative"
                                 title={t('editor.overlaySettings')}
                                 aria-label={t('editor.overlaySettings')}
                             >
                                 <SlidersHorizontal aria-hidden="true" className="h-4 w-4" />
-                                {activeOverlayCount > 0 ? (
-                                    <span className="absolute -right-1 -top-1 min-w-4 rounded-full bg-blue-600 px-1 text-center text-[10px] font-bold leading-4 text-white">
-                                        {activeOverlayCount}
-                                    </span>
-                                ) : null}
+                                <span className="header-label-lg">{t('editor.overlaySettings')}</span>
+                                {renderOverlayBadge('absolute -right-1 -top-1')}
                             </button>
-                        </div>
-                        <div className="header-action-group header-history-actions">
-                            <button
-                                type="button"
-                                onClick={undo}
-                                disabled={!canUndo || isProcessing}
-                                className={toolbarIconButtonClass}
-                                title={t('editor.undo')}
-                                aria-label={t('editor.undo')}
-                            >
-                                <Undo aria-hidden="true" className="h-4 w-4" />
-                            </button>
-                            <button
-                                type="button"
-                                onClick={redo}
-                                disabled={!canRedo || isProcessing}
-                                className={toolbarIconButtonClass}
-                                title={t('editor.redo')}
-                                aria-label={t('editor.redo')}
-                            >
-                                <Redo aria-hidden="true" className="h-4 w-4" />
-                            </button>
-                        </div>
-                        <div className="header-action-group header-document-actions">
                             <button
                                 type="button"
                                 onClick={triggerAddFiles}
                                 disabled={isProcessing}
-                                className={toolbarIconButtonClass}
-                                title={t('common.add')}
-                                aria-label={t('common.add')}
+                                className="toolbar-button toolbar-button--labelled"
+                                title={t('editor.addFiles')}
+                                aria-label={t('editor.addFiles')}
                             >
                                 <Plus aria-hidden="true" className="h-4 w-4" />
+                                <span className="header-label-lg">{t('common.add')}</span>
                             </button>
                             <button
                                 type="button"
-                                onClick={() => setIsClearAllDialogOpen(true)}
-                                disabled={isProcessing || pages.length === 0}
-                                className={toolbarIconButtonClass}
-                                title={t('common.clear')}
-                                aria-label={t('common.clear')}
-                            >
-                                <Trash2 aria-hidden="true" className="h-4 w-4" />
-                            </button>
-                            <button
-                                type="button"
-                                onClick={() => setIsExportDialogOpen(true)}
+                                onClick={openExportDialog}
                                 disabled={isProcessing}
-                                className={toolbarIconButtonClass}
+                                className="primary-action"
                                 title={t('common.export')}
                                 aria-label={t('common.export')}
                             >
                                 <Download aria-hidden="true" className="h-4 w-4" />
+                                <span className="header-label-sm">{t('common.export')}</span>
                             </button>
-                        </div>
-                        <div className="header-language-control">
-                            <label htmlFor="language-select" className="text-xs font-medium text-gray-600 sr-only">
-                                {t('common.language')}
-                            </label>
-                            <select
-                                id="language-select"
-                                value={locale}
-                                onChange={(e) => setLocale(e.target.value as Locale)}
-                                className="preference-control h-10 w-[3.5rem] shrink-0 rounded-lg border px-2 text-xs font-bold uppercase"
-                                aria-label={t('common.language')}
-                                title={t(`language.${locale}`)}
-                            >
-                                {AVAILABLE_LOCALES.map((lang) => (
-                                    <option key={lang} value={lang} aria-label={t(`language.${lang}`)}>
-                                        {lang.toUpperCase()}
-                                    </option>
-                                ))}
-                            </select>
-                        </div>
+                        </>
+                    ) : null}
+                    <div className={hasPages ? 'desktop-only' : ''}>
+                        <label htmlFor="language-select" className="sr-only">{t('common.language')}</label>
+                        {renderLanguageSelect('language-select')}
+                    </div>
+                    {hasPages ? (
+                        <DisclosureMenu
+                            label={t('editor.moreOptions')}
+                            icon={<MoreHorizontal aria-hidden="true" className="h-5 w-5" />}
+                            className="mobile-only"
+                            buttonClassName="toolbar-button toolbar-button--ghost"
+                        >
+                            {(close) => (
+                                <>
+                                    <button type="button" className="menu-item" onClick={() => { close(); setIsFinishDialogOpen(true); }}>
+                                        <SlidersHorizontal aria-hidden="true" className="h-4 w-4" />
+                                        <span className="flex-1">{t('editor.overlaySettings')}</span>
+                                        {renderOverlayBadge('')}
+                                    </button>
+                                    <div className="menu-field">
+                                        <label htmlFor="language-select-menu">{t('common.language')}</label>
+                                        {renderLanguageSelect('language-select-menu')}
+                                    </div>
+                                    <div className="menu-separator" />
+                                    <button
+                                        type="button"
+                                        className="menu-item menu-item--danger"
+                                        disabled={isProcessing}
+                                        onClick={() => { close(); setIsClearAllDialogOpen(true); }}
+                                    >
+                                        <Trash2 aria-hidden="true" className="h-4 w-4" />
+                                        {t('common.clear')}
+                                    </button>
+                                </>
+                            )}
+                        </DisclosureMenu>
+                    ) : null}
+                </div>
+            </header>
+            {sessionFailed ? <SessionAlert status={sessionSaveStatus} onRetry={retrySessionSave} /> : null}
+
+            {hasPages ? (
+                <div className="doc-bar">
+                    <ul className="file-chips" aria-label={t('editor.documentFiles')}>
+                        {fileIds.map(fileId => {
+                            const count = pageCountByFile.get(fileId) ?? 0;
+                            const fileName = files[fileId]?.file.name ?? '';
+                            return (
+                                <li key={fileId} className="file-chip" title={fileName}>
+                                    <span className="file-dot" style={{ backgroundColor: getDocumentColor(fileId, fileIds) }} aria-hidden="true" />
+                                    <span className="file-chip-name">{fileName}</span>
+                                    <span className="file-chip-count">{count === 1 ? t('editor.filePagesOne') : t('editor.filePages', { count })}</span>
+                                </li>
+                            );
+                        })}
+                    </ul>
+                    <div className="doc-bar-tools">
+                        <span className="doc-bar-total">
+                            {pages.length === 1 ? t('editor.totalPagesOne') : t('editor.totalPages', { count: pages.length })}
+                        </span>
+                        <ZoomControl
+                            zoom={scale}
+                            onZoomOut={() => setScale(current => nextZoomStep(current, -1, MAX_GRID_ZOOM))}
+                            onZoomIn={() => setScale(current => nextZoomStep(current, 1, MAX_GRID_ZOOM))}
+                            canZoomOut={scale > MIN_ZOOM + 0.001}
+                            canZoomIn={scale < MAX_GRID_ZOOM - 0.001}
+                        />
+                        <button
+                            type="button"
+                            onClick={() => setIsClearAllDialogOpen(true)}
+                            disabled={isProcessing}
+                            className="text-button text-button--danger"
+                        >
+                            <Trash2 aria-hidden="true" className="h-4 w-4" />
+                            {t('common.clear')}
+                        </button>
                     </div>
                 </div>
-            </div>
+            ) : null}
 
-            {/* Main Content */}
-            <div className={`workspace-canvas min-h-0 flex-1 overflow-y-auto p-3 sm:p-5 lg:p-8 custom-scrollbar ${pages.length > 0 ? 'workspace-canvas--with-selection' : ''}`}>
-                {pages.length === 0 ? (
-                    <div className="empty-state box-border flex min-h-full flex-col items-center justify-center p-6 sm:p-10">
-                        <div className="empty-state-icon">
-                            <Upload className="h-7 w-7" />
-                        </div>
-                        <h3 className="mb-2 text-center text-lg font-bold sm:text-2xl">{t('editor.dragDropTitle')}</h3>
-                        <p className="mb-7 max-w-md text-center text-sm leading-6 text-gray-600 sm:text-base">{t('editor.dragDropDescription')}</p>
-                        <label className="btn cursor-pointer" title={t('editor.addFirst')} aria-label={t('editor.addFirst')}>
-                            <Plus className="w-5 h-5" />
-                            <input
-                                type="file"
-                                disabled={isProcessing}
-                                multiple
-                                accept=".pdf, .jpg, .jpeg, .png, .docx, .odt"
-                                className="hidden"
-                                onChange={(e) => {
-                                    handleFilesPicked(e.target.files);
-                                    e.target.value = '';
-                                }}
-                            />
-                        </label>
-                    </div>
-                ) : (
+            <div className="workspace-canvas min-h-0 flex-1 overflow-y-auto custom-scrollbar">
+                {hasPages ? (
                     <DndContext
                         sensors={sensors}
                         collisionDetection={closestCenter}
@@ -957,48 +1048,34 @@ export const PdfEditor = ({ onOpenWelcome }: PdfEditorProps) => {
                             strategy={rectSortingStrategy}
                         >
                             <div
-                                className="grid gap-3 sm:gap-4 lg:gap-6 justify-items-center"
+                                className="page-grid"
                                 style={{
-                                    // Make columns dynamic based on thumbnail size
-                                    // 180 * scale is the content size. + 24px padding/border approximation.
-                                    gridTemplateColumns: `repeat(auto-fill, minmax(${Math.max(120, 180 * scale)}px, 1fr))`
+                                    // Phones get two columns; wider screens fit as many as the zoom allows.
+                                    gridTemplateColumns: isNarrow
+                                        ? 'repeat(2, minmax(0, 1fr))'
+                                        : `repeat(auto-fill, minmax(${thumbnailSize + 24}px, 1fr))`,
                                 }}
                             >
-                                {(() => {
-                                    const fileIds = [...new Set(pages.map(p => p.fileId))];
-                                    return pages.map((page, index) => (
-                                        <SortablePage
-                                            key={page.id}
-                                            id={page.id}
-                                            page={page}
-                                            file={files[page.fileId]}
-                                            onRotate={rotatePage}
-                                            onDelete={deletePage}
-                                            onClickPage={handlePageClick}
-                                            onOpenEditor={handleOpenEditor}
-                                            scale={scale}
-                                            newPageIndex={index + 1}
-                                            documentColor={getDocumentColor(page.fileId, fileIds)}
-                                            rotateLabel={t('editor.rotate')}
-                                            deleteLabel={t('editor.deletePage')}
-                                            isSelected={selectedPageIdSet.has(page.id)}
-                                            selectionOrder={selectionOrderMap.get(page.id) ?? null}
-                                            onToggleSelection={handleToggleSelection}
-                                            selectLabel={t('editor.selectPage')}
-                                            deselectLabel={t('editor.deselectPage')}
-                                            editLabel={t('editor.editPage')}
-                                            finishSettings={{
-                                                watermarkText: printOverlayOptions.watermarkText,
-                                                headerText: printOverlayOptions.headerText,
-                                                footerText: printOverlayOptions.footerText,
-                                                includePageNumbers: printOverlayOptions.includePageNumbers,
-                                                cropPercent: printOverlayOptions.cropPercent,
-                                                marginPercent: printOverlayOptions.marginPercent,
-                                            }}
-                                            totalPages={pages.length}
-                                        />
-                                    ));
-                                })()}
+                                {pages.map((page, index) => (
+                                    <SortablePage
+                                        key={page.id}
+                                        id={page.id}
+                                        page={page}
+                                        file={files[page.fileId]}
+                                        onRotate={rotatePage}
+                                        onDelete={deletePage}
+                                        onClickPage={handlePageClick}
+                                        onOpenEditor={handleOpenEditor}
+                                        thumbnailSize={thumbnailSize}
+                                        newPageIndex={index + 1}
+                                        documentColor={getDocumentColor(page.fileId, fileIds)}
+                                        isSelected={selectedPageIdSet.has(page.id)}
+                                        selectionOrder={selectionOrderMap.get(page.id) ?? null}
+                                        onToggleSelection={handleToggleSelection}
+                                        finishSettings={finishSettings}
+                                        totalPages={pages.length}
+                                    />
+                                ))}
                             </div>
                         </SortableContext>
 
@@ -1009,27 +1086,23 @@ export const PdfEditor = ({ onOpenWelcome }: PdfEditorProps) => {
                                         const page = pages.find(p => p.id === activeId);
                                         if (!page) return null;
                                         return (
-                                            <div className="bg-white border rounded shadow-xl overflow-hidden">
-                                                <div>
+                                            <div className="document-card">
+                                                <div className="page-thumb">
                                                     <PdfPreview
                                                         key={page.previewRevision ?? 0}
                                                         pdfDocument={files[page.fileId]?.pdfDoc}
                                                         pageIndex={page.pageIndex}
-                                                        width={180 * scale}
-                                                        height={180 * scale}
+                                                        width={thumbnailSize}
+                                                        height={thumbnailSize}
                                                         rotation={page.rotation}
                                                         annotations={page.annotations}
                                                         contentEdits={page.contentEdits}
                                                         annotationCanvasWidth={page.annotationCanvasWidth}
                                                         annotationCanvasHeight={page.annotationCanvasHeight}
+                                                        formValues={page.formValues}
                                                         showPageBorder
                                                         finishOptions={{
-                                                            watermarkText: printOverlayOptions.watermarkText,
-                                                            headerText: printOverlayOptions.headerText,
-                                                            footerText: printOverlayOptions.footerText,
-                                                            includePageNumbers: printOverlayOptions.includePageNumbers,
-                                                            cropPercent: printOverlayOptions.cropPercent,
-                                                            marginPercent: printOverlayOptions.marginPercent,
+                                                            ...finishSettings,
                                                             pageNumber: pages.findIndex(candidate => candidate.id === page.id) + 1,
                                                             totalPages: pages.length,
                                                         }}
@@ -1042,119 +1115,100 @@ export const PdfEditor = ({ onOpenWelcome }: PdfEditorProps) => {
                             ) : null}
                         </DragOverlay>
                     </DndContext>
+                ) : (
+                    <StartScreen disabled={isProcessing} onAddFiles={triggerAddFiles} />
                 )}
             </div>
 
-            {pages.length > 0 ? (
-                <div
-                    className="selection-toolbar-dock"
-                    role="toolbar"
-                    aria-label={t('editor.selectedCount', { count: selectedPageIdsValid.length })}
-                >
-                    <span
-                        className="selection-toolbar-count"
-                        role="status"
-                        aria-live="polite"
-                        title={t('editor.selectedCount', { count: selectedPageIdsValid.length })}
-                    >
-                        <span>{t('editor.selectedLabel')}</span>
-                        <strong>{selectedPageIdsValid.length}/{pages.length}</strong>
-                    </span>
-                    <div className="selection-toolbar-actions custom-scrollbar">
-                        <button
-                            type="button"
-                            onClick={selectAllPages}
-                            disabled={pages.length === 0}
-                            className="selection-action-button"
-                            title={t('editor.selectAll')}
-                            aria-label={t('editor.selectAll')}
-                        >
-                            <CheckSquare2 aria-hidden="true" className="h-4 w-4" />
+            {hasPages && selectedPageIdsValid.length > 0 ? (
+                <div className="selection-dock" role="toolbar" aria-label={selectedCountLabel}>
+                    <div className="selection-dock-head">
+                        <span className="selection-dock-count" role="status" aria-live="polite">{selectedCountLabel}</span>
+                        <button type="button" onClick={selectAllPages} className="text-button text-button--accent selection-dock-select-all">
+                            {t('editor.selectAll')}
                         </button>
                         <button
                             type="button"
                             onClick={clearSelection}
-                            disabled={selectedPageIdsValid.length === 0}
-                            className="selection-action-button"
+                            className="toolbar-button toolbar-button--ghost selection-dock-clear"
                             title={t('editor.clearSelection')}
                             aria-label={t('editor.clearSelection')}
                         >
                             <X aria-hidden="true" className="h-4 w-4" />
                         </button>
+                    </div>
+                    <div className="selection-dock-actions">
                         <button
                             type="button"
                             onClick={handleBatchRotate}
                             disabled={!hasSelectedPages}
-                            className="selection-action-button"
+                            className="dock-button"
                             title={t('editor.rotateSelected')}
                             aria-label={t('editor.rotateSelected')}
                         >
-                            <RotateCw aria-hidden="true" className="h-4 w-4" />
+                            <RotateCw aria-hidden="true" className="h-5 w-5" />
+                            {t('editor.rotate')}
                         </button>
                         <button
                             type="button"
                             onClick={handleBatchDuplicate}
                             disabled={!hasSelectedPages}
-                            className="selection-action-button"
+                            className="dock-button"
                             title={t('editor.duplicateSelected')}
                             aria-label={t('editor.duplicateSelected')}
                         >
-                            <Copy aria-hidden="true" className="h-4 w-4" />
-                        </button>
-                        <button
-                            type="button"
-                            onClick={handleBatchDelete}
-                            disabled={!hasSelectedPages}
-                            className="selection-action-button selection-action-button--danger"
-                            title={t('editor.deleteSelected')}
-                            aria-label={t('editor.deleteSelected')}
-                        >
-                            <Trash2 aria-hidden="true" className="h-4 w-4" />
+                            <Copy aria-hidden="true" className="h-5 w-5" />
+                            {t('editor.duplicate')}
                         </button>
                         <button
                             type="button"
                             onClick={() => setIsImageExportDialogOpen(true)}
                             disabled={!hasSelectedPages}
-                            className="selection-action-button"
+                            className="dock-button"
                             title={t('editor.exportSelectedAsImages')}
                             aria-label={t('editor.exportSelectedAsImages')}
                         >
-                            <Images aria-hidden="true" className="h-4 w-4" />
+                            <Images aria-hidden="true" className="h-5 w-5" />
+                            {t('editor.imagesShort')}
                         </button>
                         <button
                             type="button"
                             onClick={handleExportSelection}
                             disabled={!hasSelectedPages}
-                            className="selection-action-button"
+                            className="dock-button"
                             title={t('editor.exportSelected')}
                             aria-label={t('editor.exportSelected')}
                         >
-                            <Download aria-hidden="true" className="h-4 w-4" />
+                            <Download aria-hidden="true" className="h-5 w-5" />
+                            {t('common.export')}
+                        </button>
+                        <button
+                            type="button"
+                            onClick={handleBatchDelete}
+                            disabled={!hasSelectedPages}
+                            className="dock-button dock-button--danger"
+                            title={t('editor.deleteSelected')}
+                            aria-label={t('editor.deleteSelected')}
+                        >
+                            <Trash2 aria-hidden="true" className="h-5 w-5" />
+                            {t('common.delete')}
                         </button>
                     </div>
+                    <span className="selection-dock-divider" aria-hidden="true" />
+                </div>
+            ) : hasPages ? (
+                <div className="selection-hint">
+                    <span>
+                        <span className="[@media(hover:none)]:hidden">{t('editor.selectionHint')}</span>
+                        <span className="hidden [@media(hover:none)]:inline">{t('editor.selectionHintTouch')}</span>
+                    </span>
+                    <button type="button" onClick={selectAllPages} className="toolbar-button toolbar-button--labelled h-9 shrink-0">
+                        <CheckSquare2 aria-hidden="true" className="h-4 w-4" />
+                        {t('editor.selectAll')}
+                    </button>
                 </div>
             ) : null}
 
-            <div className="pointer-events-none absolute right-2 sm:right-3 bottom-24 sm:bottom-auto sm:top-1/2 z-20 sm:-translate-y-1/2">
-                <div className="floating-tools pointer-events-auto flex flex-col gap-1 p-1">
-                    <button
-                        onClick={() => setScale(s => Math.max(0.5, s - 0.1))}
-                        className={toolbarIconButtonClass}
-                        title={t('editor.zoomOut')}
-                        aria-label={t('editor.zoomOut')}
-                    >
-                        <ZoomOut className="w-4 h-4" />
-                    </button>
-                    <button
-                        onClick={() => setScale(s => Math.min(2, s + 0.1))}
-                        className={toolbarIconButtonClass}
-                        title={t('editor.zoomIn')}
-                        aria-label={t('editor.zoomIn')}
-                    >
-                        <ZoomIn className="w-4 h-4" />
-                    </button>
-                </div>
-            </div>
             {/* Page Editor Modal */}
             {(() => {
                 const selectedPage = editingPageId ? pages.find(p => p.id === editingPageId) : null;
@@ -1176,8 +1230,8 @@ export const PdfEditor = ({ onOpenWelcome }: PdfEditorProps) => {
                             key={selectedPage.id}
                             isOpen={!!editingPageId}
                             onClose={() => setEditingPageId(null)}
-                            onSave={(annotations, contentEdits, canvasSize) => {
-                                updatePageAnnotations(selectedPage.id, annotations, contentEdits, canvasSize);
+                            onSave={(annotations, contentEdits, canvasSize, formValues) => {
+                                updatePageAnnotations(selectedPage.id, annotations, contentEdits, canvasSize, formValues);
                             }}
                             onRequestNavigate={handleNavigateFromEditor}
                             hasPreviousPage={selectedPageIndex > 0}
@@ -1189,541 +1243,105 @@ export const PdfEditor = ({ onOpenWelcome }: PdfEditorProps) => {
                             initialContentEdits={selectedPage.contentEdits || []}
                             initialCanvasWidth={selectedPage.annotationCanvasWidth}
                             initialCanvasHeight={selectedPage.annotationCanvasHeight}
+                            initialFormValues={selectedPage.formValues}
+                            pagePosition={selectedPageIndex + 1}
+                            pageCount={pages.length}
                         />
                     </Suspense>
                 );
             })()}
 
             {isExportDialogOpen ? (
-                <div className="dialog-backdrop fixed inset-0 z-40 flex items-center justify-center p-3 sm:p-4">
-                    <div
-                        ref={exportDialogRef}
-                        role="dialog"
-                        aria-modal="true"
-                        aria-labelledby="export-dialog-title"
-                        aria-describedby="export-dialog-description"
-                        tabIndex={-1}
-                        className="dialog-surface max-h-[calc(100vh-1.5rem)] w-full max-w-lg overflow-y-auto p-5 custom-scrollbar sm:max-h-[calc(100vh-2rem)] sm:p-6"
-                    >
-                        <div className="flex items-start justify-between gap-4">
-                            <div>
-                                <h2 id="export-dialog-title" className="text-base font-semibold text-gray-900">
-                                    {t('common.export')}
-                                </h2>
-                                <p id="export-dialog-description" className="mt-1 max-w-md text-sm text-gray-600">
-                                    {t('editor.exportDialogHint')}
-                                </p>
-                            </div>
-                            <button
-                                type="button"
-                                onClick={closeExportDialog}
-                                className={`${toolbarIconButtonClass} shrink-0`}
-                                title={t('common.close')}
-                                aria-label={t('common.close')}
-                            >
-                                <X aria-hidden="true" className="h-4 w-4" />
-                            </button>
-                        </div>
-
-                        <div className="mt-5 space-y-5">
-                            <section>
-                                <label htmlFor="export-page-size" className="block text-xs font-semibold text-gray-700">
-                                    {t('editor.pageSize')}
-                                </label>
-                                <select
-                                    id="export-page-size"
-                                    data-autofocus
-                                    value={pageSize}
-                                    onChange={(event) => setPageSize(event.target.value as PageSize)}
-                                    className="preference-control mt-2 h-11 w-full rounded-lg border px-3 text-sm font-medium"
-                                >
-                                    <option value="Original">{t('editor.pageSizeOriginal')}</option>
-                                    <option value="A4">A4</option>
-                                    <option value="A3">A3</option>
-                                    <option value="Letter">{t('editor.pageSizeLetter')}</option>
-                                    <option value="Legal">{t('editor.pageSizeLegal')}</option>
-                                </select>
-                            </section>
-
-                            <button
-                                type="button"
-                                onClick={handleExport}
-                                disabled={!canExport}
-                                className="primary-action min-h-11 w-full"
-                                title={t('editor.exportAll')}
-                            >
-                                <Download aria-hidden="true" className="h-4 w-4" />
-                                {t('editor.exportAll')}
-                            </button>
-
-                            <section className="space-y-3 border-t border-gray-200 pt-5">
-                                <h3 className="text-sm font-semibold text-gray-900">{t('editor.exportRange')}</h3>
-                                <div className="grid grid-cols-2 gap-3">
-                                    <label className="space-y-1">
-                                        <span className="text-xs font-medium text-gray-600">{t('editor.rangeStart')}</span>
-                                        <input
-                                            type="number"
-                                            min={1}
-                                            max={pages.length}
-                                            value={rangeStart}
-                                            onChange={(event) => setRangeStart(event.target.value)}
-                                            className="h-11 w-full rounded-lg border border-gray-200 bg-white px-3 text-sm text-gray-700"
-                                        />
-                                    </label>
-                                    <label className="space-y-1">
-                                        <span className="text-xs font-medium text-gray-600">{t('editor.rangeEnd')}</span>
-                                        <input
-                                            type="number"
-                                            min={1}
-                                            max={pages.length}
-                                            value={rangeEnd}
-                                            onChange={(event) => setRangeEnd(event.target.value)}
-                                            className="h-11 w-full rounded-lg border border-gray-200 bg-white px-3 text-sm text-gray-700"
-                                        />
-                                    </label>
-                                </div>
-                                <button
-                                    type="button"
-                                    onClick={handleExportRange}
-                                    disabled={!canExport}
-                                    className="inline-flex min-h-11 w-full items-center justify-center gap-2 rounded-lg border border-gray-200 bg-white px-3 text-sm font-semibold text-gray-700 hover:border-gray-300 hover:bg-gray-50 disabled:cursor-not-allowed disabled:opacity-40"
-                                    title={t('editor.exportRange')}
-                                >
-                                    <Download aria-hidden="true" className="h-4 w-4" />
-                                    {t('editor.exportRange')}
-                                </button>
-                            </section>
-
-                            <section className="space-y-3 border-t border-gray-200 pt-5">
-                                <h3 className="text-sm font-semibold text-gray-900">{t('editor.splitTools')}</h3>
-                                <div className="grid gap-2 sm:grid-cols-2">
-                                    <button
-                                        type="button"
-                                        onClick={handleSplitSingle}
-                                        disabled={!canExport}
-                                        className="inline-flex min-h-11 items-center justify-center gap-2 rounded-lg border border-gray-200 bg-white px-3 text-sm font-semibold text-gray-700 hover:border-gray-300 hover:bg-gray-50 disabled:cursor-not-allowed disabled:opacity-40"
-                                        title={t('editor.splitSingle')}
-                                    >
-                                        <SplitSquareVertical aria-hidden="true" className="h-4 w-4" />
-                                        {t('editor.splitSingle')}
-                                    </button>
-                                    <button
-                                        type="button"
-                                        onClick={handleSplitOddEven}
-                                        disabled={!canExport}
-                                        className="inline-flex min-h-11 items-center justify-center gap-2 rounded-lg border border-gray-200 bg-white px-3 text-sm font-semibold text-gray-700 hover:border-gray-300 hover:bg-gray-50 disabled:cursor-not-allowed disabled:opacity-40"
-                                        title={t('editor.splitOddEven')}
-                                    >
-                                        <SplitSquareVertical aria-hidden="true" className="h-4 w-4" />
-                                        {t('editor.splitOddEven')}
-                                    </button>
-                                </div>
-                            </section>
-
-                            <div className="border-t border-gray-200 pt-5">
-                                <button
-                                    type="button"
-                                    onClick={() => {
-                                        closeExportDialog();
-                                        setIsProtectDialogOpen(true);
-                                    }}
-                                    disabled={!canExport}
-                                    className="inline-flex min-h-11 w-full items-center justify-center gap-2 rounded-lg border border-gray-200 bg-white px-3 text-sm font-semibold text-gray-700 hover:border-gray-300 hover:bg-gray-50 disabled:cursor-not-allowed disabled:opacity-40"
-                                    title={t('editor.protectPdf')}
-                                >
-                                    <Lock aria-hidden="true" className="h-4 w-4" />
-                                    {t('editor.protectPdf')}
-                                </button>
-                            </div>
-                        </div>
-                    </div>
-                </div>
+                <ExportDialog
+                    dialogRef={exportDialogRef}
+                    onClose={closeExportDialog}
+                    pageSize={pageSize}
+                    onPageSizeChange={setPageSize}
+                    imageCompression={imageCompression}
+                    onImageCompressionChange={setImageCompression}
+                    canExport={canExport}
+                    onExportAll={handleExport}
+                    pageCount={pages.length}
+                    rangeStart={rangeStart}
+                    rangeEnd={rangeEnd}
+                    onRangeStartChange={setRangeStart}
+                    onRangeEndChange={setRangeEnd}
+                    onExportRange={handleExportRange}
+                    selectedCount={selectedPageIdsValid.length}
+                    onExportSelection={() => {
+                        closeExportDialog();
+                        handleExportSelection();
+                    }}
+                    onSplit={handleSplit}
+                    onProtect={() => {
+                        closeExportDialog();
+                        setIsProtectDialogOpen(true);
+                    }}
+                    onOpenFinish={() => {
+                        closeExportDialog();
+                        setIsFinishDialogOpen(true);
+                    }}
+                />
             ) : null}
 
             {isImageExportDialogOpen ? (
-                <div className="dialog-backdrop fixed inset-0 z-40 flex items-center justify-center p-3 sm:p-4">
-                    <div
-                        ref={imageExportDialogRef}
-                        role="dialog"
-                        aria-modal="true"
-                        aria-labelledby="image-export-dialog-title"
-                        aria-describedby="image-export-dialog-description"
-                        tabIndex={-1}
-                        className="dialog-surface w-full max-w-md p-5 sm:p-6"
-                    >
-                        <div className="flex items-start justify-between gap-4">
-                            <div>
-                                <h2 id="image-export-dialog-title" className="text-base font-semibold text-gray-900">
-                                    {t('editor.imageExportTitle')}
-                                </h2>
-                                <p id="image-export-dialog-description" className="mt-1 text-sm leading-6 text-gray-600">
-                                    {t('editor.imageExportHint', { count: selectedPageIdsValid.length })}
-                                </p>
-                            </div>
-                            <button
-                                type="button"
-                                onClick={closeImageExportDialog}
-                                className={`${toolbarIconButtonClass} shrink-0`}
-                                title={t('common.close')}
-                                aria-label={t('common.close')}
-                            >
-                                <X aria-hidden="true" className="h-4 w-4" />
-                            </button>
-                        </div>
-
-                        <div className="mt-5 space-y-5">
-                            <fieldset>
-                                <legend className="text-xs font-semibold text-gray-700">
-                                    {t('editor.imageFormat')}
-                                </legend>
-                                <div className="mt-2 grid grid-cols-3 gap-2">
-                                    {([
-                                        { value: 'jpeg', label: 'JPG' },
-                                        { value: 'png', label: 'PNG' },
-                                        { value: 'webp', label: 'WebP' },
-                                    ] as const).map((format) => (
-                                        <button
-                                            key={format.value}
-                                            type="button"
-                                            data-autofocus={format.value === 'jpeg' ? true : undefined}
-                                            onClick={() => setImageExportFormat(format.value)}
-                                            aria-pressed={imageExportFormat === format.value}
-                                            className={`min-h-11 rounded-lg border px-3 text-sm font-semibold transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-600 focus-visible:ring-offset-2 ${
-                                                imageExportFormat === format.value
-                                                    ? 'border-blue-600 bg-blue-50 text-blue-800'
-                                                    : 'border-gray-200 bg-white text-gray-700 hover:border-gray-300 hover:bg-gray-50'
-                                            }`}
-                                        >
-                                            {format.label}
-                                        </button>
-                                    ))}
-                                </div>
-                            </fieldset>
-
-                            <fieldset>
-                                <legend className="text-xs font-semibold text-gray-700">
-                                    {t('editor.imageQuality')}
-                                </legend>
-                                <div className="mt-2 grid grid-cols-3 gap-2">
-                                    {([
-                                        { value: 'compact', label: t('editor.imageQualityCompact') },
-                                        { value: 'balanced', label: t('editor.imageQualityBalanced') },
-                                        { value: 'maximum', label: t('editor.imageQualityMaximum') },
-                                    ] as const).map((qualityPreset) => (
-                                        <button
-                                            key={qualityPreset.value}
-                                            type="button"
-                                            onClick={() => setImageExportQualityPreset(qualityPreset.value)}
-                                            aria-pressed={imageExportQualityPreset === qualityPreset.value}
-                                            className={`min-h-11 rounded-lg border px-2 text-sm font-semibold transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-600 focus-visible:ring-offset-2 ${
-                                                imageExportQualityPreset === qualityPreset.value
-                                                    ? 'border-blue-600 bg-blue-50 text-blue-800'
-                                                    : 'border-gray-200 bg-white text-gray-700 hover:border-gray-300 hover:bg-gray-50'
-                                            }`}
-                                        >
-                                            {qualityPreset.label}
-                                        </button>
-                                    ))}
-                                </div>
-                                <p className="mt-2 text-xs leading-5 text-gray-500">
-                                    {t(imageExportFormat === 'png'
-                                        ? 'editor.imageQualityPngHint'
-                                        : 'editor.imageQualityLossyHint')}
-                                </p>
-                            </fieldset>
-
-                            <button
-                                type="button"
-                                onClick={handleExportSelectionAsImages}
-                                disabled={!hasSelectedPages}
-                                className="primary-action min-h-11 w-full"
-                                title={t('editor.convertAndDownloadImages')}
-                            >
-                                <Download aria-hidden="true" className="h-4 w-4" />
-                                {t('editor.convertAndDownloadImages')}
-                            </button>
-                        </div>
-                    </div>
-                </div>
+                <ImageExportDialog
+                    dialogRef={imageExportDialogRef}
+                    onClose={closeImageExportDialog}
+                    selectedCount={selectedPageIdsValid.length}
+                    selectedFormat={imageExportFormat}
+                    onFormatChange={setImageExportFormat}
+                    selectedQualityPreset={imageExportQualityPreset}
+                    onQualityPresetChange={setImageExportQualityPreset}
+                    canConvert={hasSelectedPages}
+                    onConvert={handleExportSelectionAsImages}
+                />
             ) : null}
 
             {isFinishDialogOpen ? (
-                <div className="dialog-backdrop fixed inset-0 z-40 flex items-center justify-center p-3 sm:p-4">
-                    <div
-                        ref={finishDialogRef}
-                        role="dialog"
-                        aria-modal="true"
-                        aria-labelledby="finish-dialog-title"
-                        aria-describedby="finish-dialog-description"
-                        tabIndex={-1}
-                        className="dialog-surface max-h-[calc(100vh-1.5rem)] w-full max-w-lg overflow-y-auto p-5 custom-scrollbar sm:max-h-[calc(100vh-2rem)] sm:p-6"
-                    >
-                        <div className="flex items-start justify-between gap-4">
-                            <div>
-                                <h2 id="finish-dialog-title" className="text-base font-semibold text-gray-900">
-                                    {t('editor.overlaySettings')}
-                                </h2>
-                                <p id="finish-dialog-description" className="mt-1 max-w-md text-sm text-gray-600">
-                                    {t('editor.overlayDialogHint')}
-                                </p>
-                            </div>
-                            <button
-                                type="button"
-                                onClick={closeFinishDialog}
-                                className={`${toolbarIconButtonClass} shrink-0`}
-                                title={t('common.close')}
-                                aria-label={t('common.close')}
-                            >
-                                <X aria-hidden="true" className="h-4 w-4" />
-                            </button>
-                        </div>
-
-                        <div className="mt-5 space-y-4">
-                            <label className="block space-y-1">
-                                <span className="text-xs font-medium text-gray-600">{t('editor.watermark')}</span>
-                                <input
-                                    data-autofocus
-                                    type="text"
-                                    value={printOverlayOptions.watermarkText}
-                                    onChange={(event) => setPrintOverlayOptions(prev => ({ ...prev, watermarkText: event.target.value }))}
-                                    placeholder={t('editor.watermarkPlaceholder')}
-                                    className="h-11 w-full rounded-lg border border-gray-200 bg-white px-3 text-sm text-gray-700"
-                                />
-                            </label>
-                            <label className="block space-y-1">
-                                <span className="text-xs font-medium text-gray-600">{t('editor.header')}</span>
-                                <input
-                                    type="text"
-                                    value={printOverlayOptions.headerText}
-                                    onChange={(event) => setPrintOverlayOptions(prev => ({ ...prev, headerText: event.target.value }))}
-                                    placeholder={t('editor.headerPlaceholder')}
-                                    className="h-11 w-full rounded-lg border border-gray-200 bg-white px-3 text-sm text-gray-700"
-                                />
-                            </label>
-                            <label className="block space-y-1">
-                                <span className="text-xs font-medium text-gray-600">{t('editor.footer')}</span>
-                                <input
-                                    type="text"
-                                    value={printOverlayOptions.footerText}
-                                    onChange={(event) => setPrintOverlayOptions(prev => ({ ...prev, footerText: event.target.value }))}
-                                    placeholder={t('editor.footerPlaceholder')}
-                                    className="h-11 w-full rounded-lg border border-gray-200 bg-white px-3 text-sm text-gray-700"
-                                />
-                            </label>
-                            <label className="flex min-h-11 cursor-pointer items-center gap-3 rounded-lg border border-gray-200 bg-white px-3 py-2 text-sm font-medium text-gray-700">
-                                <input
-                                    type="checkbox"
-                                    checked={printOverlayOptions.includePageNumbers}
-                                    onChange={(event) => setPrintOverlayOptions(prev => ({ ...prev, includePageNumbers: event.target.checked }))}
-                                    className="h-4 w-4 rounded border-gray-300"
-                                />
-                                {t('editor.pageNumbers')}
-                            </label>
-                            <label className="block space-y-2 border-t border-gray-200 pt-4">
-                                <span className="flex items-center justify-between gap-3">
-                                    <span className="text-xs font-medium text-gray-600">{t('editor.crop')}</span>
-                                    <span className="text-xs font-semibold tabular-nums text-gray-700">{printOverlayOptions.cropPercent}%</span>
-                                </span>
-                                <input
-                                    type="range"
-                                    min={0}
-                                    max={20}
-                                    step={1}
-                                    value={printOverlayOptions.cropPercent}
-                                    onChange={(event) => setPrintOverlayOptions(prev => ({ ...prev, cropPercent: Number(event.target.value) }))}
-                                    className="w-full"
-                                    aria-label={t('editor.crop')}
-                                />
-                            </label>
-                            <label className="block space-y-2">
-                                <span className="flex items-center justify-between gap-3">
-                                    <span className="text-xs font-medium text-gray-600">{t('editor.margin')}</span>
-                                    <span className="text-xs font-semibold tabular-nums text-gray-700">{printOverlayOptions.marginPercent}%</span>
-                                </span>
-                                <input
-                                    type="range"
-                                    min={0}
-                                    max={20}
-                                    step={1}
-                                    value={printOverlayOptions.marginPercent}
-                                    onChange={(event) => setPrintOverlayOptions(prev => ({ ...prev, marginPercent: Number(event.target.value) }))}
-                                    className="w-full"
-                                    aria-label={t('editor.margin')}
-                                />
-                            </label>
-                        </div>
-
-                        <div className="mt-5 border-t border-gray-200 pt-5">
-                            <button
-                                type="button"
-                                onClick={closeFinishDialog}
-                                className="primary-action min-h-11 w-full"
-                                title={t('common.close')}
-                            >
-                                <Check aria-hidden="true" className="h-4 w-4" />
-                                {t('common.close')}
-                            </button>
-                        </div>
-                    </div>
-                </div>
+                <FinishDialog
+                    dialogRef={finishDialogRef}
+                    onClose={closeFinishDialog}
+                    options={printOverlayOptions}
+                    onOptionsChange={setPrintOverlayOptions}
+                />
             ) : null}
             {isProtectDialogOpen ? (
-                <div className="dialog-backdrop fixed inset-0 z-40 flex items-center justify-center p-4">
-                    <div
-                        ref={protectDialogRef}
-                        role="dialog"
-                        aria-modal="true"
-                        aria-labelledby="protect-dialog-title"
-                        aria-describedby="protect-dialog-description"
-                        tabIndex={-1}
-                        className="dialog-surface w-full max-w-sm p-5"
-                    >
-                        <h2 id="protect-dialog-title" className="mb-1 text-sm font-semibold text-gray-900">{t('editor.protectPdf')}</h2>
-                        <p id="protect-dialog-description" className="mb-3 text-xs text-gray-600">{t('editor.protectHint')}</p>
-                        <div className="space-y-2">
-                            <input
-                                id="protect-password"
-                                data-autofocus
-                                type="password"
-                                autoComplete="new-password"
-                                value={protectPassword}
-                                onChange={(e) => setProtectPassword(e.target.value)}
-                                className="h-9 w-full rounded-md border border-gray-300 px-2.5 text-sm text-gray-800 focus:border-gray-400 focus:outline-none"
-                                placeholder={t('editor.password')}
-                                aria-label={t('editor.password')}
-                            />
-                            <input
-                                id="protect-password-confirm"
-                                type="password"
-                                autoComplete="new-password"
-                                value={protectPasswordConfirm}
-                                onChange={(e) => setProtectPasswordConfirm(e.target.value)}
-                                className="h-9 w-full rounded-md border border-gray-300 px-2.5 text-sm text-gray-800 focus:border-gray-400 focus:outline-none"
-                                placeholder={t('editor.confirmPassword')}
-                                aria-label={t('editor.confirmPassword')}
-                            />
-                        </div>
-                        <div className="mt-4 flex justify-end gap-2">
-                            <button
-                                type="button"
-                                onClick={closeProtectDialog}
-                                className={toolbarIconButtonClass}
-                                title={t('common.cancel')}
-                                aria-label={t('common.cancel')}
-                            >
-                                <X className="h-4 w-4" />
-                            </button>
-                            <button
-                                type="button"
-                                onClick={handleProtectExport}
-                                disabled={isProcessing || !protectPassword.trim() || !protectPasswordConfirm.trim()}
-                                className={toolbarIconButtonClass}
-                                title={t('common.save')}
-                                aria-label={t('common.save')}
-                            >
-                                <Check className="h-4 w-4" />
-                            </button>
-                        </div>
-                    </div>
-                </div>
+                <ProtectDialog
+                    dialogRef={protectDialogRef}
+                    onClose={closeProtectDialog}
+                    password={protectPassword}
+                    confirmation={protectPasswordConfirm}
+                    onPasswordChange={setProtectPassword}
+                    onConfirmationChange={setProtectPasswordConfirm}
+                    onSubmit={handleProtectExport}
+                    busy={isProcessing}
+                />
             ) : null}
 
             {isUnlockDialogOpen ? (
-                <div className="dialog-backdrop fixed inset-0 z-40 flex items-center justify-center p-4">
-                    <div
-                        ref={unlockDialogRef}
-                        role="dialog"
-                        aria-modal="true"
-                        aria-labelledby="unlock-dialog-title"
-                        aria-describedby="unlock-dialog-description"
-                        tabIndex={-1}
-                        className="dialog-surface w-full max-w-sm p-5"
-                    >
-                        <h2 id="unlock-dialog-title" className="mb-1 text-sm font-semibold text-gray-900">{t('editor.unlockPdf')}</h2>
-                        <p id="unlock-dialog-description" className="mb-3 text-xs text-gray-600">{t('editor.unlockHint')}</p>
-                        <div className="mb-2 flex min-h-11 items-center gap-2 rounded-md border border-gray-300 px-3 py-2">
-                            <LockOpen aria-hidden="true" className="h-4 w-4 shrink-0 text-gray-500" />
-                            <span className="truncate text-xs text-gray-700">
-                                {unlockFile?.name ?? t('editor.noFileSelected')}
-                            </span>
-                        </div>
-                        <input
-                            id="unlock-password"
-                            data-autofocus
-                            type="password"
-                            autoComplete="current-password"
-                            value={unlockPassword}
-                            onChange={(e) => setUnlockPassword(e.target.value)}
-                            className="h-9 w-full rounded-md border border-gray-300 px-2.5 text-sm text-gray-800 focus:border-gray-400 focus:outline-none"
-                            placeholder={t('editor.password')}
-                            aria-label={t('editor.password')}
-                        />
-                        <div className="mt-4 flex justify-end gap-2">
-                            <button
-                                type="button"
-                                onClick={closeUnlockDialog}
-                                className={toolbarIconButtonClass}
-                                title={t('common.cancel')}
-                                aria-label={t('common.cancel')}
-                            >
-                                <X className="h-4 w-4" />
-                            </button>
-                            <button
-                                type="button"
-                                onClick={handleUnlockImport}
-                                disabled={isProcessing || !unlockFile || !unlockPassword.trim()}
-                                className={toolbarIconButtonClass}
-                                title={t('editor.unlockPdf')}
-                                aria-label={t('editor.unlockPdf')}
-                            >
-                                <LockOpen aria-hidden="true" className="h-4 w-4" />
-                            </button>
-                        </div>
-                    </div>
-                </div>
+                <UnlockDialog
+                    dialogRef={unlockDialogRef}
+                    onClose={closeUnlockDialog}
+                    fileName={unlockFile?.name}
+                    password={unlockPassword}
+                    onPasswordChange={setUnlockPassword}
+                    onSubmit={handleUnlockImport}
+                    busy={isProcessing}
+                />
             ) : null}
 
             {isClearAllDialogOpen ? (
-                <div className="dialog-backdrop fixed inset-0 z-40 flex items-center justify-center p-4">
-                    <div
-                        ref={clearAllDialogRef}
-                        role="dialog"
-                        aria-modal="true"
-                        aria-labelledby="clear-all-dialog-title"
-                        aria-describedby="clear-all-dialog-description"
-                        tabIndex={-1}
-                        className="dialog-surface w-full max-w-sm p-5"
-                    >
-                        <h2 id="clear-all-dialog-title" className="mb-1 text-sm font-semibold text-gray-900">{t('editor.clearAllTitle')}</h2>
-                        <p id="clear-all-dialog-description" className="mb-3 text-xs text-gray-600">{t('editor.clearAllDescription')}</p>
-                        <div className="mt-4 flex justify-end gap-2">
-                            <button
-                                type="button"
-                                autoFocus
-                                onClick={closeClearAllDialog}
-                                className="inline-flex h-9 items-center justify-center rounded-md border border-gray-200 bg-white px-3 text-xs font-medium text-gray-700 hover:bg-gray-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-600"
-                                title={t('common.cancel')}
-                                aria-label={t('common.cancel')}
-                            >
-                                {t('common.cancel')}
-                            </button>
-                            <button
-                                type="button"
-                                onClick={() => {
-                                    closeClearAllDialog();
-                                    clearSelection();
-                                    clearAll();
-                                }}
-                                disabled={isProcessing}
-                                className="inline-flex h-9 items-center justify-center rounded-md border border-red-300 bg-red-600 px-3 text-xs font-medium text-white hover:bg-red-700 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-red-600 disabled:opacity-40"
-                                title={t('common.clear')}
-                                aria-label={t('common.clear')}
-                            >
-                                {t('common.clear')}
-                            </button>
-                        </div>
-                    </div>
-                </div>
+                <ClearAllDialog
+                    dialogRef={clearAllDialogRef}
+                    onClose={closeClearAllDialog}
+                    onConfirm={() => {
+                        closeClearAllDialog();
+                        clearSelection();
+                        clearAll();
+                    }}
+                    busy={isProcessing}
+                />
             ) : null}
         </div>
     );

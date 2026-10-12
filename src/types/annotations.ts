@@ -15,9 +15,12 @@ export interface DrawingAnnotationData {
 }
 
 export interface ShapeAnnotationData {
-    shapeType: 'rectangle' | 'circle' | 'line' | 'arrow';
+    /** 'redaction' boxes black out the area: the page is exported as an image. */
+    shapeType: 'rectangle' | 'circle' | 'line' | 'arrow' | 'highlight' | 'redaction';
     strokeColor: string;
     fillColor: string;
+    /** Fill opacity from 0 to 1; highlights default to a translucent fill. */
+    fillOpacity?: number;
     strokeWidth: number;
     // For lines to prevent flipping
     x1?: number; // relative 0-1

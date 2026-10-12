@@ -30,8 +30,9 @@ try {
     try {
         await blankPage.goto(baseUrl);
         await blankPage.waitForFunction(() => { const status = document.querySelector('[data-session-status]'); return status && status.dataset.sessionStatus !== 'loading'; });
-        await blankPage.getByRole('button', { name: 'Empezar', exact: true }).click();
         await blankPage.locator('input[type=file]').first().setInputFiles({ name: 'blank.pdf', mimeType: 'application/pdf', buffer: Buffer.from(await blankPdf.save()) });
+        // Export stays disabled until the imported page is in the workspace.
+        await blankPage.locator('.document-card').first().waitFor({ timeout: 90000 });
         await blankPage.getByRole('button', { name: 'Exportar', exact: true }).click();
         const blankDownloadPromise = blankPage.waitForEvent('download');
         await blankPage.getByRole('button', { name: 'Exportar todo', exact: true }).click();
@@ -61,8 +62,7 @@ try {
         });
         await page.goto(baseUrl);
         await page.waitForFunction(() => { const status = document.querySelector('[data-session-status]'); return status && status.dataset.sessionStatus !== 'loading'; });
-        assert.equal(await page.getByRole('checkbox', { name: /Guardar mi sesión/ }).isChecked(), false, 'Session persistence must be opt-in.');
-        await page.getByRole('button', { name: 'Empezar', exact: true }).click();
+        assert.equal(await page.getByRole('switch', { name: /Guardar mi sesión/ }).isChecked(), false, 'Session persistence must be opt-in.');
         await page.locator('input[type=file]').first().setInputFiles({ name: 'local-fixture.pdf', mimeType: 'application/pdf', buffer: bytes });
         const openEditor = () => page.getByRole('button', { name: 'Editar página', exact: true }).first().click({ timeout: 30000 });
         await openEditor();
@@ -143,6 +143,44 @@ try {
             await openEditor();
             const annotationCanvas = page.locator('canvas[aria-label^="Lienzo de anotaciones"]');
             const fillButton = page.getByRole('button', { name: 'Rellenar forma' });
+            const settleCanvas = () => annotationCanvas.evaluate(async element => {
+                // Changing tools can reflow the mobile toolbar and resize the
+                // fitted canvas. Measure only after that layout has settled.
+                let previous = '';
+                let stableFrames = 0;
+                for (let frame = 0; frame < 120; frame++) {
+                    await new Promise(requestAnimationFrame);
+                    const box = element.getBoundingClientRect();
+                    const current = [box.x, box.y, box.width, box.height].map(value => value.toFixed(2)).join(',');
+                    stableFrames = current === previous ? stableFrames + 1 : 0;
+                    if (stableFrames >= 3) return;
+                    previous = current;
+                }
+                throw new Error('Annotation canvas geometry did not settle.');
+            });
+            const pixelAt = (x, y, offsetX = 0) => annotationCanvas.evaluate((element, [x, y, offsetX]) =>
+                [...element.getContext('2d').getImageData(Math.round(element.width * x) + offsetX, Math.round(element.height * y), 1, 1).data], [x, y, offsetX]);
+            const isRed = pixel => pixel[0] > 200 && pixel[1] < 80 && pixel[2] < 80;
+            const waitPixel = (x, y, offsetX, expected) => page.waitForFunction(([x, y, offsetX, expected]) => {
+                const element = document.querySelector('canvas[aria-label^="Lienzo de anotaciones"]');
+                const pixel = element?.getContext('2d').getImageData(Math.round(element.width * x) + offsetX, Math.round(element.height * y), 1, 1).data;
+                return Boolean(pixel) && (pixel[0] > 200 && pixel[1] < 80 && pixel[2] < 80) === expected;
+            }, [x, y, offsetX, expected], { timeout: 15000 });
+            const dragOnCanvas = async (fromX, fromY, toX, toY) => {
+                await annotationCanvas.scrollIntoViewIfNeeded();
+                await settleCanvas();
+                const box = await annotationCanvas.boundingBox();
+                assert(box, 'The annotation canvas must be visible.');
+                await page.mouse.move(box.x + box.width * fromX, box.y + box.height * fromY);
+                await page.mouse.down();
+                await page.mouse.move(box.x + box.width * toX, box.y + box.height * toY, { steps: 5 });
+                await page.mouse.up();
+            };
+            const pressShortcut = async key => {
+                // Shortcuts are ignored while a form control (e.g. a colour picker) has focus.
+                await page.evaluate(() => document.activeElement instanceof HTMLElement && document.activeElement.blur());
+                await page.keyboard.press(key);
+            };
             const drawFilledShape = async (tool, top, bottom) => {
                 await page.getByRole('button', { name: tool, exact: true }).click();
                 if (await fillButton.getAttribute('aria-pressed') !== 'true') await fillButton.click();
@@ -198,6 +236,47 @@ try {
                 .getImageData(Math.round(element.width * 0.55), Math.round(element.height * 0.5), 1, 1).data]);
             assert(keptFill[0] > 200 && keptFill[1] < 80 && keptFill[2] < 80, 'Toggling fill for the next shape must keep the drawn rectangle filled.');
             await drawFilledShape('Círculo', 0.66, 0.82);
+
+            // Undo and redo inside the page editor.
+            await pressShortcut('ControlOrMeta+z');
+            await waitPixel(0.55, 0.74, 0, false);
+            await pressShortcut('ControlOrMeta+y');
+            await waitPixel(0.55, 0.74, 0, true);
+
+            // Duplicate the selected rectangle; the copy is offset to the right.
+            await page.getByRole('button', { name: 'Seleccionar', exact: true }).click();
+            await dragOnCanvas(0.55, 0.5, 0.55, 0.5);
+            assert(!isRed(await pixelAt(0.65, 0.5, 8)), 'Nothing is drawn right of the rectangle yet.');
+            // Wait past the undo coalescing window so the duplicate is its own step.
+            await page.waitForTimeout(500);
+            await pressShortcut('ControlOrMeta+d');
+            await waitPixel(0.65, 0.5, 8, true);
+            await page.waitForTimeout(500);
+            await pressShortcut('ControlOrMeta+z');
+            await waitPixel(0.65, 0.5, 8, false);
+            // Clicking to select added no undo step, so one more undo removes the circle.
+            await pressShortcut('ControlOrMeta+z');
+            await waitPixel(0.55, 0.74, 0, false);
+            await pressShortcut('ControlOrMeta+y');
+            await waitPixel(0.55, 0.74, 0, true);
+
+            // Highlight: a translucent fill.
+            await page.getByRole('button', { name: 'Resaltar', exact: true }).click();
+            await dragOnCanvas(0.15, 0.2, 0.4, 0.26);
+            await page.waitForFunction(() => {
+                const element = document.querySelector('canvas[aria-label^="Lienzo de anotaciones"]');
+                const pixel = element?.getContext('2d').getImageData(Math.round(element.width * 0.3), Math.round(element.height * 0.23), 1, 1).data;
+                return Boolean(pixel) && pixel[0] > 200 && pixel[2] < 80 && pixel[3] > 40 && pixel[3] < 160;
+            }, undefined, { timeout: 15000 });
+
+            // Arrow: the head is filled with the stroke colour.
+            await page.getByRole('button', { name: 'Flecha', exact: true }).click();
+            await dragOnCanvas(0.15, 0.92, 0.45, 0.92);
+            await page.waitForFunction(() => {
+                const element = document.querySelector('canvas[aria-label^="Lienzo de anotaciones"]');
+                const pixel = element?.getContext('2d').getImageData(Math.round(element.width * 0.45) - 4, Math.round(element.height * 0.92), 1, 1).data;
+                return Boolean(pixel) && pixel[3] > 200 && pixel[0] < 80;
+            }, undefined, { timeout: 15000 });
             await save.click();
             await page.getByRole('button', { name: 'Exportar', exact: true }).click();
             const filledDownloadPromise = page.waitForEvent('download');
@@ -219,10 +298,15 @@ try {
                     outputCanvas.height = Math.ceil(viewport.height);
                     const context = outputCanvas.getContext('2d');
                     await pdfPage.render({ canvasContext: context, canvas: outputCanvas, viewport }).promise;
-                    return [0.5, 0.74].map(y => [...context.getImageData(Math.round(outputCanvas.width * 0.55), Math.round(outputCanvas.height * y), 1, 1).data]);
+                    const fills = [0.5, 0.74].map(y => [...context.getImageData(Math.round(outputCanvas.width * 0.55), Math.round(outputCanvas.height * y), 1, 1).data]);
+                    const highlight = [...context.getImageData(Math.round(outputCanvas.width * 0.3), Math.round(outputCanvas.height * 0.23), 1, 1).data];
+                    return { fills, highlight };
                 } finally { await task.destroy(); }
             }, filledOutput.toString('base64'));
-            assert(exportedFill.every(pixel => pixel[0] > 200 && pixel[1] < 80 && pixel[2] < 80), 'Rectangle and circle fills must survive PDF export.');
+            assert(exportedFill.fills.every(pixel => pixel[0] > 200 && pixel[1] < 80 && pixel[2] < 80), 'Rectangle and circle fills must survive PDF export.');
+            // Yellow multiplied over the light blue page lowers blue but keeps the page readable.
+            const [red, , blue] = exportedFill.highlight;
+            assert(red > 180 && blue < 210 && blue > 100, `The highlight must export as a translucent yellow: ${exportedFill.highlight}`);
         }
         assert.equal(errors.length, 0, errors.join('\n'));
         assert.equal(wasmErrors.length, 0, 'No incompatible WASM warnings are allowed.');

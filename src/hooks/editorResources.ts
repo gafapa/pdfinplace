@@ -210,14 +210,33 @@ export const MAX_IMAGE_EXPORT_TOTAL_PIXELS = 160_000_000;
 export class ImageExportLimitError extends Error {}
 
 export class ContentEditExportError extends Error {
-    constructor(pageNumber: number, reason: string) {
+    readonly pageNumber: number;
+    readonly code?: string;
+
+    constructor(pageNumber: number, reason: string, code?: string) {
         super(`Content edits on page ${pageNumber} could not be saved: ${reason}`);
         this.name = 'ContentEditExportError';
+        this.pageNumber = pageNumber;
+        this.code = code;
     }
 }
 
-export const exportFailureMessage = (error: unknown, fallback: string) =>
-    error instanceof ContentEditExportError ? `${fallback} ${error.message}` : fallback;
+export interface ExportFailureLabels {
+    contentEditFailed?: (pageNumber: number, code?: string) => string;
+    formFillFailed?: (fieldName: string) => string;
+}
+
+/** User-facing export failure; content edit and form failures say what failed. */
+export const exportFailureMessage = (error: unknown, fallback: string, labels?: ExportFailureLabels) => {
+    if (error instanceof ContentEditExportError && labels?.contentEditFailed) {
+        return labels.contentEditFailed(error.pageNumber, error.code);
+    }
+    // Matched by name: the form module imports this file.
+    if (error instanceof Error && error.name === 'FormFillError' && labels?.formFillFailed) {
+        return labels.formFillFailed(String((error as Error & { fieldName?: unknown }).fieldName ?? ''));
+    }
+    return fallback;
+};
 
 export const getContentBox = (
     pageWidth: number,

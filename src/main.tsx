@@ -3,6 +3,7 @@ import { createRoot } from 'react-dom/client'
 import './index.css'
 import App from './App.tsx'
 import { I18nProvider } from './i18n'
+import { detectLocale, loadLocale } from './i18n/loader'
 
 if ('serviceWorker' in navigator) {
   if (import.meta.env.PROD) {
@@ -27,6 +28,11 @@ const rootElement = document.getElementById('root')
 if (!rootElement) {
   throw new Error('Root element #root was not found.')
 }
+
+// Load the visitor's language before the first render so the UI does not switch languages.
+await loadLocale(detectLocale()).catch((error) => {
+  console.error('Could not preload translations:', error)
+})
 
 createRoot(rootElement).render(
   <StrictMode>

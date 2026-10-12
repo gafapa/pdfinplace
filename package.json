@@ -23,6 +23,8 @@
     "test:browser": "node scripts/verify-editor-ui.mjs",
     "test:browser:all": "node scripts/run-browser-checks.mjs",
     "test:workbench": "node scripts/verify-workbench.mjs",
+    "test:office": "node scripts/verify-office-import.mjs",
+    "test:tools": "node scripts/verify-pdf-tools.mjs",
     "test:watch": "vitest",
     "preview": "vite preview"
   },

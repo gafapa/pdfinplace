@@ -6,6 +6,10 @@ const BASE_PATH = new URL(self.registration.scope).pathname;
 const MAX_CACHE_ENTRIES = 80;
 const MAX_CACHEABLE_RESPONSE_BYTES = 5 * 1024 * 1024;
 const MAX_CACHEABLE_FONT_BYTES = 20 * 1024 * 1024;
+// Files shared to the installed app wait here until the page reads them (src/hooks/useLaunchedFiles.ts).
+const SHARE_TARGET_CACHE = 'pageforge-share-target';
+const SHARE_TARGET_PATH = `${BASE_PATH}share-target`;
+const MAX_SHARED_FILES = 20;
 const APP_SHELL = [
   BASE_PATH,
   `${BASE_PATH}index.html`,
@@ -118,12 +122,37 @@ self.addEventListener('activate', (event) => {
   );
 });
 
+const receiveSharedFiles = async (request) => {
+  try {
+    const form = await request.formData();
+    const files = form.getAll('files').filter((value) => typeof value !== 'string').slice(0, MAX_SHARED_FILES);
+    const cache = await caches.open(SHARE_TARGET_CACHE);
+    await Promise.all((await cache.keys()).map((key) => cache.delete(key)));
+    await Promise.all(files.map((file, index) => cache.put(
+      new Request(`${BASE_PATH}__shared-files/${index}`),
+      new Response(file, {
+        headers: {
+          'content-type': file.type || 'application/octet-stream',
+          'x-file-name': encodeURIComponent(file.name),
+        },
+      }),
+    )));
+  } catch (error) {
+    console.error('Could not receive the shared files:', error);
+  }
+  return Response.redirect(`${BASE_PATH}?shared-files=1`, 303);
+};
+
 self.addEventListener('fetch', (event) => {
   const request = event.request;
-  if (request.method !== 'GET') return;
-
   const url = new URL(request.url);
   if (url.origin !== self.location.origin) return;
+
+  if (request.method === 'POST' && url.pathname === SHARE_TARGET_PATH) {
+    event.respondWith(receiveSharedFiles(request));
+    return;
+  }
+  if (request.method !== 'GET') return;
 
   if (request.mode === 'navigate') {
     event.respondWith(

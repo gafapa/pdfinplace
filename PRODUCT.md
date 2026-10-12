@@ -27,8 +27,8 @@ Users import PDF documents, images, DOCX files, or ODT files into a browser-base
 - The product must preserve local processing and must not require a backend.
 - User documents must remain on the user's device throughout the workflow.
 - The current import surface accepts PDF, JPG, PNG, DOCX, and ODT files.
-- PDF workflows include page reordering, rotation, duplication, deletion, selection, splitting, annotation, content editing, export configuration, password protection, and password removal.
-- The interface currently supports Spanish, English, Galician, French, and German.
+- PDF workflows include page reordering, rotation, duplication, deletion, selection, splitting, annotation, content editing, form filling, redaction, image compression, export configuration, password protection, and password removal.
+- The interface currently supports Spanish, English, Galician, French, German, Portuguese, Catalan, and Basque.
 - The product is delivered as a responsive web application and progressive web app.
 
 ## Brand Commitments

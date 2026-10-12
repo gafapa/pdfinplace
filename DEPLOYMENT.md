@@ -6,8 +6,8 @@ PDF in Place is deployed as a static single-page application.
 
 | Environment | URL | Build command | Search indexing |
 | --- | --- | --- | --- |
-| Production | `https://pdfinplace.com`, `https://pdfing.gallego.top` | `npm ci && npm run build` | Enabled |
-| Test | `https://test.pdfing.gallego.top` | `npm ci && npm run build:test` | Disabled |
+| Production | `https://pdfinplace.com` | `npm ci && npm run build` | Enabled |
+| Test | `https://test.pdfinplace.com` | `npm ci && npm run build:test` | Disabled |
 
 Both commands emit the complete static application to `dist/`. Deploy only the contents of that directory.
 
@@ -25,12 +25,12 @@ npm run stage:test
 ```
 
 These commands build the selected environment, reject sensitive file types,
-verify that the destination is one of the registered PDFing site directories,
-and mirror `dist/` into:
+verify that the destination is one of the registered PDF in Place site
+directories, and mirror `dist/` into:
 
 ```text
-D:\Otros IA\gestion_gallego_top\static-sites\sites\pdfing.gallego.top
-D:\Otros IA\gestion_gallego_top\static-sites\sites\test.pdfing.gallego.top
+D:\Otros IA\gestion_gallego_top\static-sites\sites\pdfinplace.com
+D:\Otros IA\gestion_gallego_top\static-sites\sites\test.pdfinplace.com
 ```
 
 Set `GALLEGOTOP_MANAGEMENT_ROOT` to override the management workspace location.
@@ -47,7 +47,7 @@ npm run publish:test
 ```
 
 This command stages a fresh test build, uploads only
-`test.pdfing.gallego.top`, and invokes the server's atomic content
+`test.pdfinplace.com`, and invokes the server's atomic content
 synchronization script. Production publication is intentionally not exposed as
 an npm command. It requires an explicit invocation with
 `-Environment production -AllowProduction`.
@@ -102,10 +102,11 @@ Deploy the HTML and service worker after all other files. Keep the previous hash
 
 Create DNS records for:
 
-- `pdfing.gallego.top`
-- `test.pdfing.gallego.top`
+- `pdfinplace.com` (production)
+- `www.pdfinplace.com` (redirect to `https://pdfinplace.com/`)
+- `test.pdfinplace.com` (test)
 
-Both records must point to the selected static host or reverse proxy. Provision a valid certificate covering both names, or one certificate per subdomain.
+Every record must point to the selected static host or reverse proxy. Provision a valid certificate covering each name.
 
 ## Release Verification
 
@@ -117,5 +118,5 @@ After each deployment:
 4. Import a PDF, edit existing text, duplicate the page, and confirm that edits remain isolated.
 5. Export the PDF and reopen it.
 6. Verify the service worker and offline shell after one successful online load.
-7. Check the response headers and confirm that the test domain returns `X-Robots-Tag: noindex, nofollow`.
+7. Check the response headers and confirm that the test domain returns `X-Robots-Tag: noindex, nofollow`. Production must serve `/robots.txt` and `/sitemap.xml`; test must serve a `robots.txt` that disallows crawling.
 8. Confirm that the HTTP response includes the CSP, COOP, CORP, permissions, referrer, HSTS, and MIME-sniffing headers listed above; the HTML meta policy is only a fallback.

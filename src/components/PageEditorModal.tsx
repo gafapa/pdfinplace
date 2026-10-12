@@ -1,65 +1,58 @@
-import { readBrowserPreference, writeBrowserPreference, removeBrowserPreference } from '../utils/browserPreferences';
 import { useState, useRef, useEffect, useCallback } from 'react';
 import { PdfPreview } from './PdfPreview';
 import {
     Type,
-    Bold,
-    Italic,
     Pencil,
     Square,
     Circle,
     Minus,
     ImageIcon,
-    Check,
     X,
-    Trash2,
-    ZoomIn,
-    ZoomOut,
+    Images,
     MousePointer2,
-    ChevronLeft,
-    ChevronRight,
     FilePenLine,
-    PaintBucket,
+    Highlighter,
+    MoveUpRight,
+    EyeOff,
+    TextCursorInput,
 } from 'lucide-react';
 import type { PDFDocumentProxy } from 'pdfjs-dist';
-import type { Annotation, TextAnnotationData, DrawingAnnotationData, ShapeAnnotationData, ImageAnnotationData } from '../types/annotations';
+import type { Annotation, TextAnnotationData, ShapeAnnotationData } from '../types/annotations';
 import { useI18n } from '../i18n';
 import { createId } from '../utils/createId';
 import { getEditorCanvasSize, getLegacyEditorCanvasSize, scaleAnnotations, transformAnnotationBounds, type EditorCanvasSize } from '../utils/pageGeometry';
-import { readImageDimensions } from '../utils/imageValidation';
-import { getSessionPersistencePreference } from '../utils/sessionPreference';
 import { useDialogFocus } from '../hooks/useDialogFocus';
 import { ContentEditLayer } from '../features/content-editor/ContentEditLayer';
+import { FormFieldLayer } from '../features/forms/FormFieldLayer';
+import type { FormFieldValue, FormValues } from '../features/forms/formTypes';
+import { isRedaction } from '../features/export/redaction';
+import { DEFAULT_HIGHLIGHT_COLOR, HIGHLIGHT_OPACITY, REDACTION_COLOR } from '../utils/shapeGeometry';
+import { contentEditErrorMessageKey } from '../features/content-editor/errorMessages';
 import type { ContentEdit } from '../features/content-editor/types';
-import {
-    clearPersistedAssets,
-    loadPersistedAssets,
-    savePersistedAssets,
-    type PersistedAssetRecord,
-} from '../utils/persistedAssets';
+import { isLayerTool, isShapeTool, isTextFont, type EditorSnapshot, type InteractionMode, type ResizeHandle, type ShapeTool, type TextFont, type Tool } from './page-editor/editorTools';
+import { useEditorHistory } from './page-editor/useEditorHistory';
+import { useSavedAssets, type SavedAsset } from './page-editor/useSavedAssets';
+import { AssetsPanel } from './page-editor/AssetsPanel';
+import { ToolRail, type ToolItem } from './page-editor/ToolRail';
+import { ContextBar, type ColorPreset, type ContextBarProps } from './page-editor/ContextBar';
+import { ZoomControl } from './ZoomControl';
+import { MIN_ZOOM, ZOOM_STEPS, nextZoomStep } from '../utils/zoomSteps';
+import { DiscardDialog } from './page-editor/DiscardDialog';
+import { drawEditorCanvas, measureTextLayout } from './page-editor/drawEditorCanvas';
+import { readUploadedImage } from './page-editor/readUploadedImage';
+import { EditorHeader } from './page-editor/EditorHeader';
 
-type Tool = 'content' | 'select' | 'text' | 'draw' | 'rectangle' | 'circle' | 'line' | 'image';
-type InteractionMode = 'idle' | 'drawing' | 'moving' | 'resizing';
-type ResizeHandle = 'tl' | 'tr' | 'bl' | 'br' | null;
-type ShapeTool = Extract<Tool, 'rectangle' | 'circle' | 'line'>;
-const TEXT_FONTS = ['Arial', 'Times New Roman', 'Georgia', 'Verdana', 'Courier New'] as const;
-const STROKE_GRAPHIC_OPTIONS = [1, 2, 4, 8, 12, 16, 24, 32] as const;
-const MIN_EDITOR_ZOOM = 0.5;
-const MAX_EDITOR_ZOOM = 3;
-const EDITOR_ZOOM_STEP = 0.25;
-const MAX_UPLOAD_IMAGE_BYTES = 10 * 1024 * 1024;
-const MAX_UPLOAD_IMAGE_PIXELS = 16_000_000;
-const MAX_SAVED_ASSETS = 30;
-const MAX_SAVED_ASSET_BYTES = 25 * 1024 * 1024;
-const discardDialogButtonClass = "inline-flex h-9 items-center justify-center rounded-lg border border-gray-200 bg-white px-3 text-xs font-medium text-gray-700 hover:bg-gray-50";
+const EMPTY_FORM_VALUES: FormValues = {};
 
 interface PageEditorModalProps {
     isOpen: boolean;
     onClose: () => void;
+    /** `formValues` is passed only when the file's form values changed. */
     onSave: (
         annotations: Annotation[],
         contentEdits: ContentEdit[],
         canvasSize: EditorCanvasSize,
+        formValues?: FormValues,
     ) => void;
     pdfDocument?: PDFDocumentProxy;
     pageIndex: number;
@@ -68,26 +61,14 @@ interface PageEditorModalProps {
     initialContentEdits: ContentEdit[];
     initialCanvasWidth?: number;
     initialCanvasHeight?: number;
+    initialFormValues?: FormValues;
     onRequestNavigate?: (delta: 1 | -1) => void;
     hasPreviousPage?: boolean;
     hasNextPage?: boolean;
+    /** Position of the page in the document, for the header. */
+    pagePosition?: number;
+    pageCount?: number;
 }
-
-type SavedAsset = PersistedAssetRecord;
-
-const SAVED_ASSETS_STORAGE_KEY = 'pageforge.saved-assets';
-const isLocalPersistenceEnabled = () => {
-    return getSessionPersistencePreference();
-};
-
-const getInitialAssetsPanelOpen = () => {
-    if (typeof window === 'undefined') {
-        return false;
-    }
-
-    const savedValue = readBrowserPreference('pageforge.assets-panel-open');
-    return savedValue === null ? false : savedValue === 'true';
-};
 
 export const PageEditorModal = ({
     isOpen,
@@ -100,14 +81,23 @@ export const PageEditorModal = ({
     initialContentEdits,
     initialCanvasWidth,
     initialCanvasHeight,
+    initialFormValues,
     onRequestNavigate,
     hasPreviousPage = false,
     hasNextPage = false,
+    pagePosition,
+    pageCount,
 }: PageEditorModalProps) => {
     const { t } = useI18n();
     const [activeTool, setActiveTool] = useState<Tool>('select');
     const [annotations, setAnnotations] = useState<Annotation[]>(initialAnnotations);
     const [contentEdits, setContentEdits] = useState<ContentEdit[]>(initialContentEdits);
+    const initialFormValuesRef = useRef<FormValues>(initialFormValues ?? EMPTY_FORM_VALUES);
+    const [formValues, setFormValues] = useState<FormValues>(initialFormValuesRef.current);
+    // The preview keeps the values from before form mode while inputs cover the
+    // fields, so typing does not re-render the page on every keystroke.
+    const [previewFormValues, setPreviewFormValues] = useState<FormValues>(initialFormValuesRef.current);
+    const [formFieldCount, setFormFieldCount] = useState(0);
     const [validatedContentEdits, setValidatedContentEdits] = useState<ContentEdit[] | null>(null);
     const [fallbackContentEdits, setFallbackContentEdits] = useState<ContentEdit[] | null>(null);
     const canSaveContent = contentEdits.length === 0 || validatedContentEdits === contentEdits;
@@ -122,9 +112,11 @@ export const PageEditorModal = ({
     const [color, setColor] = useState('#000000');
     const [fillEnabled, setFillEnabled] = useState(false);
     const [fillColor, setFillColor] = useState('#000000');
+    const [fillOpacity, setFillOpacity] = useState<number>(1);
+    const [highlightColor, setHighlightColor] = useState(DEFAULT_HIGHLIGHT_COLOR);
     const [strokeWidth, setStrokeWidth] = useState(2);
     const [fontSize, setFontSize] = useState(24);
-    const [textFontFamily, setTextFontFamily] = useState<(typeof TEXT_FONTS)[number]>('Arial');
+    const [textFontFamily, setTextFontFamily] = useState<TextFont>('Arial');
     const [textBold, setTextBold] = useState(false);
     const [textItalic, setTextItalic] = useState(false);
     const [imageRenderTick, setImageRenderTick] = useState(0);
@@ -135,38 +127,38 @@ export const PageEditorModal = ({
     const [isGeometryReady, setIsGeometryReady] = useState(!pdfDocument);
     const [fitScale, setFitScale] = useState(1);
     const [editorZoom, setEditorZoom] = useState(1);
-    const [savedAssets, setSavedAssets] = useState<SavedAsset[]>([]);
-    const [areSavedAssetsReady, setAreSavedAssetsReady] = useState(false);
     const [uploadTarget, setUploadTarget] = useState<'canvas' | 'library'>('canvas');
-    const [isAssetsPanelOpen, setIsAssetsPanelOpen] = useState(getInitialAssetsPanelOpen);
-    const [renamingAssetId, setRenamingAssetId] = useState<string | null>(null);
-    const [assetNameDraft, setAssetNameDraft] = useState('');
     const [errorMessage, setErrorMessage] = useState('');
     // Kept separate from `errorMessage` (and from each other) so an unrelated
     // error, a content-parse failure, and a content-preview-invalid state
     // never clobber or hide one another.
     const [contentParseError, setContentParseError] = useState('');
     const [contentPreviewInvalid, setContentPreviewInvalid] = useState(false);
-    const [contentPreviewError, setContentPreviewError] = useState('');
-    const handleContentPreview = useCallback((edits: ContentEdit[], valid: boolean, usedFallbackFont = false, errorMessage = '') => {
+    const [contentPreviewErrorCode, setContentPreviewErrorCode] = useState('');
+    const handleContentPreview = useCallback((edits: ContentEdit[], valid: boolean, usedFallbackFont = false, errorCode = '') => {
         setValidatedContentEdits(valid ? edits : null);
         setFallbackContentEdits(valid && usedFallbackFont ? edits : null);
         setContentPreviewInvalid(!valid);
-        setContentPreviewError(valid ? '' : errorMessage);
+        setContentPreviewErrorCode(valid ? '' : errorCode);
     }, []);
     const handleContentParseError = useCallback((message: string) => {
         setContentParseError(message);
     }, []);
     const displayedErrorMessage = errorMessage
         || contentParseError
-        || (contentPreviewInvalid ? contentPreviewError || t('modal.contentRewriteFailed') : '');
+        || (contentPreviewInvalid ? t(contentEditErrorMessageKey(contentPreviewErrorCode)) : '');
     const dismissDisplayedError = useCallback(() => {
         setErrorMessage('');
         setContentParseError('');
         setContentPreviewInvalid(false);
-        setContentPreviewError('');
+        setContentPreviewErrorCode('');
     }, []);
     const [isDiscardDialogOpen, setIsDiscardDialogOpen] = useState(false);
+
+    const assets = useSavedAssets(
+        { persistenceFailed: t('modal.assetPersistenceFailed'), libraryTooLarge: t('modal.assetLibraryTooLarge') },
+        setErrorMessage,
+    );
 
     const canvasRef = useRef<HTMLCanvasElement>(null);
     const savedSnapshotRef = useRef<string | null>(null);
@@ -179,7 +171,9 @@ export const PageEditorModal = ({
     const pointerMoveFrameRef = useRef<number | null>(null);
     const pendingPointerCoordsRef = useRef<{ x: number; y: number } | null>(null);
     const annotationsInitializedRef = useRef(false);
-    const didRestoreAssetsRef = useRef(false);
+    const initialSnapshotRef = useRef<Annotation[] | null>(null);
+    // Annotations when a move/resize gesture started, restored if it ends without moving.
+    const gestureAnnotationsRef = useRef<Annotation[] | null>(null);
     const closeRequestRef = useRef<() => void>(() => {});
 
     const totalRotation = (nativeRotation + pageRotation) % 360;
@@ -197,94 +191,12 @@ export const PageEditorModal = ({
     }, [editingTextId]);
 
     useEffect(() => {
-        if (didRestoreAssetsRef.current) return;
-        didRestoreAssetsRef.current = true;
-        let cancelled = false;
+        if (activeTool !== 'form') setPreviewFormValues(formValues);
+    }, [activeTool, formValues]);
 
-        const restoreSavedAssets = async () => {
-            try {
-                if (!isLocalPersistenceEnabled()) {
-                    removeBrowserPreference(SAVED_ASSETS_STORAGE_KEY);
-                    await clearPersistedAssets();
-                    return;
-                }
-
-                const legacyAssets = readBrowserPreference(SAVED_ASSETS_STORAGE_KEY);
-                const parsedLegacyAssets = legacyAssets
-                    ? JSON.parse(legacyAssets) as SavedAsset[]
-                    : [];
-                const persistedAssets = await loadPersistedAssets();
-                const restoredAssets = persistedAssets.length > 0
-                    ? persistedAssets
-                    : Array.isArray(parsedLegacyAssets) ? parsedLegacyAssets : [];
-                if (persistedAssets.length === 0 && restoredAssets.length > 0) {
-                    await savePersistedAssets(restoredAssets);
-                }
-                removeBrowserPreference(SAVED_ASSETS_STORAGE_KEY);
-                if (!cancelled) setSavedAssets(restoredAssets.slice(0, MAX_SAVED_ASSETS));
-            } catch (error) {
-                console.error('Failed to restore saved assets:', error);
-                if (!cancelled) setErrorMessage(t('modal.assetPersistenceFailed'));
-            } finally {
-                if (!cancelled) setAreSavedAssetsReady(true);
-            }
-        };
-
-        void restoreSavedAssets();
-        return () => {
-            cancelled = true;
-        };
-    }, [t]);
-
-    useEffect(() => {
-        if (!areSavedAssetsReady) return;
-
-        const persistSavedAssets = async () => {
-            try {
-                if (isLocalPersistenceEnabled()) {
-                    await savePersistedAssets(savedAssets);
-                } else {
-                    await clearPersistedAssets();
-                }
-            } catch (error) {
-                console.error('Failed to persist saved assets:', error);
-                setErrorMessage(t('modal.assetPersistenceFailed'));
-            }
-        };
-
-        void persistSavedAssets();
-    }, [areSavedAssetsReady, savedAssets, t]);
-
-    useEffect(() => {
-        writeBrowserPreference('pageforge.assets-panel-open', String(isAssetsPanelOpen));
-    }, [isAssetsPanelOpen]);
-
-    const getTextLayout = useCallback((data: TextAnnotationData) => {
-        const lines = data.text.split(/\r?\n/);
-        const normalizedLines = lines.length > 0 ? lines : [''];
-        const lineHeight = data.fontSize * 1.25;
-        const font = `${data.italic ? 'italic ' : ''}${data.bold ? 'bold ' : ''}${data.fontSize}px ${data.fontFamily}`;
-
-        const measureCanvas = canvasRef.current;
-        const measureCtx = measureCanvas?.getContext('2d');
-        const measuredWidth = measureCtx ? (() => {
-            measureCtx.save();
-            measureCtx.font = font;
-            const width = normalizedLines.reduce((max, line) => {
-                const sample = line.length > 0 ? line : ' ';
-                return Math.max(max, measureCtx.measureText(sample).width);
-            }, 0);
-            measureCtx.restore();
-            return width;
-        })() : normalizedLines.reduce((max, line) => Math.max(max, line.length * data.fontSize * 0.55), 0);
-
-        return {
-            lines: normalizedLines,
-            lineHeight,
-            width: Math.max(150, measuredWidth + 20),
-            height: Math.max(60, normalizedLines.length * lineHeight + 20),
-        };
-    }, []);
+    const getTextLayout = useCallback((data: TextAnnotationData) => (
+        measureTextLayout(data, canvasRef.current?.getContext('2d'))
+    ), []);
 
     const updateTextAnnotation = useCallback((annotationId: string, updater: (data: TextAnnotationData) => TextAnnotationData) => {
         setAnnotations(prev => prev.map(ann => {
@@ -350,10 +262,12 @@ export const PageEditorModal = ({
             : getLegacyEditorCanvasSize(totalRotation);
         const targetSize = { width: canvasWidth, height: canvasHeight };
         const scaledAnnotations = scaleAnnotations(initialAnnotations, sourceSize, targetSize);
+        initialSnapshotRef.current = scaledAnnotations;
         setAnnotations(scaledAnnotations);
         savedSnapshotRef.current = JSON.stringify({
             annotations: scaledAnnotations,
             contentEdits: initialContentEdits,
+            formValues: initialFormValuesRef.current,
         });
         annotationsInitializedRef.current = true;
     }, [
@@ -367,6 +281,26 @@ export const PageEditorModal = ({
         canvasWidth,
         canvasHeight,
     ]);
+
+    // Editor-local undo history. A snapshot is recorded once an interaction
+    // (drag, resize, text editing) has finished, so one gesture is one step.
+    const restoreSnapshot = useCallback((entry: EditorSnapshot) => {
+        setAnnotations(entry.annotations);
+        setContentEdits(entry.contentEdits);
+        setFormValues(entry.formValues);
+        setSelectedAnnotationId(null);
+    }, []);
+    const canRestoreHistory = useCallback(() => !editingTextIdRef.current, []);
+    const history = useEditorHistory({ annotations, contentEdits, formValues }, {
+        canRecord: annotationsInitializedRef.current && interactionMode === 'idle' && !editingTextId,
+        // Seed with the scaled initial annotations, not the unscaled props.
+        canSeed: annotations === initialSnapshotRef.current,
+        canRestore: canRestoreHistory,
+        onRestore: restoreSnapshot,
+    });
+    const restoreHistoryEntry = history.restore;
+    const canUndoEdit = history.canUndo && !editingTextId;
+    const canRedoEdit = history.canRedo && !editingTextId;
 
     useEffect(() => {
         if (!isOpen) return;
@@ -426,28 +360,57 @@ export const PageEditorModal = ({
     const hasActiveTextAnnotation = Boolean(activeTextAnnotation);
     const toolbarColor = activeTextData?.color ?? color;
     const toolbarFontSize = activeTextData?.fontSize ?? fontSize;
-    const toolbarFontFamily = activeTextData && TEXT_FONTS.includes(activeTextData.fontFamily as (typeof TEXT_FONTS)[number])
-        ? activeTextData.fontFamily as (typeof TEXT_FONTS)[number]
-        : textFontFamily;
+    const toolbarFontFamily = activeTextData && isTextFont(activeTextData.fontFamily) ? activeTextData.fontFamily : textFontFamily;
     const toolbarBold = activeTextData?.bold ?? textBold;
     const toolbarItalic = activeTextData?.italic ?? textItalic;
-    const selectedShapeAnnotation = annotations.find(ann => ann.id === selectedAnnotationId && ann.type === 'shape');
-    const selectedShapeData = selectedShapeAnnotation?.data as ShapeAnnotationData | undefined;
+    const selectedAnnotation = annotations.find(ann => ann.id === selectedAnnotationId);
+    const selectedShapeData = selectedAnnotation?.type === 'shape' ? selectedAnnotation.data as ShapeAnnotationData : undefined;
     const selectedFillableShape = selectedShapeData?.shapeType === 'rectangle' || selectedShapeData?.shapeType === 'circle';
-    const showFillControls = activeTool === 'rectangle' || activeTool === 'circle' || selectedFillableShape;
     // A drawn shape stays selected while its tool is still active; the fill
     // controls then configure the next shape, and edit the selection only in
     // the select tool.
     const editsSelectedShapeFill = activeTool === 'select' && selectedFillableShape;
     const toolbarFillEnabled = editsSelectedShapeFill ? Boolean(selectedShapeData.fillColor) : fillEnabled;
     const toolbarFillColor = editsSelectedShapeFill && selectedShapeData.fillColor ? selectedShapeData.fillColor : fillColor;
+    const toolbarFillOpacity = editsSelectedShapeFill ? selectedShapeData.fillOpacity ?? 1 : fillOpacity;
+    const isHighlightContext = activeTool === 'highlight';
+    const pickerColor = isHighlightContext ? highlightColor : toolbarColor;
+    // Redactions are always black: there is no colour to pick.
+    const showColorPicker = activeTool !== 'redaction' && selectedShapeData?.shapeType !== 'redaction';
+    const hasRedactions = annotations.some(isRedaction);
 
-    const updateSelectedShapeFill = (nextColor: string) => {
+    const updateSelectedShapeFill = (changes: Partial<Pick<ShapeAnnotationData, 'fillColor' | 'fillOpacity'>>) => {
         if (!editsSelectedShapeFill) return;
         setAnnotations(previous => previous.map(annotation => annotation.id === selectedAnnotationId
-            ? { ...annotation, data: { ...annotation.data, fillColor: nextColor } as ShapeAnnotationData }
+            ? { ...annotation, data: { ...annotation.data, ...changes } as ShapeAnnotationData }
             : annotation));
     };
+
+    /** Builds a shape from a drag, using the current tool settings. */
+    const buildShapeAnnotation = useCallback((tool: ShapeTool, start: { x: number; y: number }, end: { x: number; y: number }): Annotation => {
+        const isLinear = tool === 'line' || tool === 'arrow';
+        const isHighlight = tool === 'highlight';
+        const isRedactionBox = tool === 'redaction';
+        const filled = !isLinear && (isHighlight || fillEnabled);
+        const width = Math.max(1, Math.abs(end.x - start.x));
+        const height = Math.max(1, Math.abs(end.y - start.y));
+        const left = Math.min(start.x, end.x);
+        const top = Math.min(start.y, end.y);
+        const data: ShapeAnnotationData = isRedactionBox
+            ? { shapeType: 'redaction', strokeColor: REDACTION_COLOR, fillColor: REDACTION_COLOR, fillOpacity: 1, strokeWidth: 0 }
+            : {
+                shapeType: tool,
+                strokeColor: color,
+                fillColor: isHighlight ? highlightColor : filled ? fillColor : '',
+                fillOpacity: isHighlight ? HIGHLIGHT_OPACITY : filled ? fillOpacity : undefined,
+                strokeWidth: isHighlight ? 0 : strokeWidth,
+                x1: (start.x - left) / width,
+                y1: (start.y - top) / height,
+                x2: (end.x - left) / width,
+                y2: (end.y - top) / height,
+            };
+        return { id: createId(), type: 'shape', x: left, y: top, width, height, rotation: 0, data };
+    }, [color, fillColor, fillEnabled, fillOpacity, highlightColor, strokeWidth]);
 
     const applyTextStyleToActive = useCallback((updater: (data: TextAnnotationData) => TextAnnotationData) => {
         if (!activeTextId) {
@@ -461,8 +424,8 @@ export const PageEditorModal = ({
 
         const data = annotation.data as TextAnnotationData;
         setFontSize(data.fontSize);
-        if (TEXT_FONTS.includes(data.fontFamily as (typeof TEXT_FONTS)[number])) {
-            setTextFontFamily(data.fontFamily as (typeof TEXT_FONTS)[number]);
+        if (isTextFont(data.fontFamily)) {
+            setTextFontFamily(data.fontFamily);
         }
         setColor(data.color);
         setTextBold(data.bold);
@@ -500,9 +463,10 @@ export const PageEditorModal = ({
         const snapshot = JSON.stringify({
             annotations: getFinalizedAnnotations(annotations),
             contentEdits,
+            formValues,
         });
         return snapshot !== savedSnapshotRef.current;
-    }, [annotations, contentEdits, getFinalizedAnnotations]);
+    }, [annotations, contentEdits, formValues, getFinalizedAnnotations]);
 
     const handleCloseRequest = useCallback(() => {
         if (!hasUnsavedChanges()) {
@@ -522,13 +486,18 @@ export const PageEditorModal = ({
             handleTextEditComplete();
         }
         const finalizedAnnotations = getFinalizedAnnotations(annotations);
-        onSave(finalizedAnnotations, contentEdits, { width: canvasWidth, height: canvasHeight });
+        const changedFormValues = formValues !== initialFormValuesRef.current ? formValues : undefined;
+        onSave(finalizedAnnotations, contentEdits, { width: canvasWidth, height: canvasHeight }, changedFormValues);
         return true;
-    }, [annotations, contentEdits, canSaveContent, canvasWidth, canvasHeight, getFinalizedAnnotations, handleTextEditComplete, onSave]);
+    }, [annotations, contentEdits, formValues, canSaveContent, canvasWidth, canvasHeight, getFinalizedAnnotations, handleTextEditComplete, onSave]);
 
     const handleNavigateRequest = useCallback((delta: 1 | -1) => {
         if (commitChanges()) onRequestNavigate?.(delta);
     }, [commitChanges, onRequestNavigate]);
+
+    const handleFormValueChange = useCallback((name: string, value: FormFieldValue) => {
+        setFormValues(previous => ({ ...previous, [name]: value }));
+    }, []);
 
     const createImageLikeAnnotation = useCallback((
         dataUrl: string,
@@ -553,22 +522,6 @@ export const PageEditorModal = ({
         };
     }, [canvasWidth, canvasHeight]);
 
-    const addSavedAsset = useCallback((asset: SavedAsset) => {
-        const nextAssets = [asset, ...savedAssets.filter((item) => item.id !== asset.id)]
-            .slice(0, MAX_SAVED_ASSETS);
-        const estimatedBytes = nextAssets.reduce(
-            (total, item) => total + Math.ceil(item.dataUrl.length * 0.75),
-            0,
-        );
-        if (estimatedBytes > MAX_SAVED_ASSET_BYTES) {
-            setErrorMessage(t('modal.assetLibraryTooLarge'));
-            return false;
-        }
-
-        setSavedAssets(nextAssets);
-        return true;
-    }, [savedAssets, t]);
-
     const insertSavedAsset = useCallback((asset: SavedAsset) => {
         const newAnnotation = createImageLikeAnnotation(
             asset.dataUrl,
@@ -580,31 +533,33 @@ export const PageEditorModal = ({
         setActiveTool('select');
     }, [createImageLikeAnnotation]);
 
-    const removeSavedAsset = useCallback((assetId: string) => {
-        setSavedAssets(prev => prev.filter(asset => asset.id !== assetId));
-        setRenamingAssetId(prev => prev === assetId ? null : prev);
-    }, []);
+    const deleteSelection = useCallback(() => {
+        setAnnotations(previous => previous.filter(annotation => annotation.id !== selectedAnnotationId));
+        setSelectedAnnotationId(null);
+    }, [selectedAnnotationId]);
 
-    const beginRenamingAsset = useCallback((asset: SavedAsset) => {
-        setRenamingAssetId(asset.id);
-        setAssetNameDraft(asset.name);
-    }, []);
+    const duplicateSelection = useCallback(() => {
+        const source = annotations.find(annotation => annotation.id === selectedAnnotationId);
+        if (!source) return;
+        const offset = 16;
+        const copy = {
+            ...transformAnnotationBounds(source, {
+                x: Math.min(source.x + offset, Math.max(0, canvasWidth - source.width)),
+                y: Math.min(source.y + offset, Math.max(0, canvasHeight - source.height)),
+                width: source.width,
+                height: source.height,
+            }),
+            id: createId(),
+        };
+        setAnnotations(previous => [...previous, copy]);
+        setSelectedAnnotationId(copy.id);
+    }, [annotations, selectedAnnotationId, canvasWidth, canvasHeight]);
 
-    const cancelRenamingAsset = useCallback(() => {
-        setRenamingAssetId(null);
-        setAssetNameDraft('');
-    }, []);
-
-    const commitAssetName = useCallback((assetId: string) => {
-        const normalizedName = assetNameDraft.trim();
-        if (!normalizedName) return;
-
-        setSavedAssets(prev => prev.map(asset => (
-            asset.id === assetId ? { ...asset, name: normalizedName } : asset
-        )));
-        setRenamingAssetId(null);
-        setAssetNameDraft('');
-    }, [assetNameDraft]);
+    const nudgeSelection = useCallback((dx: number, dy: number) => {
+        setAnnotations(previous => previous.map(annotation => annotation.id === selectedAnnotationId
+            ? transformAnnotationBounds(annotation, { x: annotation.x + dx, y: annotation.y + dy, width: annotation.width, height: annotation.height })
+            : annotation));
+    }, [selectedAnnotationId]);
 
     // Keyboard listener for Delete and Escape (capture phase so it can decide
     // before the dialog-focus handler closes the modal)
@@ -631,17 +586,43 @@ export const PageEditorModal = ({
                 return;
             }
 
-            if ((e.key === 'Delete' || e.key === 'Backspace') && !isFormField) {
-                if (selectedAnnotationId && !editingTextIdRef.current) {
-                    e.preventDefault();
-                    setAnnotations(prev => prev.filter(a => a.id !== selectedAnnotationId));
-                    setSelectedAnnotationId(null);
-                }
+            if (isFormField || editingTextIdRef.current) return;
+
+            const hasModifier = e.ctrlKey || e.metaKey;
+            const key = e.key.toLowerCase();
+            if (hasModifier && !e.altKey && (key === 'z' || key === 'y')) {
+                e.preventDefault();
+                e.stopPropagation();
+                restoreHistoryEntry(key === 'y' || e.shiftKey ? 1 : -1);
+                return;
+            }
+            if (hasModifier && !e.altKey && key === 'd' && selectedAnnotationId) {
+                e.preventDefault();
+                duplicateSelection();
+                return;
+            }
+
+            if ((e.key === 'Delete' || e.key === 'Backspace') && selectedAnnotationId) {
+                e.preventDefault();
+                deleteSelection();
+                return;
+            }
+
+            const step = e.shiftKey ? 10 : 1;
+            const nudges: Record<string, [number, number]> = {
+                ArrowLeft: [-step, 0],
+                ArrowRight: [step, 0],
+                ArrowUp: [0, -step],
+                ArrowDown: [0, step],
+            };
+            if (nudges[e.key] && selectedAnnotationId && !isLayerTool(activeTool)) {
+                e.preventDefault();
+                nudgeSelection(...nudges[e.key]);
             }
         };
         window.addEventListener('keydown', handleKeyDown, true);
         return () => window.removeEventListener('keydown', handleKeyDown, true);
-    }, [selectedAnnotationId, handleCloseRequest, handleTextEditComplete]);
+    }, [selectedAnnotationId, activeTool, handleCloseRequest, handleTextEditComplete, restoreHistoryEntry, duplicateSelection, deleteSelection, nudgeSelection]);
 
     // Focus textarea when editing starts
     useEffect(() => {
@@ -669,15 +650,15 @@ export const PageEditorModal = ({
         const referencedDataUrls = new Set(
             annotations
                 .filter((ann) => ann.type === 'image' || ann.type === 'signature')
-                .map((ann) => (ann.data as ImageAnnotationData).dataUrl)
+                .map((ann) => (ann.data as { dataUrl: string }).dataUrl)
         );
 
         imageCacheRef.current.forEach((_, dataUrl) => {
-            if (!referencedDataUrls.has(dataUrl) && !savedAssets.some((asset) => asset.dataUrl === dataUrl)) {
+            if (!referencedDataUrls.has(dataUrl) && !assets.savedAssets.some((asset) => asset.dataUrl === dataUrl)) {
                 imageCacheRef.current.delete(dataUrl);
             }
         });
-    }, [annotations, savedAssets]);
+    }, [annotations, assets.savedAssets]);
 
     const getCachedImage = useCallback((dataUrl: string) => {
         const cachedImage = imageCacheRef.current.get(dataUrl);
@@ -693,133 +674,20 @@ export const PageEditorModal = ({
     }, []);
 
     const drawAnnotations = useCallback(() => {
-        const canvas = canvasRef.current;
-        if (!canvas) return;
-        const ctx = canvas.getContext('2d');
-        if (!ctx) return;
-
-        ctx.clearRect(0, 0, canvas.width, canvas.height);
-
-        annotations.forEach(ann => {
-            if (editingTextId === ann.id) return;
-
-            ctx.save();
-            const centerX = ann.x + (ann.width || 0) / 2;
-            const centerY = ann.y + (ann.height || 0) / 2;
-            const rotation = Number(ann.rotation) || 0;
-
-            ctx.translate(centerX, centerY);
-            ctx.rotate((rotation * Math.PI) / 180);
-            ctx.translate(-centerX, -centerY);
-
-            if (ann.type === 'drawing') {
-                const data = ann.data as DrawingAnnotationData;
-                ctx.strokeStyle = data.strokeColor;
-                ctx.lineWidth = data.strokeWidth;
-                ctx.lineCap = 'round';
-                ctx.lineJoin = 'round';
-                ctx.beginPath();
-                data.points.forEach((point, i) => {
-                    if (i === 0) ctx.moveTo(point.x, point.y);
-                    else ctx.lineTo(point.x, point.y);
-                });
-                ctx.stroke();
-            } else if (ann.type === 'shape') {
-                const data = ann.data as ShapeAnnotationData;
-                ctx.strokeStyle = data.strokeColor;
-                ctx.lineWidth = data.strokeWidth;
-                if (data.fillColor) ctx.fillStyle = data.fillColor;
-
-                if (data.shapeType === 'rectangle') {
-                    if (data.fillColor) ctx.fillRect(ann.x, ann.y, ann.width, ann.height);
-                    ctx.strokeRect(ann.x, ann.y, ann.width, ann.height);
-                } else if (data.shapeType === 'circle') {
-                    ctx.beginPath();
-                    ctx.ellipse(ann.x + ann.width / 2, ann.y + ann.height / 2, Math.max(0.1, Math.abs(ann.width / 2)), Math.max(0.1, Math.abs(ann.height / 2)), 0, 0, 2 * Math.PI);
-                    if (data.fillColor) ctx.fill();
-                    ctx.stroke();
-                } else if (data.shapeType === 'line') {
-                    ctx.beginPath();
-                    const x1 = ann.x + (data.x1 ?? 0) * ann.width;
-                    const y1 = ann.y + (data.y1 ?? 0) * ann.height;
-                    const x2 = ann.x + (data.x2 ?? 1) * ann.width;
-                    const y2 = ann.y + (data.y2 ?? 1) * ann.height;
-                    ctx.moveTo(x1, y1);
-                    ctx.lineTo(x2, y2);
-                    ctx.stroke();
-                }
-            } else if (ann.type === 'text') {
-                const data = ann.data as TextAnnotationData;
-                ctx.fillStyle = data.color;
-                ctx.font = `${data.italic ? 'italic ' : ''}${data.bold ? 'bold ' : ''}${data.fontSize}px ${data.fontFamily}`;
-                ctx.textBaseline = 'top';
-                const { lines, lineHeight } = getTextLayout(data);
-                lines.forEach((line, index) => {
-                    ctx.fillText(line, ann.x, ann.y + (index * lineHeight));
-                });
-            } else if (ann.type === 'image' || ann.type === 'signature') {
-                const data = ann.data as ImageAnnotationData;
-                const img = getCachedImage(data.dataUrl);
-                if (img.complete) {
-                    ctx.drawImage(img, ann.x, ann.y, ann.width, ann.height);
-                }
-            }
-
-            if (selectedAnnotationId === ann.id) {
-                ctx.strokeStyle = '#3B82F6';
-                ctx.lineWidth = 1;
-                ctx.setLineDash([5, 5]);
-                ctx.strokeRect(ann.x - 2, ann.y - 2, ann.width + 4, ann.height + 4);
-                ctx.setLineDash([]);
-
-                const handleSize = 6;
-                ctx.fillStyle = '#3B82F6';
-                ctx.fillRect(ann.x - handleSize / 2, ann.y - handleSize / 2, handleSize, handleSize);
-                ctx.fillRect(ann.x + ann.width - handleSize / 2, ann.y - handleSize / 2, handleSize, handleSize);
-                ctx.fillRect(ann.x - handleSize / 2, ann.y + ann.height - handleSize / 2, handleSize, handleSize);
-                ctx.fillRect(ann.x + ann.width - handleSize / 2, ann.y + ann.height - handleSize / 2, handleSize, handleSize);
-            }
-
-            ctx.restore();
+        const context = canvasRef.current?.getContext('2d');
+        if (!context) return;
+        const isDrafting = interactionMode === 'drawing' && currentDrawing.length > 0;
+        drawEditorCanvas(context, {
+            annotations,
+            selectedAnnotationId,
+            editingTextId,
+            getImage: getCachedImage,
+            draft: !isDrafting ? undefined
+                : activeTool === 'draw' ? { kind: 'path', points: currentDrawing, color, strokeWidth }
+                    : isShapeTool(activeTool) ? { kind: 'shape', annotation: buildShapeAnnotation(activeTool, currentDrawing[0], currentDrawing[currentDrawing.length - 1]) }
+                        : undefined,
         });
-
-        if (interactionMode === 'drawing' && currentDrawing.length > 0) {
-            ctx.save();
-            ctx.strokeStyle = color;
-            ctx.fillStyle = fillColor;
-            ctx.lineWidth = strokeWidth;
-            ctx.lineCap = 'round';
-            ctx.lineJoin = 'round';
-
-            if (activeTool === 'draw') {
-                ctx.beginPath();
-                currentDrawing.forEach((p, i) => i === 0 ? ctx.moveTo(p.x, p.y) : ctx.lineTo(p.x, p.y));
-                ctx.stroke();
-            } else if (activeTool === 'rectangle') {
-                const start = currentDrawing[0];
-                const end = currentDrawing[currentDrawing.length - 1];
-                if (fillEnabled) ctx.fillRect(start.x, start.y, end.x - start.x, end.y - start.y);
-                ctx.strokeRect(start.x, start.y, end.x - start.x, end.y - start.y);
-            } else if (activeTool === 'circle') {
-                const start = currentDrawing[0];
-                const end = currentDrawing[currentDrawing.length - 1];
-                const w = end.x - start.x;
-                const h = end.y - start.y;
-                ctx.beginPath();
-                ctx.ellipse(start.x + w / 2, start.y + h / 2, Math.max(0.1, Math.abs(w / 2)), Math.max(0.1, Math.abs(h / 2)), 0, 0, 2 * Math.PI);
-                if (fillEnabled) ctx.fill();
-                ctx.stroke();
-            } else if (activeTool === 'line') {
-                const start = currentDrawing[0];
-                const end = currentDrawing[currentDrawing.length - 1];
-                ctx.beginPath();
-                ctx.moveTo(start.x, start.y);
-                ctx.lineTo(end.x, end.y);
-                ctx.stroke();
-            }
-            ctx.restore();
-        }
-    }, [annotations, selectedAnnotationId, interactionMode, currentDrawing, activeTool, color, fillColor, fillEnabled, strokeWidth, editingTextId, getTextLayout, getCachedImage]);
+    }, [annotations, selectedAnnotationId, interactionMode, currentDrawing, activeTool, color, strokeWidth, editingTextId, getCachedImage, buildShapeAnnotation]);
 
     // biome-ignore lint/correctness/useExhaustiveDependencies: Image loading must redraw the canvas even when the callback is stable.
     useEffect(() => {
@@ -927,9 +795,6 @@ export const PageEditorModal = ({
         return px >= ann.x && px <= ann.x + (ann.width || 0) && py >= ann.y && py <= ann.y + (ann.height || 0);
     };
 
-    const isShapeTool = (tool: Tool): tool is ShapeTool =>
-        tool === 'rectangle' || tool === 'circle' || tool === 'line';
-
     const handlePointerDown = (e: React.PointerEvent<HTMLCanvasElement>) => {
         const startPointerInteraction = () => {
             e.preventDefault();
@@ -953,6 +818,7 @@ export const PageEditorModal = ({
                     if (handle) {
                         startPointerInteraction();
                         setInteractionMode('resizing');
+                        gestureAnnotationsRef.current = annotations;
                         setResizeHandle(handle);
                         setInitialAnnotationState({ ...ann });
                         return;
@@ -965,15 +831,13 @@ export const PageEditorModal = ({
                 startPointerInteraction();
                 setSelectedAnnotationId(hit.id);
                 setInteractionMode('moving');
+                gestureAnnotationsRef.current = annotations;
                 setInitialAnnotationState({ ...hit });
             } else {
                 setSelectedAnnotationId(null);
             }
         } else if (activeTool === 'text') {
             startPointerInteraction();
-            // If we were editing, and the click is to finish, usually we don't want 
-            // to immediately start another one at the SAME pixel.
-            // But if it's a different pixel, it's fine.
             const id = createId();
             const textData: TextAnnotationData = {
                 text: '',
@@ -998,7 +862,7 @@ export const PageEditorModal = ({
             setSelectedAnnotationId(id);
             setEditingTextId(id);
             editingTextIdRef.current = id;
-        } else if (['draw', 'rectangle', 'circle', 'line'].includes(activeTool)) {
+        } else if (activeTool === 'draw' || isShapeTool(activeTool)) {
             startPointerInteraction();
             setInteractionMode('drawing');
             setCurrentDrawing([coords]);
@@ -1028,7 +892,15 @@ export const PageEditorModal = ({
         }
         pendingPointerCoordsRef.current = null;
 
-        if (pendingCoords && interactionMode !== 'drawing') {
+        const gestureStart = gestureAnnotationsRef.current;
+        gestureAnnotationsRef.current = null;
+        const endCoords = e ? getCanvasCoords(e) : pendingCoords;
+        const isClickWithoutMove = gestureStart !== null && endCoords !== null
+            && Math.abs(endCoords.x - dragStart.x) < 0.5 && Math.abs(endCoords.y - dragStart.y) < 0.5;
+        if (isClickWithoutMove) {
+            // Selecting by clicking must not leave an empty undo step behind.
+            setAnnotations(gestureStart);
+        } else if (pendingCoords && interactionMode !== 'drawing') {
             updatePointerInteraction(pendingCoords);
         }
 
@@ -1059,27 +931,13 @@ export const PageEditorModal = ({
                     data: { points: finalizedDrawing, strokeColor: color, strokeWidth }
                 };
             } else if (isShapeTool(activeTool) && finalizedDrawing.length >= 2) {
-                newAnn = {
-                    id: createId(),
-                    type: 'shape',
-                    x: Math.min(start.x, end.x), y: Math.min(start.y, end.y),
-                    width: Math.max(1, Math.abs(end.x - start.x)), height: Math.max(1, Math.abs(end.y - start.y)), rotation: 0,
-                    data: {
-                        shapeType: activeTool,
-                        strokeColor: color,
-                        fillColor: activeTool !== 'line' && fillEnabled ? fillColor : '',
-                        strokeWidth,
-                        x1: (start.x - Math.min(start.x, end.x)) / Math.max(1, Math.abs(end.x - start.x)),
-                        y1: (start.y - Math.min(start.y, end.y)) / Math.max(1, Math.abs(end.y - start.y)),
-                        x2: (end.x - Math.min(start.x, end.x)) / Math.max(1, Math.abs(end.x - start.x)),
-                        y2: (end.y - Math.min(start.y, end.y)) / Math.max(1, Math.abs(end.y - start.y)),
-                    } as ShapeAnnotationData
-                };
+                newAnn = buildShapeAnnotation(activeTool, start, end);
             }
 
             if (newAnn) {
-                setAnnotations(prev => [...prev, newAnn!]);
-                setSelectedAnnotationId(newAnn.id);
+                const created = newAnn;
+                setAnnotations(prev => [...prev, created]);
+                setSelectedAnnotationId(created.id);
             }
             setCurrentDrawing([]);
         }
@@ -1094,78 +952,32 @@ export const PageEditorModal = ({
         const file = e.target.files?.[0];
         if (!file) return;
         setErrorMessage('');
-
-        const normalizedName = file.name.toLowerCase();
-        const isSupportedImage = ['image/png', 'image/jpeg'].includes(file.type) ||
-            /\.(png|jpe?g)$/.test(normalizedName);
-        if (!isSupportedImage || file.size > MAX_UPLOAD_IMAGE_BYTES) {
-            setErrorMessage(t('modal.imageFileTooLarge'));
-            e.target.value = '';
+        const target = uploadTarget;
+        setUploadTarget('canvas');
+        e.target.value = '';
+        const uploaded = await readUploadedImage(file);
+        if (!uploaded.ok) {
+            setErrorMessage(t(uploaded.errorKey));
             return;
         }
-
-        try {
-            const imageBuffer = await file.arrayBuffer();
-            const dimensions = readImageDimensions(imageBuffer);
-            if (!dimensions || dimensions.width * dimensions.height > MAX_UPLOAD_IMAGE_PIXELS) {
-                setErrorMessage(t('modal.imagePixelsTooLarge'));
-                e.target.value = '';
-                return;
-            }
-
-            const normalizedImageBlob = new Blob([imageBuffer], {
-                type: dimensions.kind === 'png' ? 'image/png' : 'image/jpeg',
-            });
-            const dataUrl = await new Promise<string>((resolve, reject) => {
-                const reader = new FileReader();
-                reader.onload = (event) => {
-                    if (typeof event.target?.result === 'string') {
-                        resolve(event.target.result);
-                    } else {
-                        reject(new Error('The image could not be read.'));
-                    }
-                };
-                reader.onerror = () => reject(new Error('The image could not be read.'));
-                reader.readAsDataURL(normalizedImageBlob);
-            });
-
-            const img = new Image();
-            await new Promise<void>((resolve, reject) => {
-                img.onload = () => resolve();
-                img.onerror = () => reject(new Error('The image could not be loaded.'));
-                img.src = dataUrl;
-            });
-
-            if (img.width * img.height > MAX_UPLOAD_IMAGE_PIXELS) {
-                setErrorMessage(t('modal.imagePixelsTooLarge'));
-                return;
-            }
-
-            if (uploadTarget === 'canvas') {
-                imageCacheRef.current.set(dataUrl, img);
-                const newAnnotation = createImageLikeAnnotation(dataUrl, img.width, img.height);
-                setAnnotations(prev => [...prev, newAnnotation]);
-                setSelectedAnnotationId(newAnnotation.id);
-                setActiveTool('select');
-            } else {
-                imageCacheRef.current.set(dataUrl, img);
-                const uploadedName = file.name.replace(/\.[^.]+$/, '').trim();
-                const wasSaved = addSavedAsset({
-                    id: createId(),
-                    name: uploadedName || `${t('modal.image')} ${savedAssets.length + 1}`,
-                    dataUrl,
-                    width: img.width,
-                    height: img.height,
-                });
-                if (!wasSaved) imageCacheRef.current.delete(dataUrl);
-            }
-        } catch (error) {
-            console.error('Failed to load the uploaded image:', error);
-            setErrorMessage(t('modal.imageLoadFailed'));
-        } finally {
-            setUploadTarget('canvas');
-            e.target.value = '';
+        const { dataUrl, image } = uploaded;
+        imageCacheRef.current.set(dataUrl, image);
+        if (target === 'canvas') {
+            const newAnnotation = createImageLikeAnnotation(dataUrl, image.width, image.height);
+            setAnnotations(prev => [...prev, newAnnotation]);
+            setSelectedAnnotationId(newAnnotation.id);
+            setActiveTool('select');
+            return;
         }
+        const uploadedName = file.name.replace(/.[^.]+$/, '').trim();
+        const wasSaved = assets.addSavedAsset({
+            id: createId(),
+            name: uploadedName || `${t('modal.image')} ${assets.savedAssets.length + 1}`,
+            dataUrl,
+            width: image.width,
+            height: image.height,
+        });
+        if (!wasSaved) imageCacheRef.current.delete(dataUrl);
     };
 
     const handleSave = () => {
@@ -1177,29 +989,145 @@ export const PageEditorModal = ({
     const currentEditingTextId = editingTextId;
     const currentEditingText = currentEditingTextId ? annotations.find(a => a.id === currentEditingTextId) : null;
     const showTextControls = activeTool === 'text' || Boolean(activeTextAnnotation);
-    const toolItems = [
-        { id: 'content', icon: FilePenLine, label: t('modal.editContent') },
-        { id: 'select', icon: MousePointer2, label: t('modal.select') },
-        { id: 'text', icon: Type, label: t('modal.text') },
-        { id: 'draw', icon: Pencil, label: t('modal.draw') },
-        { id: 'rectangle', icon: Square, label: t('modal.rect') },
-        { id: 'circle', icon: Circle, label: t('modal.circle') },
-        { id: 'line', icon: Minus, label: t('modal.line') },
-        { id: 'image', icon: ImageIcon, label: t('modal.image') },
-    ] as const;
-    const contentModeStatus = activeTool === 'content' ? (
-        <div
-            role="status"
-            aria-live="polite"
-            className="flex h-9 items-center gap-2 whitespace-nowrap rounded-lg border border-amber-200 bg-amber-50 px-2 text-xs font-semibold text-amber-950 sm:px-3"
-        >
-            <FilePenLine aria-hidden="true" className="h-4 w-4 shrink-0" />
-            <span className="sr-only sm:not-sr-only">{t('modal.editContent')}</span>
-            <span className="rounded-full bg-amber-200/70 px-2 py-0.5 tabular-nums">
-                {contentEdits.length}
-            </span>
-        </div>
-    ) : null;
+    // The context bar only shows settings that apply to the current tool.
+    const showStrokeControls = activeTool === 'draw' || (isShapeTool(activeTool) && activeTool !== 'highlight' && activeTool !== 'redaction');
+    const drawsWithColor = activeTool === 'text' || activeTool === 'draw' || activeTool === 'highlight' || (isShapeTool(activeTool) && activeTool !== 'redaction');
+    const toolGroups: ToolItem[][] = [
+        [
+            { id: 'select', icon: MousePointer2, label: t('modal.select') },
+            { id: 'content', icon: FilePenLine, label: t('modal.editContent'), shortLabel: t('modal.contentShort') },
+            ...(formFieldCount > 0 ? [{ id: 'form' as const, icon: TextCursorInput, label: t('modal.fillForm'), shortLabel: t('modal.formShort') }] : []),
+        ],
+        [
+            { id: 'text', icon: Type, label: t('modal.text') },
+            { id: 'highlight', icon: Highlighter, label: t('modal.highlight') },
+            { id: 'draw', icon: Pencil, label: t('modal.draw') },
+        ],
+        [
+            { id: 'rectangle', icon: Square, label: t('modal.rect') },
+            { id: 'circle', icon: Circle, label: t('modal.circle') },
+            { id: 'line', icon: Minus, label: t('modal.line') },
+            { id: 'arrow', icon: MoveUpRight, label: t('modal.arrow') },
+        ],
+        [
+            { id: 'image', icon: ImageIcon, label: t('modal.image') },
+            { id: 'redaction', icon: EyeOff, label: t('modal.redact') },
+        ],
+    ];
+    const annotationColors: ColorPreset[] = [
+        { hex: '#000000', label: t('modal.colorBlack') },
+        { hex: '#dc2626', label: t('modal.colorRed') },
+        { hex: '#2563eb', label: t('modal.colorBlue') },
+        { hex: '#16a34a', label: t('modal.colorGreen') },
+        { hex: '#ea580c', label: t('modal.colorOrange') },
+        { hex: '#7c3aed', label: t('modal.colorViolet') },
+    ];
+    const highlightColors: ColorPreset[] = [
+        { hex: DEFAULT_HIGHLIGHT_COLOR, label: t('modal.colorYellow') },
+        { hex: '#4ade80', label: t('modal.colorGreen') },
+        { hex: '#f472b6', label: t('modal.colorPink') },
+        { hex: '#60a5fa', label: t('modal.colorBlue') },
+    ];
+    const selectionLabel = (() => {
+        if (activeTool !== 'select' || !selectedAnnotation) return null;
+        if (selectedAnnotation.type === 'shape' && selectedShapeData) {
+            const shapeLabels: Record<ShapeAnnotationData['shapeType'], string> = {
+                rectangle: t('modal.rect'),
+                circle: t('modal.circle'),
+                line: t('modal.line'),
+                arrow: t('modal.arrow'),
+                highlight: t('modal.highlight'),
+                redaction: t('modal.redact'),
+            };
+            return shapeLabels[selectedShapeData.shapeType];
+        }
+        return selectedAnnotation.type === 'text' ? t('modal.text')
+            : selectedAnnotation.type === 'drawing' ? t('modal.draw')
+                : t('modal.image');
+    })();
+    const usesFallbackFont = contentEdits.length > 0 && fallbackContentEdits === contentEdits;
+    const contextBarProps: ContextBarProps = activeTool === 'content'
+        ? { mode: 'content', editCount: contentEdits.length, usesFallbackFont }
+        : activeTool === 'form'
+            ? { mode: 'form', fieldCount: formFieldCount, usesFallbackFont }
+            : activeTool === 'redaction'
+                ? { mode: 'redaction', usesFallbackFont }
+                : {
+                    mode: 'annotate',
+                    usesFallbackFont,
+                    selectionLabel,
+                    hasRedactions,
+                    text: showTextControls ? {
+                        fontSize: toolbarFontSize,
+                        fontFamily: toolbarFontFamily,
+                        bold: toolbarBold,
+                        italic: toolbarItalic,
+                        onFontSizeChange: nextSize => {
+                            setFontSize(nextSize);
+                            if (hasActiveTextAnnotation) applyTextStyleToActive(data => ({ ...data, fontSize: nextSize }));
+                        },
+                        onFontFamilyChange: nextFamily => {
+                            setTextFontFamily(nextFamily);
+                            if (hasActiveTextAnnotation) applyTextStyleToActive(data => ({ ...data, fontFamily: nextFamily }));
+                        },
+                        onBoldChange: nextBold => {
+                            setTextBold(nextBold);
+                            if (hasActiveTextAnnotation) applyTextStyleToActive(data => ({ ...data, bold: nextBold }));
+                        },
+                        onItalicChange: nextItalic => {
+                            setTextItalic(nextItalic);
+                            if (hasActiveTextAnnotation) applyTextStyleToActive(data => ({ ...data, italic: nextItalic }));
+                        },
+                    } : null,
+                    color: showColorPicker && (drawsWithColor || hasActiveTextAnnotation) ? {
+                        value: pickerColor,
+                        presets: isHighlightContext ? highlightColors : annotationColors,
+                        onChange: nextColor => {
+                            if (isHighlightContext) {
+                                setHighlightColor(nextColor);
+                                return;
+                            }
+                            setColor(nextColor);
+                            if (hasActiveTextAnnotation) {
+                                applyTextStyleToActive(data => ({ ...data, color: nextColor }));
+                            }
+                        },
+                    } : null,
+                    stroke: showStrokeControls ? { width: strokeWidth, color: toolbarColor, onChange: setStrokeWidth } : null,
+                    // Fill configures the next shape, or edits the selected one in the select tool.
+                    fill: activeTool === 'rectangle' || activeTool === 'circle' || editsSelectedShapeFill ? {
+                        enabled: toolbarFillEnabled,
+                        color: toolbarFillColor,
+                        opacity: toolbarFillOpacity,
+                        onToggle: () => {
+                            const enabled = !toolbarFillEnabled;
+                            setFillEnabled(enabled);
+                            updateSelectedShapeFill({ fillColor: enabled ? toolbarFillColor : '' });
+                        },
+                        onColorChange: nextColor => {
+                            setFillColor(nextColor);
+                            setFillEnabled(true);
+                            updateSelectedShapeFill({ fillColor: nextColor });
+                        },
+                        onOpacityChange: nextOpacity => {
+                            setFillOpacity(nextOpacity);
+                            updateSelectedShapeFill({ fillOpacity: nextOpacity });
+                        },
+                    } : null,
+                    selection: selectedAnnotationId ? { onDuplicate: duplicateSelection, onDelete: deleteSelection } : null,
+                };
+    const selectTool = (tool: Tool) => {
+        if (tool === 'image') {
+            setUploadTarget('canvas');
+            fileInputRef.current?.click();
+            return;
+        }
+        if (isLayerTool(tool)) {
+            assets.setIsAssetsPanelOpen(false);
+            setSelectedAnnotationId(null);
+        }
+        setActiveTool(tool);
+    };
 
     return (
         <div
@@ -1226,562 +1154,201 @@ export const PageEditorModal = ({
                     </div>
                 ) : null}
             </div>
-            <div className="workspace-header z-[60] px-2 py-2 text-gray-900 sm:px-3">
-                <div className="grid grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)] items-center gap-2">
-                    <h2 id="page-editor-title" className="truncate font-semibold text-gray-700">
-                        {t('common.page')} {pageIndex}
-                    </h2>
-                    {onRequestNavigate ? (
-                        <div
-                            role="group"
-                            aria-label={t('modal.pageNavigation')}
-                            className="header-action-group justify-self-center"
-                        >
-                            <button
-                                type="button"
-                                onClick={() => handleNavigateRequest(-1)}
-                                disabled={!hasPreviousPage || !canSaveContent}
-                                className="toolbar-button"
-                                title={t('modal.previousPage')}
-                                aria-label={t('modal.previousPage')}
-                            >
-                                <ChevronLeft aria-hidden="true" className="h-4 w-4" />
-                            </button>
-                            {contentModeStatus}
-                            <button
-                                type="button"
-                                onClick={() => handleNavigateRequest(1)}
-                                disabled={!hasNextPage || !canSaveContent}
-                                className="toolbar-button"
-                                title={t('modal.nextPage')}
-                                aria-label={t('modal.nextPage')}
-                            >
-                                <ChevronRight aria-hidden="true" className="h-4 w-4" />
-                            </button>
-                        </div>
-                    ) : contentModeStatus ?? <div aria-hidden="true" />}
-                    <div className="header-action-group justify-self-end">
-                        <button
-                            type="button"
-                            onClick={handleCloseRequest}
-                            className="toolbar-button"
-                            title={t('common.cancel')}
-                            aria-label={t('common.cancel')}
-                        >
-                            <X aria-hidden="true" className="h-4 w-4" />
-                        </button>
-                        <button
-                            type="button"
-                            onClick={handleSave}
-                            disabled={!canSaveContent}
-                            className="primary-action h-10 w-10 shrink-0 p-0"
-                            title={t('common.save')}
-                            aria-label={t('common.save')}
-                        >
-                            <Check aria-hidden="true" className="h-4 w-4" />
-                        </button>
-                    </div>
-                </div>
-                {contentEdits.length > 0 && fallbackContentEdits === contentEdits ? (
-                    <p role="status" className="mx-auto mt-2 max-w-2xl text-center text-sm text-gray-700">
-                        {t('modal.contentFallbackFont')}
-                    </p>
-                ) : null}
-                {showTextControls ? (
-                    <div className="mt-2 flex min-w-0 justify-center overflow-x-auto">
-                        <div className="flex w-fit items-center gap-2 whitespace-nowrap rounded-lg border border-gray-200 bg-white p-1">
-                            <select
-                                value={toolbarFontSize}
-                                onChange={(e) => {
-                                    const nextSize = Number(e.target.value);
-                                    setFontSize(nextSize);
-                                    if (hasActiveTextAnnotation) {
-                                        applyTextStyleToActive(data => ({ ...data, fontSize: nextSize }));
-                                    }
-                                }}
-                                className="h-9 min-w-[86px] shrink-0 rounded border border-gray-300 bg-white px-2 py-1 text-xs text-gray-700 focus:outline-none focus:ring-1 focus:ring-blue-500"
-                            >
-                                {[12, 16, 20, 24, 32, 48, 64].map(s => <option key={s} value={s}>{s}px</option>)}
-                            </select>
-                            <select
-                                value={toolbarFontFamily}
-                                onChange={(e) => {
-                                    const nextFamily = e.target.value as (typeof TEXT_FONTS)[number];
-                                    setTextFontFamily(nextFamily);
-                                    if (hasActiveTextAnnotation) {
-                                        applyTextStyleToActive(data => ({ ...data, fontFamily: nextFamily }));
-                                    }
-                                }}
-                                className="h-9 min-w-[130px] shrink-0 rounded border border-gray-300 bg-white px-2 py-1 text-xs text-gray-700 focus:outline-none focus:ring-1 focus:ring-blue-500"
-                            >
-                                {TEXT_FONTS.map(font => <option key={font} value={font}>{font}</option>)}
-                            </select>
-                        </div>
-                    </div>
-                ) : null}
-            </div>
+            <EditorHeader
+                pagePosition={pagePosition ?? pageIndex}
+                pageCount={onRequestNavigate ? pageCount : undefined}
+                navigation={onRequestNavigate ? { hasPrevious: hasPreviousPage, hasNext: hasNextPage, onNavigate: handleNavigateRequest } : undefined}
+                canSave={canSaveContent}
+                canUndo={canUndoEdit}
+                canRedo={canRedoEdit}
+                onUndo={() => restoreHistoryEntry(-1)}
+                onRedo={() => restoreHistoryEntry(1)}
+                onCancel={handleCloseRequest}
+                onSave={handleSave}
+            />
 
-            <div className="pointer-events-none absolute left-2 top-16 z-[70] sm:left-3">
-                <div className="pointer-events-auto flex max-h-[calc(100vh-5rem)] flex-col gap-2 overflow-y-auto rounded-lg border border-gray-200 bg-white p-1.5 shadow-lg">
-                    {toolItems.map(tool => (
-                        <button
-                            key={tool.id}
-                            onClick={() => {
-                                if (tool.id === 'image') {
-                                    setUploadTarget('canvas');
-                                    fileInputRef.current?.click();
-                                    return;
-                                }
-                                if (tool.id === 'content') {
-                                    setIsAssetsPanelOpen(false);
-                                    setSelectedAnnotationId(null);
-                                }
-                                setActiveTool(tool.id as Tool);
-                            }}
-                            className={`inline-flex h-11 w-11 shrink-0 items-center justify-center rounded-md border border-gray-200 transition-all focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-600 ${
-                                activeTool === tool.id
-                                    ? tool.id === 'content'
-                                        ? 'border-amber-500 bg-amber-500 text-white shadow-inner'
-                                        : 'border-blue-600 bg-blue-600 text-white shadow-inner'
-                                    : 'bg-white text-gray-700 hover:bg-gray-50'
-                            }`}
-                            title={tool.label}
-                            aria-label={tool.label}
-                        >
-                            <tool.icon className="w-4 h-4" />
-                        </button>
-                    ))}
-                    <div className={`h-px bg-gray-200 my-1 ${activeTool === 'content' ? 'hidden' : ''}`}></div>
-                    <input
-                        type="color"
-                        value={toolbarColor}
-                        onChange={(e) => {
-                            const nextColor = e.target.value;
-                            setColor(nextColor);
-                            if (hasActiveTextAnnotation) {
-                                applyTextStyleToActive(data => ({ ...data, color: nextColor }));
-                            }
-                        }}
-                        title={t('modal.color')}
-                        aria-label={t('modal.color')}
-                        className={`h-9 w-9 rounded-md cursor-pointer border border-gray-300 p-0 overflow-hidden bg-white shrink-0 ${activeTool === 'content' ? 'hidden' : ''}`}
-                    />
-                    {showFillControls && activeTool !== 'content' ? (
-                        <>
-                            <button
-                                type="button"
-                                onClick={() => {
-                                    const enabled = !toolbarFillEnabled;
-                                    setFillEnabled(enabled);
-                                    updateSelectedShapeFill(enabled ? toolbarFillColor : '');
+            <div className="editor-body">
+                <ToolRail groups={toolGroups} activeTool={activeTool} onToolSelect={selectTool} />
+
+                <div className="editor-canvas-area">
+                    <div ref={editorViewportRef} className={`workspace-canvas editor-viewport custom-scrollbar ${assets.isAssetsPanelOpen ? 'editor-viewport--with-panel' : ''}`}>
+                        <div className="flex min-h-full w-max min-w-full items-start justify-center">
+                            <div
+                                className="relative mx-auto"
+                                style={{
+                                    width: canvasWidth * editorScale,
+                                    height: canvasHeight * editorScale
                                 }}
-                                className={`inline-flex h-11 w-11 shrink-0 items-center justify-center rounded-md border focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-600 ${toolbarFillEnabled ? 'border-blue-600 bg-blue-600 text-white' : 'border-gray-300 bg-white text-gray-700 hover:bg-gray-50'}`}
-                                title={t('modal.fillShape')}
-                                aria-label={t('modal.fillShape')}
-                                aria-pressed={toolbarFillEnabled}
                             >
-                                <PaintBucket aria-hidden="true" className="h-4 w-4" />
-                            </button>
-                            <input
-                                type="color"
-                                value={toolbarFillColor}
-                                onChange={(event) => {
-                                    setFillColor(event.target.value);
-                                    setFillEnabled(true);
-                                    updateSelectedShapeFill(event.target.value);
-                                }}
-                                title={t('modal.fillColor')}
-                                aria-label={t('modal.fillColor')}
-                                className="h-11 w-11 shrink-0 cursor-pointer overflow-hidden rounded-md border border-gray-300 bg-white p-0 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-600"
-                            />
-                        </>
-                    ) : null}
-                    <div className={`w-9 rounded-md border border-gray-300 bg-white p-1 ${activeTool === 'content' ? 'hidden' : ''}`}>
-                        <div className="flex flex-col items-center gap-1">
-                            {STROKE_GRAPHIC_OPTIONS.map((w) => (
-                                <button
-                                    key={w}
-                                    type="button"
-                                    onClick={() => setStrokeWidth(w)}
-                                    className={`h-4 w-full rounded-sm px-1 transition-colors ${strokeWidth === w ? 'bg-blue-100' : 'hover:bg-gray-100'}`}
-                                    title={`${w}px`}
-                                    aria-label={`${w}px`}
+                                <div
+                                    className="relative origin-top-left shadow-2xl bg-white rounded-lg"
+                                    style={{
+                                        width: canvasWidth,
+                                        height: canvasHeight,
+                                        transform: `scale(${editorScale})`
+                                    }}
                                 >
-                                    <span
-                                        className="block w-full rounded-full"
-                                        style={{
-                                            height: Math.max(1, Math.min(6, Math.round(w / 4))),
-                                            backgroundColor: toolbarColor,
-                                            boxShadow: 'inset 0 0 0 1px rgba(0,0,0,0.08)'
+                                    <PdfPreview
+                                        pdfDocument={pdfDocument}
+                                        pageIndex={pageIndex}
+                                        width={canvasWidth}
+                                        height={canvasHeight}
+                                        rotation={pageRotation}
+                                        contentEdits={contentEdits}
+                                        formValues={previewFormValues}
+                                        onContentPreview={handleContentPreview}
+                                        className="rounded-lg ring-1 ring-gray-200"
+                                    />
+                                    <canvas
+                                        ref={canvasRef}
+                                        width={canvasWidth}
+                                        height={canvasHeight}
+                                        role="img"
+                                        aria-label={t('modal.canvasLabel')}
+                                        className={`absolute top-0 left-0 z-[10] ${
+                                            isLayerTool(activeTool)
+                                                ? 'pointer-events-none'
+                                                : activeTool === 'select'
+                                                    ? 'touch-auto cursor-default'
+                                                    : 'touch-none cursor-crosshair'
+                                        }`}
+                                        onPointerDown={handlePointerDown}
+                                        onPointerMove={handlePointerMove}
+                                        onPointerUp={handlePointerUp}
+                                        onPointerCancel={handlePointerUp}
+                                        onDoubleClick={(e) => {
+                                            if (editingTextIdRef.current) return;
+                                            const coords = getCanvasCoords(e);
+                                            const hit = [...annotations].reverse().find(ann => ann.type === 'text' && isPointInAnnotation(coords.x, coords.y, ann));
+                                            if (hit) {
+                                                beginTextAnnotationEdit(hit);
+                                            }
                                         }}
                                     />
-                                </button>
-                            ))}
-                        </div>
-                    </div>
-                    <button
-                        type="button"
-                        onClick={() => {
-                            const nextBold = !toolbarBold;
-                            setTextBold(nextBold);
-                            if (hasActiveTextAnnotation) {
-                                applyTextStyleToActive(data => ({ ...data, bold: nextBold }));
-                            }
-                        }}
-                        className={`h-9 w-9 items-center justify-center rounded-md border transition-colors shrink-0 ${activeTool === 'content' ? 'hidden' : 'inline-flex'} ${toolbarBold ? 'bg-blue-600 text-white border-blue-600' : 'text-gray-700 bg-white border-gray-200 hover:bg-gray-50'}`}
-                        title={t('modal.bold')}
-                        aria-label={t('modal.bold')}
-                        aria-pressed={toolbarBold}
-                    >
-                        <Bold className="w-4 h-4" />
-                    </button>
-                    <button
-                        type="button"
-                        onClick={() => {
-                            const nextItalic = !toolbarItalic;
-                            setTextItalic(nextItalic);
-                            if (hasActiveTextAnnotation) {
-                                applyTextStyleToActive(data => ({ ...data, italic: nextItalic }));
-                            }
-                        }}
-                        className={`h-9 w-9 items-center justify-center rounded-md border transition-colors shrink-0 ${activeTool === 'content' ? 'hidden' : 'inline-flex'} ${toolbarItalic ? 'bg-blue-600 text-white border-blue-600' : 'text-gray-700 bg-white border-gray-200 hover:bg-gray-50'}`}
-                        title={t('modal.italic')}
-                        aria-label={t('modal.italic')}
-                        aria-pressed={toolbarItalic}
-                    >
-                        <Italic className="w-4 h-4" />
-                    </button>
-                    <div className={`h-px bg-gray-200 my-1 ${activeTool === 'content' ? 'hidden' : ''}`}></div>
-                    <button
-                        onClick={() => { setAnnotations(prev => prev.filter(a => a.id !== selectedAnnotationId)); setSelectedAnnotationId(null); }}
-                        disabled={!selectedAnnotationId}
-                        className={`h-9 w-9 items-center justify-center rounded-md border border-gray-200 transition-colors text-gray-700 bg-white hover:bg-red-100 hover:text-red-600 disabled:opacity-30 disabled:hover:bg-white disabled:hover:text-gray-700 ${activeTool === 'content' ? 'hidden' : 'inline-flex'}`}
-                        title={t('modal.deleteSelection')}
-                        aria-label={t('modal.deleteSelection')}
-                    >
-                        <Trash2 className="w-4 h-4" />
-                    </button>
-                </div>
-            </div>
 
-            <div className="pointer-events-none absolute bottom-3 right-0 top-16 z-[70] flex items-start">
-                <div className="pointer-events-auto flex h-full items-start">
-                    <button
-                        type="button"
-                        onClick={() => setIsAssetsPanelOpen((prev) => !prev)}
-                        className="mt-4 inline-flex h-12 w-10 items-center justify-center rounded-l-2xl border border-r-0 border-gray-200 bg-white/95 text-gray-700 shadow-lg backdrop-blur transition hover:bg-gray-50"
-                        title={isAssetsPanelOpen ? t('modal.closeAssetsPanel') : t('modal.openAssetsPanel')}
-                        aria-label={isAssetsPanelOpen ? t('modal.closeAssetsPanel') : t('modal.openAssetsPanel')}
-                    >
-                        {isAssetsPanelOpen ? <ChevronRight aria-hidden="true" className="h-4 w-4" /> : <ChevronLeft aria-hidden="true" className="h-4 w-4" />}
-                    </button>
-                    <div
-                        className={`h-full overflow-hidden rounded-l-2xl border-y border-l border-gray-200 bg-white/95 shadow-xl backdrop-blur transition-all duration-300 motion-reduce:transition-none ${
-                            isAssetsPanelOpen
-                                ? 'w-[min(18rem,calc(100vw-4rem))] translate-x-0 opacity-100'
-                                : 'w-0 translate-x-4 opacity-0'
-                        }`}
-                    >
-                        <div className="flex h-full min-h-0 flex-col">
-                            <div className="border-b border-gray-200 bg-gradient-to-r from-blue-50 via-white to-white px-4 py-3">
-                                <div className="text-sm font-semibold text-gray-900">{t('modal.savedAssets')}</div>
-                                <div className="text-[11px] text-gray-500">{t('modal.savedAssetsHint')}</div>
-                            </div>
-                            <div className="flex min-h-0 flex-1 flex-col overflow-y-auto px-4 py-4 custom-scrollbar">
-                                <button
-                                    type="button"
-                                    onClick={() => {
-                                        setUploadTarget('library');
-                                        fileInputRef.current?.click();
-                                    }}
-                                    className="inline-flex h-11 w-full shrink-0 items-center justify-center gap-2 rounded-xl bg-blue-600 px-4 text-sm font-semibold text-white shadow-sm transition-colors hover:bg-blue-700 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-600 focus-visible:ring-offset-2"
-                                    title={t('modal.uploadLibraryImage')}
-                                >
-                                    <ImageIcon aria-hidden="true" className="h-4 w-4" />
-                                    {t('modal.uploadLibraryImage')}
-                                </button>
+                                    <ContentEditLayer
+                                        isActive={activeTool === 'content'}
+                                        pdfDocument={pdfDocument}
+                                        pageIndex={pageIndex}
+                                        displayRotation={totalRotation}
+                                        width={canvasWidth}
+                                        height={canvasHeight}
+                                        edits={contentEdits}
+                                        labels={{
+                                            loading: t('modal.contentLoading'),
+                                            empty: t('modal.contentEmpty'),
+                                            hint: t('modal.contentHint'),
+                                            editText: t('modal.editExistingText'),
+                                            deleteSelection: t('modal.deleteSelection'),
+                                            restoreSelection: t('modal.restoreContent'),
+                                            moveLeft: t('modal.moveContentLeft'),
+                                            moveRight: t('modal.moveContentRight'),
+                                            moveUp: t('modal.moveContentUp'),
+                                            moveDown: t('modal.moveContentDown'),
+                                            textElement: t('modal.textElement'),
+                                            imageElement: t('modal.imageElement'),
+                                            parseFailed: t('modal.contentParseFailed'),
+                                            pageTooLarge: t('modal.pageTooLarge'),
+                                            tooManyElements: t('modal.tooManyElements'),
+                                        }}
+                                        onChange={setContentEdits}
+                                        onError={handleContentParseError}
+                                    />
 
-                                <div className="mt-5 text-xs font-semibold text-gray-700">
-                                    {t('modal.savedItems')}
-                                </div>
-                                <div className="mt-2 space-y-3">
-                                    {savedAssets.length === 0 ? (
-                                        <p className="rounded-xl bg-gray-50 px-3 py-4 text-center text-xs leading-5 text-gray-500">
-                                            {t('modal.noSavedAssets')}
-                                        </p>
-                                    ) : savedAssets.map(asset => (
-                                        <div key={asset.id} className="overflow-hidden rounded-xl border border-gray-200 bg-white">
-                                            <button
-                                                type="button"
-                                                onClick={() => insertSavedAsset(asset)}
-                                                className="block w-full bg-gray-50 p-2 transition-colors hover:bg-blue-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-blue-600"
-                                                title={`${t('modal.insertAsset')}: ${asset.name}`}
-                                                aria-label={`${t('modal.insertAsset')}: ${asset.name}`}
-                                            >
-                                                <img src={asset.dataUrl} alt="" className="h-24 w-full object-contain" />
-                                            </button>
-                                            <div className="flex min-h-12 items-center gap-1.5 border-t border-gray-100 px-2 py-1.5">
-                                                {renamingAssetId === asset.id ? (
-                                                    <input
-                                                        type="text"
-                                                        value={assetNameDraft}
-                                                        onChange={(event) => setAssetNameDraft(event.target.value)}
-                                                        onKeyDown={(event) => {
-                                                            if (event.key === 'Enter') {
-                                                                event.preventDefault();
-                                                                commitAssetName(asset.id);
-                                                            } else if (event.key === 'Escape') {
-                                                                event.preventDefault();
-                                                                event.stopPropagation();
-                                                                cancelRenamingAsset();
-                                                            }
-                                                        }}
-                                                        autoFocus
-                                                        className="h-9 min-w-0 flex-1 rounded-lg border border-blue-300 px-2 text-sm text-gray-800 outline-none focus:border-blue-600 focus:ring-2 focus:ring-blue-100"
-                                                        aria-label={t('modal.assetNameLabel')}
-                                                    />
-                                                ) : (
-                                                    <span className="min-w-0 flex-1 truncate px-1 text-xs font-medium text-gray-700">
-                                                        {asset.name}
-                                                    </span>
-                                                )}
-                                                {renamingAssetId === asset.id ? (
-                                                    <>
-                                                        <button
-                                                            type="button"
-                                                            onClick={() => commitAssetName(asset.id)}
-                                                            disabled={!assetNameDraft.trim()}
-                                                            className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-lg text-blue-700 hover:bg-blue-50 disabled:opacity-40"
-                                                            title={t('common.save')}
-                                                            aria-label={t('common.save')}
-                                                        >
-                                                            <Check aria-hidden="true" className="h-4 w-4" />
-                                                        </button>
-                                                        <button
-                                                            type="button"
-                                                            onClick={cancelRenamingAsset}
-                                                            className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-lg text-gray-600 hover:bg-gray-100"
-                                                            title={t('common.cancel')}
-                                                            aria-label={t('common.cancel')}
-                                                        >
-                                                            <X aria-hidden="true" className="h-4 w-4" />
-                                                        </button>
-                                                    </>
-                                                ) : (
-                                                    <>
-                                                        <button
-                                                            type="button"
-                                                            onClick={() => beginRenamingAsset(asset)}
-                                                            className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-lg text-gray-600 hover:bg-blue-50 hover:text-blue-700"
-                                                            title={t('modal.renameAsset')}
-                                                            aria-label={`${t('modal.renameAsset')}: ${asset.name}`}
-                                                        >
-                                                            <Pencil aria-hidden="true" className="h-4 w-4" />
-                                                        </button>
-                                                        <button
-                                                            type="button"
-                                                            onClick={() => removeSavedAsset(asset.id)}
-                                                            className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-lg text-gray-600 hover:bg-red-50 hover:text-red-600"
-                                                            title={t('common.delete')}
-                                                            aria-label={`${t('common.delete')}: ${asset.name}`}
-                                                        >
-                                                            <Trash2 aria-hidden="true" className="h-4 w-4" />
-                                                        </button>
-                                                    </>
-                                                )}
-                                            </div>
-                                        </div>
-                                    ))}
+                                    <FormFieldLayer
+                                        isActive={activeTool === 'form'}
+                                        pdfDocument={pdfDocument}
+                                        pageIndex={pageIndex}
+                                        displayRotation={totalRotation}
+                                        width={canvasWidth}
+                                        height={canvasHeight}
+                                        values={formValues}
+                                        onChange={handleFormValueChange}
+                                        onFieldCount={setFormFieldCount}
+                                    />
+
+                                    {currentEditingText && !isLayerTool(activeTool) && (
+                                        <textarea
+                                            ref={textareaRef}
+                                            className="absolute bg-white border-2 border-blue-500 rounded shadow-[0_0_20px_rgba(59,130,246,0.5)] p-2 outline-none resize-none whitespace-pre-wrap leading-tight text-gray-900 text-left overflow-auto z-[100]"
+                                            style={{
+                                                left: currentEditingText.x,
+                                                top: currentEditingText.y,
+                                                minWidth: '150px',
+                                                width: Math.max(150, currentEditingText.width || 0),
+                                                minHeight: '60px',
+                                                height: Math.max(80, currentEditingText.height || 0),
+                                                fontSize: `${(currentEditingText.data as TextAnnotationData).fontSize}px`,
+                                                color: (currentEditingText.data as TextAnnotationData).color,
+                                                fontFamily: (currentEditingText.data as TextAnnotationData).fontFamily,
+                                                lineHeight: 1.25,
+                                                transform: `rotate(${currentEditingText.rotation}deg)`,
+                                                transformOrigin: 'top left'
+                                            }}
+                                            autoFocus
+                                            placeholder={t('modal.typeHere')}
+                                            value={(currentEditingText.data as TextAnnotationData).text}
+                                            onMouseDown={(e) => e.stopPropagation()}
+                                            onKeyDown={(e) => {
+                                                e.stopPropagation();
+                                                if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) handleTextEditComplete();
+                                            }}
+                                            onChange={(e) => {
+                                                const newText = e.target.value;
+                                                if (!editingTextId) return;
+                                                updateTextAnnotation(editingTextId, data => ({ ...data, text: newText }));
+                                            }}
+                                            onBlur={handleTextEditComplete}
+                                        />
+                                    )}
                                 </div>
                             </div>
                         </div>
                     </div>
-                </div>
-            </div>
 
-            <div ref={editorViewportRef} className={`workspace-canvas flex-1 overflow-auto p-2 pl-14 pr-14 custom-scrollbar sm:p-4 sm:pl-16 sm:pr-16 lg:p-8 lg:pl-20 lg:pr-20 ${isAssetsPanelOpen ? 'lg:pr-[24rem]' : ''}`}>
-                <div className="flex min-h-full w-max min-w-full items-start justify-center">
-                    <div
-                        className="relative mx-auto"
-                        style={{
-                            width: canvasWidth * editorScale,
-                            height: canvasHeight * editorScale
-                        }}
-                    >
-                        <div
-                            className="relative origin-top-left shadow-2xl bg-white rounded-lg"
-                            style={{
-                                width: canvasWidth,
-                                height: canvasHeight,
-                                transform: `scale(${editorScale})`
-                            }}
+                    <ContextBar {...contextBarProps} />
+
+                    <div className="editor-corner">
+                        <ZoomControl
+                            zoom={editorZoom}
+                            onZoomOut={() => setEditorZoom(current => nextZoomStep(current, -1))}
+                            onZoomIn={() => setEditorZoom(current => nextZoomStep(current, 1))}
+                            canZoomOut={editorZoom > MIN_ZOOM + 0.001}
+                            canZoomIn={editorZoom < ZOOM_STEPS[ZOOM_STEPS.length - 1] - 0.001}
+                        />
+                        <button
+                            type="button"
+                            onClick={() => assets.setIsAssetsPanelOpen(previous => !previous)}
+                            disabled={isLayerTool(activeTool)}
+                            className="toolbar-button toolbar-button--labelled"
+                            title={assets.isAssetsPanelOpen ? t('modal.closeAssetsPanel') : t('modal.openAssetsPanel')}
+                            aria-label={assets.isAssetsPanelOpen ? t('modal.closeAssetsPanel') : t('modal.openAssetsPanel')}
+                            aria-pressed={assets.isAssetsPanelOpen}
                         >
-                            <PdfPreview
-                                pdfDocument={pdfDocument}
-                                pageIndex={pageIndex}
-                                width={canvasWidth}
-                                height={canvasHeight}
-                                rotation={pageRotation}
-                                contentEdits={contentEdits}
-                                onContentPreview={handleContentPreview}
-                                className="rounded-lg ring-1 ring-gray-200"
-                            />
-                            <canvas
-                                ref={canvasRef}
-                                width={canvasWidth}
-                                height={canvasHeight}
-                                role="img"
-                                aria-label={t('modal.canvasLabel')}
-                                className={`absolute top-0 left-0 z-[10] ${
-                                    activeTool === 'content'
-                                        ? 'pointer-events-none'
-                                        : activeTool === 'select'
-                                            ? 'touch-auto cursor-default'
-                                            : 'touch-none cursor-crosshair'
-                                }`}
-                                onPointerDown={handlePointerDown}
-                                onPointerMove={handlePointerMove}
-                                onPointerUp={handlePointerUp}
-                                onPointerCancel={handlePointerUp}
-                                onDoubleClick={(e) => {
-                                    if (editingTextIdRef.current) return;
-                                    const coords = getCanvasCoords(e);
-                                    const hit = [...annotations].reverse().find(ann => ann.type === 'text' && isPointInAnnotation(coords.x, coords.y, ann));
-                                    if (hit) {
-                                        beginTextAnnotationEdit(hit);
-                                    }
-                                }}
-                            />
-
-                            <ContentEditLayer
-                                isActive={activeTool === 'content'}
-                                pdfDocument={pdfDocument}
-                                pageIndex={pageIndex}
-                                displayRotation={totalRotation}
-                                width={canvasWidth}
-                                height={canvasHeight}
-                                edits={contentEdits}
-                                labels={{
-                                    loading: t('modal.contentLoading'),
-                                    empty: t('modal.contentEmpty'),
-                                    hint: t('modal.contentHint'),
-                                    editText: t('modal.editExistingText'),
-                                    deleteSelection: t('modal.deleteSelection'),
-                                    restoreSelection: t('modal.restoreContent'),
-                                    moveLeft: t('modal.moveContentLeft'),
-                                    moveRight: t('modal.moveContentRight'),
-                                    moveUp: t('modal.moveContentUp'),
-                                    moveDown: t('modal.moveContentDown'),
-                                    textElement: t('modal.textElement'),
-                                    imageElement: t('modal.imageElement'),
-                                    parseFailed: t('modal.contentParseFailed'),
-                                    pageTooLarge: t('modal.pageTooLarge'),
-                                    tooManyElements: t('modal.tooManyElements'),
-                                }}
-                                onChange={setContentEdits}
-                                onError={handleContentParseError}
-                            />
-
-                            {currentEditingText && activeTool !== 'content' && (
-                                <textarea
-                                    ref={textareaRef}
-                                    className="absolute bg-white border-2 border-blue-500 rounded shadow-[0_0_20px_rgba(59,130,246,0.5)] p-2 outline-none resize-none whitespace-pre-wrap leading-tight text-gray-900 text-left overflow-auto z-[100]"
-                                    style={{
-                                        left: currentEditingText.x,
-                                        top: currentEditingText.y,
-                                        minWidth: '150px',
-                                        width: Math.max(150, currentEditingText.width || 0),
-                                        minHeight: '60px',
-                                        height: Math.max(80, currentEditingText.height || 0),
-                                        fontSize: `${(currentEditingText.data as TextAnnotationData).fontSize}px`,
-                                        color: (currentEditingText.data as TextAnnotationData).color,
-                                        fontFamily: (currentEditingText.data as TextAnnotationData).fontFamily,
-                                        lineHeight: 1.25,
-                                        transform: `rotate(${currentEditingText.rotation}deg)`,
-                                        transformOrigin: 'top left'
-                                    }}
-                                    autoFocus
-                                    placeholder={t('modal.typeHere')}
-                                    value={(currentEditingText.data as TextAnnotationData).text}
-                                    onMouseDown={(e) => e.stopPropagation()}
-                                    onKeyDown={(e) => {
-                                        e.stopPropagation();
-                                        if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) handleTextEditComplete();
-                                    }}
-                                    onChange={(e) => {
-                                        const newText = e.target.value;
-                                        if (!editingTextId) return;
-                                        updateTextAnnotation(editingTextId, data => ({ ...data, text: newText }));
-                                    }}
-                                    onBlur={handleTextEditComplete}
-                                />
-                            )}
-                        </div>
+                            <Images aria-hidden="true" className="h-4 w-4" />
+                            <span className="header-label-lg">{t('modal.library')}</span>
+                        </button>
                     </div>
-                </div>
-            </div>
-            <div className={`pointer-events-none absolute bottom-3 right-2 z-[70] transition-opacity motion-reduce:transition-none sm:bottom-auto sm:right-3 sm:top-1/2 sm:-translate-y-1/2 ${isAssetsPanelOpen ? 'invisible opacity-0' : 'visible opacity-100'}`}>
-                <div className="floating-tools pointer-events-auto flex flex-col gap-1 p-1">
-                    <button
-                        type="button"
-                        onClick={() => setEditorZoom(prev => Math.max(MIN_EDITOR_ZOOM, Number((prev - EDITOR_ZOOM_STEP).toFixed(2))))}
-                        disabled={editorZoom <= MIN_EDITOR_ZOOM}
-                        className="toolbar-button h-10 w-10 p-0"
-                        title={t('editor.zoomOut')}
-                        aria-label={t('editor.zoomOut')}
-                    >
-                        <ZoomOut aria-hidden="true" className="h-4 w-4" />
-                    </button>
-                    <button
-                        type="button"
-                        onClick={() => setEditorZoom(prev => Math.min(MAX_EDITOR_ZOOM, Number((prev + EDITOR_ZOOM_STEP).toFixed(2))))}
-                        disabled={editorZoom >= MAX_EDITOR_ZOOM}
-                        className="toolbar-button h-10 w-10 p-0"
-                        title={t('editor.zoomIn')}
-                        aria-label={t('editor.zoomIn')}
-                    >
-                        <ZoomIn aria-hidden="true" className="h-4 w-4" />
-                    </button>
+
+                    <AssetsPanel
+                        assets={assets}
+                        onUpload={() => {
+                            setUploadTarget('library');
+                            fileInputRef.current?.click();
+                        }}
+                        onInsert={insertSavedAsset}
+                    />
                 </div>
             </div>
             <input ref={fileInputRef} type="file" accept="image/png,image/jpeg,.png,.jpg,.jpeg" className="hidden" onChange={handleImageUpload} />
             {isDiscardDialogOpen ? (
-                <div className="dialog-backdrop fixed inset-0 z-[200] flex items-center justify-center p-4">
-                    <div
-                        role="dialog"
-                        aria-modal="true"
-                        aria-labelledby="discard-dialog-title"
-                        aria-describedby="discard-dialog-description"
-                        className="dialog-surface w-full max-w-sm p-5"
-                    >
-                        <h2 id="discard-dialog-title" className="mb-1 text-sm font-semibold text-gray-900">{t('modal.discardTitle')}</h2>
-                        <p id="discard-dialog-description" className="mb-3 text-xs text-gray-600">{t('modal.discardDescription')}</p>
-                        <div className="mt-4 flex justify-end gap-2">
-                            <button
-                                type="button"
-                                autoFocus
-                                onClick={() => setIsDiscardDialogOpen(false)}
-                                className={discardDialogButtonClass}
-                                title={t('common.cancel')}
-                                aria-label={t('common.cancel')}
-                            >
-                                {t('common.cancel')}
-                            </button>
-                            <button
-                                type="button"
-                                onClick={() => {
-                                    setIsDiscardDialogOpen(false);
-                                    onClose();
-                                }}
-                                className={`${discardDialogButtonClass} border-red-300 text-red-600 hover:bg-red-50`}
-                                title={t('modal.discard')}
-                                aria-label={t('modal.discard')}
-                            >
-                                {t('modal.discard')}
-                            </button>
-                        </div>
-                    </div>
-                </div>
+                <DiscardDialog
+                    onCancel={() => setIsDiscardDialogOpen(false)}
+                    onDiscard={() => {
+                        setIsDiscardDialogOpen(false);
+                        onClose();
+                    }}
+                />
             ) : null}
         </div>
     );

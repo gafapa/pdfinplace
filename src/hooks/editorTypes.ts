@@ -1,5 +1,7 @@
 import type { Annotation } from '../types/annotations';
 import type { ContentEdit } from '../features/content-editor/types';
+import type { FormValues } from '../features/forms/formTypes';
+import type { ImageCompressionResult } from '../features/export/compressImages';
 import type { LoadedPdfDocument } from '../utils/pdfjs';
 import type { ImageExportFormat } from '../utils/imageExport';
 
@@ -13,6 +15,8 @@ export interface EditorPage {
     annotationCanvasWidth?: number;
     annotationCanvasHeight?: number;
     previewRevision?: number;
+    /** Filled form values of the whole source file; every page of the file carries the same map. */
+    formValues?: FormValues;
 }
 
 export interface EditorFile {
@@ -26,10 +30,18 @@ export interface EditorFile {
 export type PageSize = 'Original' | 'A4' | 'A3' | 'Letter' | 'Legal';
 export interface ExportLabels {
     failed: string;
+    /** Download name when the pages come from several files. */
     downloadPrefix: string;
-    originalName?: string;
+    /** Appended to the source file name, e.g. "invoice_edited.pdf". */
+    editedSuffix?: string;
     missingPagesWarning?: string;
     success?: string;
+    /** Explains why content edits on a page could not be saved. */
+    contentEditFailed?: (pageNumber: number, code?: string) => string;
+    /** Explains that a filled form field could not be written. */
+    formFillFailed?: (fieldName: string) => string;
+    /** Success message after an export that compressed images. */
+    compressionResult?: (result: ImageCompressionResult) => string;
 }
 
 export interface ImportLabels {
@@ -39,6 +51,11 @@ export interface ImportLabels {
     unsupported: string;
     fileSize: string;
     batchSize: string;
+    pageLimit: string;
+    imageTooLarge: string;
+    unreadable: string;
+    /** Appended to the success message when DOCX/ODT pages were imported as images. */
+    officeRasterized?: string;
     success?: string;
     onPasswordRequired?: (file: File) => void;
 }
@@ -51,6 +68,7 @@ export interface EditorNotification {
 
 export interface SplitPdfLabels extends ExportLabels {
     splitDownloadPrefix: string;
+    splitSuffix?: string;
     oddSuffix: string;
     evenSuffix: string;
     pageSuffix: string;
@@ -67,7 +85,10 @@ export interface ImageExportLabels {
     missingPagesWarning?: string;
     pagePrefix: string;
     downloadPrefix: string;
+    imagesSuffix?: string;
     success?: string;
+    contentEditFailed?: (pageNumber: number, code?: string) => string;
+    formFillFailed?: (fieldName: string) => string;
 }
 
 export interface PrintOverlayOptions {
@@ -81,6 +102,7 @@ export interface PrintOverlayOptions {
 
 export interface ProtectPdfLabels extends ExportLabels {
     invalidPassword: string;
+    protectedSuffix?: string;
 }
 
 export interface UnlockPdfLabels {

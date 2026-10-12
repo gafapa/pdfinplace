@@ -39,7 +39,6 @@ const createContext = async (persist = true, locale = 'es') => {
         // Set preferences once, preserving changes made by later scenarios/reloads.
         if (localStorage.getItem('workbench-test-initialized')) return;
         localStorage.setItem('workbench-test-initialized', 'true');
-        localStorage.setItem('pdfinplace.welcome-hidden', 'true');
         localStorage.setItem('pageforge.local-persistence-enabled', String(persist));
         localStorage.setItem('pageforge.locale', locale);
     }, { persist, locale });

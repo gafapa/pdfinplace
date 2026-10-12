@@ -492,7 +492,7 @@ describe('content stream rewriting', () => {
         expect(after.map(item => item.text).join(' ')).toContain('p');
         expect(after.map(item => item.text).join(' ')).not.toContain('Target');
         expect(after.find((item) => item.text === 'Neighbor')?.transform).toEqual(beforeNeighbor?.transform);
-        expect((await savedPageStreams(pdfDocument)).join('\n')).toMatch(/\/PDFingFallback\s+16\s+Tf/);
+        expect((await savedPageStreams(pdfDocument)).join('\n')).toMatch(/\/PdfInPlaceFallback\s+16\s+Tf/);
     });
 
     it('preserves untouched bytes in the 0x80–0x9F range', async () => {
@@ -570,7 +570,7 @@ describe('content stream rewriting', () => {
         await applyContentEditsToPdfPage(pdfDocument, page, [makeTextEdit({ originalText: 'Hola', text: 'aloH' })]);
 
         expect((await extractTextItems(pdfDocument)).map(item => item.text)).toContain('aloH');
-        expect((await savedPageStreams(pdfDocument))[0]).not.toContain('PDFingFallback');
+        expect((await savedPageStreams(pdfDocument))[0]).not.toContain('PdfInPlaceFallback');
     });
 
     it('falls back instead of using glyphs a subset font may not embed', async () => {
@@ -581,7 +581,7 @@ describe('content stream rewriting', () => {
 
         await applyContentEditsToPdfPage(pdfDocument, page, [makeTextEdit({ originalText: 'Hola', text: 'Hola!' })]);
 
-        expect((await savedPageStreams(pdfDocument))[0]).toContain('PDFingFallback');
+        expect((await savedPageStreams(pdfDocument))[0]).toContain('PdfInPlaceFallback');
     });
 
     it('decodes an unsupported named encoding through ToUnicode', async () => {
@@ -695,6 +695,6 @@ describe('content stream rewriting', () => {
         await applyContentEditsToPdfPage(pdfDocument, page, [makeTextEdit({ originalText: 'Castaño €', text: 'Pérez €' })]);
 
         expect((await extractTextItems(pdfDocument)).map(item => item.text).join(' ')).toContain('Pérez €');
-        expect((await savedPageStreams(pdfDocument))[0]).not.toContain('PDFingFallback');
+        expect((await savedPageStreams(pdfDocument))[0]).not.toContain('PdfInPlaceFallback');
     });
 });

@@ -6,10 +6,16 @@ It runs entirely in the browser. Documents remain in memory unless the user enab
 
 ## Features
 
-- Import PDF, JPG, PNG, DOCX, and ODT files.
+- Import PDF, JPG, PNG, DOCX, and ODT files. DOCX and ODT documents keep their own page size and page breaks and are added as images rendered at twice screen resolution, so their text is not selectable.
+- Open files with the installed app from the operating system, or share them to it on mobile.
 - Reorder, rotate, duplicate, delete, select, split, and export pages.
-- Export all pages, selected pages, or a page range.
-- Add text, drawings, shapes with optional solid fill, images, signatures, and stamps to pages.
+- Export all pages, selected pages, or a page range. At the original size without margins or crop, exports keep links, form fields, and other page annotations. With another page size, margins, or crop, links still work and form fields and annotations are flattened into the page. Pages from one source share its fonts and images, so files do not grow, and objects that only linked pages left out of the export used are dropped.
+- Fill in PDF form fields (text, check boxes, radio buttons, and lists) in the page editor; thumbnails and exports show the values.
+- Redact areas of a page: they are blacked out and the page is exported as an image, so nothing under the boxes remains in the file.
+- Compress images on export (balanced at 150 ppi or maximum at 96 ppi); the success message reports the savings.
+- Name downloads after the source file (for example `invoice_edited.pdf`); splitting into several files downloads one ZIP.
+- Add text, highlights, drawings, lines, arrows, shapes with optional fill and fill opacity, images, signatures, and stamps to pages. Text in any script supported by the bundled fonts is exported as selectable vector text.
+- Undo and redo in the page editor (including form values), duplicate an element (Ctrl+D), and nudge it with the arrow keys (Shift for larger steps).
 - Edit, move, restore, or remove existing PDF text and raster image content on an individual page.
 - Add watermark, header, footer, margins, crop, and page numbers.
 - Protect exported PDFs with AES-256 encryption.
@@ -36,6 +42,8 @@ npm run lint
 npm run check:sw
 npm test
 npm run test:pdfjs-resources
+npm run test:office
+npm run test:tools
 npm run build
 npm run build:test
 npm audit
@@ -60,7 +68,9 @@ npm run test:browser:all
 ```
 
 The runner starts and closes isolated localhost servers on dynamically allocated ports. It
-checks editing at desktop/mobile sizes, atomic conflicts across tabs, storage quota
+checks editing at desktop/mobile sizes (including highlights, arrows, editor undo/redo and
+duplication), DOCX/ODT conversion, form filling, redaction and image compression,
+atomic conflicts across tabs, storage quota
 rollback and retry, session restoration, thumbnail deferral, import/export
 cancellation, and warm offline restoration/export in Chromium, Firefox, and WebKit.
 All fixtures are generated locally and contain fictitious text. Optional screenshots
@@ -84,7 +94,7 @@ Standard GitHub-hosted runners are free for this public repository. If the repos
 npm run build
 ```
 
-The production app is emitted to `dist/` and is configured for `https://pdfinplace.com` and mirrored to `https://pdfing.gallego.top`.
+The production app is emitted to `dist/` with `https://pdfinplace.com/` as its canonical URL, plus a generated `robots.txt` and `sitemap.xml`. Test and development builds emit a `robots.txt` that disallows crawling.
 
 Build the test environment with:
 
@@ -92,7 +102,7 @@ Build the test environment with:
 npm run build:test
 ```
 
-The test build is configured for `https://test.pdfing.gallego.top`, displays a persistent `TEST` marker, and uses `noindex,nofollow`.
+The test build is published to `https://test.pdfinplace.com`, displays a persistent `TEST` marker, and uses `noindex,nofollow`.
 
 Stage complete builds in the canonical local server-management workspace with
 `npm run stage:production` and `npm run stage:test`.

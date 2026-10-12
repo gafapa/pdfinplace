@@ -5,10 +5,7 @@ param(
 
     [switch]$AllowProduction,
 
-    [switch]$SkipBuild,
-
-    [ValidateSet("pdfinplace.com")]
-    [string]$Domain
+    [switch]$SkipBuild
 )
 
 Set-StrictMode -Version Latest
@@ -21,21 +18,14 @@ if ($Environment -eq "production" -and -not $AllowProduction) {
 $deployment = switch ($Environment) {
     "production" {
         @{
-            Domain = "pdfing.gallego.top"
+            Domain = "pdfinplace.com"
         }
     }
     "test" {
         @{
-            Domain = "test.pdfing.gallego.top"
+            Domain = "test.pdfinplace.com"
         }
     }
-}
-
-if ($Domain) {
-    if ($Environment -ne "production") {
-        throw "A domain-specific publish is only available for production."
-    }
-    $deployment.Domain = $Domain
 }
 
 $projectRoot = [System.IO.Path]::GetFullPath((Join-Path $PSScriptRoot ".."))
@@ -90,7 +80,7 @@ if (-not (Test-Path -LiteralPath $syncScriptPath -PathType Leaf)) {
 }
 
 if (-not $SkipBuild) {
-    & $stageScript -Environment $Environment -Domain $Domain
+    & $stageScript -Environment $Environment
 }
 
 if (-not (Test-Path -LiteralPath (Join-Path $sitePath "index.html") -PathType Leaf)) {
@@ -113,7 +103,7 @@ $tempBase = [System.IO.Path]::GetFullPath(
     [System.IO.Path]::GetTempPath()
 ).TrimEnd("\")
 $tempRoot = Join-Path $tempBase (
-    "pdfing-deploy-" + [guid]::NewGuid().ToString("N")
+    "pdfinplace-deploy-" + [guid]::NewGuid().ToString("N")
 )
 $keyPath = Join-Path $tempRoot "deployment-key"
 $remoteStage = "/tmp/gallegotop-content-$([guid]::NewGuid().ToString("N"))"
@@ -122,7 +112,7 @@ $currentUser = [System.Security.Principal.WindowsIdentity]::GetCurrent().Name
 
 if (
     -not [System.IO.Path]::GetFullPath($tempRoot).StartsWith(
-        "$tempBase\pdfing-deploy-",
+        "$tempBase\pdfinplace-deploy-",
         [System.StringComparison]::OrdinalIgnoreCase
     )
 ) {
@@ -254,7 +244,7 @@ try {
         $resolvedTempRoot = (Resolve-Path -LiteralPath $tempRoot).Path
         if (
             $resolvedTempRoot.StartsWith(
-                "$tempBase\pdfing-deploy-",
+                "$tempBase\pdfinplace-deploy-",
                 [System.StringComparison]::OrdinalIgnoreCase
             )
         ) {

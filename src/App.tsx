@@ -1,8 +1,7 @@
 import { Suspense, lazy, useCallback, useEffect, useState } from 'react';
 import { useI18n } from './i18n';
 import { APP_ENVIRONMENT, isNonProductionEnvironment } from './config/environment';
-import { WelcomeModal } from './components/WelcomeModal';
-import { isWelcomeDismissed } from './utils/welcomePreference';
+import { AppInfoDialog } from './components/AppInfoDialog';
 
 const LazyPdfEditor = lazy(() =>
   import('./pages/PdfEditor').then((module) => ({ default: module.PdfEditor }))
@@ -10,7 +9,7 @@ const LazyPdfEditor = lazy(() =>
 
 function App() {
   const { t, locale } = useI18n();
-  const [showWelcome, setShowWelcome] = useState(() => !isWelcomeDismissed());
+  const [showInfo, setShowInfo] = useState(false);
 
   useEffect(() => {
     const environmentPrefix = APP_ENVIRONMENT === 'test'
@@ -23,8 +22,8 @@ function App() {
     document.documentElement.dataset.environment = APP_ENVIRONMENT;
   }, [locale, t]);
 
-  const dismissWelcome = useCallback(() => setShowWelcome(false), []);
-  const openWelcome = useCallback(() => setShowWelcome(true), []);
+  const closeInfo = useCallback(() => setShowInfo(false), []);
+  const openInfo = useCallback(() => setShowInfo(true), []);
 
   return (
     <div className="h-[100dvh] bg-gray-100 font-sans text-gray-900">
@@ -44,10 +43,10 @@ function App() {
             </div>
           }
         >
-          <LazyPdfEditor onOpenWelcome={openWelcome} />
+          <LazyPdfEditor onOpenInfo={openInfo} />
         </Suspense>
       </main>
-      {showWelcome ? <WelcomeModal onClose={dismissWelcome} /> : null}
+      {showInfo ? <AppInfoDialog onClose={closeInfo} /> : null}
     </div>
   );
 }
