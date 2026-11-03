@@ -33,7 +33,32 @@ npm install
 npm run dev
 ```
 
-Node.js `22.13+` or `24+` is required.
+Use Node.js `^22.13.0` or `>=24.0.0`, as specified in `package.json`.
+
+## Project Layout And Maintenance
+
+- `src/`: application code and unit/regression tests.
+- `public/`: PWA assets, legal pages, bundled fonts, and generated PDF.js resources.
+- `scripts/`: resource synchronization, local browser checks, and release tooling.
+- `docs/content-rewriting.md`: content-editing architecture, limitations, and verification.
+- `PRODUCT.md` and `DESIGN.md`: current product requirements and design system.
+- `DEPLOYMENT.md`: staging and publication procedures.
+
+`npm run dev` and `npm run build` generate PDF.js assets under
+`public/pdfjs/<version-and-fingerprint>/` from the installed `pdfjs-dist` package.
+The application uses only that fingerprinted directory. Do not restore the obsolete
+unversioned `cmaps`, `iccs`, `standard_fonts`, or `wasm` directories under
+`public/pdfjs/`, or copy resources manually from another PDF.js version.
+Keep the current resource directory and its licenses; older local fingerprints can
+be removed when no local process is using them. Production asset retention follows
+the separate rolling-deployment rules in `DEPLOYMENT.md`.
+
+`dist/` is disposable build output; `node_modules/` contains installed dependencies.
+Neither belongs in source control. Keep the lockfile for reproducible installs.
+Historical screenshots, sample PDFs, and one-off visual reports are not required
+to develop or build the app. Keep private fixtures outside the repository.
+Local tool configuration and project-catalog metadata are separate from runtime
+assets; preserve them when they still serve the development environment.
 
 ## Quality Checks
 
@@ -43,9 +68,11 @@ npm run check:sw
 npm test
 npm run test:pdfjs-resources
 npm run test:office
+npm run test:import-security
+npm run test:share-target
+npm run test:legal
 npm run test:tools
 npm run build
-npm run build:test
 npm audit
 ```
 
@@ -70,6 +97,7 @@ npm run test:browser:all
 The runner starts and closes isolated localhost servers on dynamically allocated ports. It
 checks editing at desktop/mobile sizes (including highlights, arrows, editor undo/redo and
 duplication), DOCX/ODT conversion, form filling, redaction and image compression,
+Office sandbox isolation, saved-asset recovery, real service-worker file handoff,
 atomic conflicts across tabs, storage quota
 rollback and retry, session restoration, thumbnail deferral, import/export
 cancellation, and warm offline restoration/export in Chromium, Firefox, and WebKit.
@@ -94,18 +122,10 @@ Standard GitHub-hosted runners are free for this public repository. If the repos
 npm run build
 ```
 
-The production app is emitted to `dist/` with `https://pdfinplace.com/` as its canonical URL, plus a generated `robots.txt` and `sitemap.xml`. Test and development builds emit a `robots.txt` that disallows crawling.
-
-Build the test environment with:
-
-```bash
-npm run build:test
-```
-
-The test build is published to `https://test.pdfinplace.com`, displays a persistent `TEST` marker, and uses `noindex,nofollow`.
+The production app is emitted to `dist/` with `https://pdfinplace.com/` as its canonical URL, plus a generated `robots.txt` and `sitemap.xml`. Development builds emit a `robots.txt` that disallows crawling.
 
 Stage complete builds in the canonical local server-management workspace with
-`npm run stage:production` and `npm run stage:test`.
+`npm run stage:production`.
 
 See [DEPLOYMENT.md](./DEPLOYMENT.md) for static hosting, caching, HTTPS, and security-header requirements.
 
@@ -117,6 +137,10 @@ PDF in Place does not upload files to a server. The browser stores:
 - Export history and UI preferences in localStorage.
 - Saved signatures and stamps in IndexedDB when local-session persistence is enabled.
 - PWA shell and same-origin assets in the service worker cache.
+- Files handed to the installed PWA through Web Share Target in a temporary local
+  Cache Storage queue. Each delivery is isolated, checked against the import size
+  limits, and removed after it is read. Expired queued files are removed when a
+  later delivery arrives; browser site-data controls can clear the queue directly.
 
 The in-app clear action removes the current session, export history, output options, and saved signatures/stamps. Browser site-data controls also remove non-sensitive UI preferences such as language and zoom.
 
@@ -180,3 +204,8 @@ PDF text editing is inherently approximate when the original embedded font canno
 ## Dependency Notes
 
 Dependencies are audited in CI. TypeScript 7 checks types during the build, while Biome lints TypeScript and React code without depending on the TypeScript compiler API.
+Node.js type definitions stay on the Node 24 line used by CI.
+
+See [SECURITY.md](./SECURITY.md) for document-input boundaries, temporary storage,
+and the security regression checks. Dependency updates must regenerate PDF.js
+resources and pass the browser checks before publication.

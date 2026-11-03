@@ -12,11 +12,7 @@ function App() {
   const [showInfo, setShowInfo] = useState(false);
 
   useEffect(() => {
-    const environmentPrefix = APP_ENVIRONMENT === 'test'
-      ? '[TEST] '
-      : APP_ENVIRONMENT === 'development'
-        ? '[DEV] '
-        : '';
+    const environmentPrefix = isNonProductionEnvironment ? '[DEV] ' : '';
     document.title = `${environmentPrefix}${t('app.windowTitle')}`;
     document.documentElement.lang = locale;
     document.documentElement.dataset.environment = APP_ENVIRONMENT;
@@ -32,7 +28,7 @@ function App() {
           role="status"
           className="pointer-events-none fixed bottom-2 left-2 z-[100] rounded-md border border-amber-300 bg-amber-100/95 px-2 py-1 text-[10px] font-extrabold tracking-[0.16em] text-amber-950 shadow-sm"
         >
-          {APP_ENVIRONMENT === 'test' ? 'TEST' : 'DEV'}
+          DEV
         </div>
       ) : null}
       <main className="h-full overflow-hidden">

@@ -152,6 +152,9 @@ export const assertRenderableArea = (width: number, height: number) => {
 };
 
 export const validateOfficeXmlComplexity = (xml: string) => {
+    if (/<!\s*(?:DOCTYPE|ENTITY)\b/i.test(xml)) {
+        throw new Error('Office XML declarations and entities are not supported.');
+    }
     let elementCount = 0;
     for (let index = 0; index < xml.length; index += 1) {
         if (xml[index] === '<' && !['/', '?', '!'].includes(xml[index + 1] ?? '')) {

@@ -106,7 +106,12 @@ export const syncPdfJsResources = ({ sourceRoot = packageRoot, targetRoot = publ
   const targetDirectory = join(targetRoot, 'pdfjs', version);
   mkdirSync(targetDirectory, { recursive: true });
   for (const directory of resourceDirectories) {
-    cpSync(join(sourceRoot, directory), join(targetDirectory, directory), { recursive: true, force: true });
+    const destination = resolve(targetDirectory, directory);
+    if (dirname(destination) !== resolve(targetDirectory)) throw new Error('Unsafe PDF.js resource destination.');
+    // Copying over a drifted tree retains unexpected stale files and can never
+    // repair its manifest. Replace only this verified resource-family directory.
+    rmSync(destination, { recursive: true, force: true });
+    cpSync(join(sourceRoot, directory), destination, { recursive: true, force: true });
   }
   writeFileSync(join(targetDirectory, 'resource-manifest.json'), `${JSON.stringify({ version, files: resourceManifest(sourceRoot) }, null, 2)}\n`);
   if (targetRoot === publicRoot) {
@@ -144,6 +149,9 @@ if (isDirectExecution && command === 'sync') {
       detected = error instanceof Error && error.message.includes('differ');
     }
     if (!detected) throw new Error('Intentional PDF.js resource drift was not detected.');
+    writeFileSync(join(temporaryRoot, 'pdfjs', version, 'cmaps', 'stale.bcmap'), 'stale resource');
+    syncPdfJsResources({ targetRoot: temporaryRoot });
+    verifyPdfJsResources({ targetRoot: temporaryRoot });
     process.stdout.write('PDF.js resource drift detection passed.\n');
   } finally {
     if (!isSafeTemporaryDirectory(temporaryRoot)) {

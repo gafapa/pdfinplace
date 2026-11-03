@@ -1,6 +1,6 @@
 param(
     [Parameter(Mandatory = $true)]
-    [ValidateSet("production", "test")]
+    [ValidateSet("production")]
     [string]$Environment
 )
 
@@ -10,7 +10,7 @@ $projectRoot = [System.IO.Path]::GetFullPath((Join-Path $PSScriptRoot ".."))
 $managementRoot = if ($env:GALLEGOTOP_MANAGEMENT_ROOT) {
     $env:GALLEGOTOP_MANAGEMENT_ROOT
 } else {
-    "D:\Otros IA\gestion_gallego_top"
+    Join-Path $projectRoot ".codex\deployment"
 }
 
 $deployment = switch ($Environment) {
@@ -18,12 +18,6 @@ $deployment = switch ($Environment) {
         @{
             BuildScript = "build"
             Domain = "pdfinplace.com"
-        }
-    }
-    "test" {
-        @{
-            BuildScript = "build:test"
-            Domain = "test.pdfinplace.com"
         }
     }
 }
@@ -36,11 +30,14 @@ $targetPath = [System.IO.Path]::GetFullPath(
 )
 $sourcePath = [System.IO.Path]::GetFullPath((Join-Path $projectRoot "dist"))
 
-if (-not (Test-Path -LiteralPath $sitesRoot -PathType Container)) {
-    throw "Static sites root does not exist: $sitesRoot"
+foreach ($rootPath in @($projectRoot, (Join-Path $projectRoot ".codex"), $managementRoot, (Join-Path $managementRoot "static-sites"), $sitesRoot, $targetPath)) {
+    if ((Test-Path -LiteralPath $rootPath) -and ((Get-Item -LiteralPath $rootPath -Force).Attributes -band [System.IO.FileAttributes]::ReparsePoint)) {
+        throw "Staging roots must not be links or reparse points."
+    }
 }
-
-if (-not (Test-Path -LiteralPath $targetPath -PathType Container)) {
+if (-not $env:GALLEGOTOP_MANAGEMENT_ROOT) {
+    New-Item -ItemType Directory -Path $targetPath -Force | Out-Null
+} elseif (-not (Test-Path -LiteralPath $targetPath -PathType Container)) {
     throw "Registered site directory does not exist: $targetPath"
 }
 
@@ -50,6 +47,12 @@ $resolvedTargetParent = Split-Path -Parent $resolvedTargetPath
 
 if ($resolvedTargetParent -ne $resolvedSitesRoot) {
     throw "Refusing to stage outside the registered static sites root."
+}
+
+if (Get-ChildItem -LiteralPath $resolvedTargetPath -Recurse -Force | Where-Object {
+    $_.Attributes -band [System.IO.FileAttributes]::ReparsePoint
+}) {
+    throw "The staging destination contains links or reparse points."
 }
 
 Push-Location $projectRoot
@@ -77,6 +80,12 @@ if ($forbiddenFiles) {
     $relativePaths = $forbiddenFiles |
         ForEach-Object { [System.IO.Path]::GetRelativePath($sourcePath, $_.FullName) }
     throw "Build output contains forbidden files: $($relativePaths -join ', ')"
+}
+
+if (Get-ChildItem -LiteralPath $sourcePath -Recurse -Force | Where-Object {
+    $_.Attributes -band [System.IO.FileAttributes]::ReparsePoint
+}) {
+    throw "Build output contains links or reparse points."
 }
 
 & robocopy $sourcePath $resolvedTargetPath /MIR /COPY:DAT /DCOPY:DAT /R:2 /W:1 /NFL /NDL /NJH /NJS /NP

@@ -1,14 +1,12 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { readBrowserPreference, removeBrowserPreference, writeBrowserPreference } from '../../utils/browserPreferences';
 import { getSessionPersistencePreference } from '../../utils/sessionPreference';
-import { clearPersistedAssets, loadPersistedAssets, savePersistedAssets, type PersistedAssetRecord } from '../../utils/persistedAssets';
+import { clearPersistedAssets, loadPersistedAssets, savePersistedAssets, validatePersistedAssets, MAX_SAVED_ASSETS, MAX_SAVED_ASSET_BYTES, type PersistedAssetRecord } from '../../utils/persistedAssets';
 
 export type SavedAsset = PersistedAssetRecord;
 
 const SAVED_ASSETS_STORAGE_KEY = 'pageforge.saved-assets';
 const ASSETS_PANEL_STORAGE_KEY = 'pageforge.assets-panel-open';
-const MAX_SAVED_ASSETS = 30;
-const MAX_SAVED_ASSET_BYTES = 25 * 1024 * 1024;
 
 const getInitialAssetsPanelOpen = () => {
     if (typeof window === 'undefined') return false;
@@ -30,7 +28,7 @@ export const useSavedAssets = (messages: SavedAssetMessages, onError: (message: 
     const [isAssetsPanelOpen, setIsAssetsPanelOpen] = useState(getInitialAssetsPanelOpen);
     const [renamingAssetId, setRenamingAssetId] = useState<string | null>(null);
     const [assetNameDraft, setAssetNameDraft] = useState('');
-    const didRestoreRef = useRef(false);
+    const persistenceReadyRef = useRef(false);
     const messagesRef = useRef(messages);
     const onErrorRef = useRef(onError);
     useEffect(() => {
@@ -39,18 +37,18 @@ export const useSavedAssets = (messages: SavedAssetMessages, onError: (message: 
     });
 
     useEffect(() => {
-        if (didRestoreRef.current) return;
-        didRestoreRef.current = true;
         let cancelled = false;
+        persistenceReadyRef.current = false;
         void (async () => {
             try {
                 if (!getSessionPersistencePreference()) {
                     removeBrowserPreference(SAVED_ASSETS_STORAGE_KEY);
                     await clearPersistedAssets();
+                    if (!cancelled) persistenceReadyRef.current = true;
                     return;
                 }
                 const legacyAssets = readBrowserPreference(SAVED_ASSETS_STORAGE_KEY);
-                const parsedLegacyAssets = legacyAssets ? JSON.parse(legacyAssets) as SavedAsset[] : [];
+                const parsedLegacyAssets = legacyAssets ? validatePersistedAssets(JSON.parse(legacyAssets)) : [];
                 const persistedAssets = await loadPersistedAssets();
                 const restoredAssets = persistedAssets.length > 0
                     ? persistedAssets
@@ -59,7 +57,10 @@ export const useSavedAssets = (messages: SavedAssetMessages, onError: (message: 
                     await savePersistedAssets(restoredAssets);
                 }
                 removeBrowserPreference(SAVED_ASSETS_STORAGE_KEY);
-                if (!cancelled) setSavedAssets(restoredAssets.slice(0, MAX_SAVED_ASSETS));
+                if (!cancelled) {
+                    persistenceReadyRef.current = true;
+                    setSavedAssets(restoredAssets);
+                }
             } catch (error) {
                 console.error('Failed to restore saved assets:', error);
                 if (!cancelled) onErrorRef.current(messagesRef.current.persistenceFailed);
@@ -73,7 +74,8 @@ export const useSavedAssets = (messages: SavedAssetMessages, onError: (message: 
     }, []);
 
     useEffect(() => {
-        if (!isReady) return;
+        // A failed restore must never overwrite recoverable disk data with [].
+        if (!isReady || !persistenceReadyRef.current) return;
         void (async () => {
             try {
                 if (getSessionPersistencePreference()) await savePersistedAssets(savedAssets);
@@ -91,15 +93,19 @@ export const useSavedAssets = (messages: SavedAssetMessages, onError: (message: 
 
     /** Adds an asset at the top of the library; false when the library would be too large. */
     const addSavedAsset = useCallback((asset: SavedAsset) => {
-        const nextAssets = [asset, ...savedAssets.filter(item => item.id !== asset.id)].slice(0, MAX_SAVED_ASSETS);
+        if (!isReady || (getSessionPersistencePreference() && !persistenceReadyRef.current)) {
+            onErrorRef.current(messagesRef.current.persistenceFailed);
+            return false;
+        }
+        const nextAssets = [asset, ...savedAssets.filter(item => item.id !== asset.id)];
         const estimatedBytes = nextAssets.reduce((total, item) => total + Math.ceil(item.dataUrl.length * 0.75), 0);
-        if (estimatedBytes > MAX_SAVED_ASSET_BYTES) {
+        if (nextAssets.length > MAX_SAVED_ASSETS || estimatedBytes > MAX_SAVED_ASSET_BYTES) {
             onErrorRef.current(messagesRef.current.libraryTooLarge);
             return false;
         }
         setSavedAssets(nextAssets);
         return true;
-    }, [savedAssets]);
+    }, [savedAssets, isReady]);
 
     const removeSavedAsset = useCallback((assetId: string) => {
         setSavedAssets(previous => previous.filter(asset => asset.id !== assetId));
@@ -125,6 +131,7 @@ export const useSavedAssets = (messages: SavedAssetMessages, onError: (message: 
     }, [assetNameDraft]);
 
     return {
+        isReady,
         savedAssets,
         addSavedAsset,
         removeSavedAsset,

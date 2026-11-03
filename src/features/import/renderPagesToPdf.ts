@@ -63,8 +63,9 @@ const findCutRow = (canvas: HTMLCanvasElement, fromRow: number, toRow: number) =
 };
 
 const capture = async (page: PageElement, scale: number, top: number, height: number) => {
+    assertRenderableArea(Math.ceil(page.width * scale), Math.ceil(height * scale));
     const html2canvas = (await import('html2canvas')).default;
-    return html2canvas(page.element, {
+    const pending = html2canvas(page.element, {
         scale,
         y: top,
         height: Math.ceil(height),
@@ -74,6 +75,30 @@ const capture = async (page: PageElement, scale: number, top: number, height: nu
         logging: false,
         useCORS: false,
     });
+    // WebKit suppresses nested frame load callbacks in a no-scripts sandbox.
+    // Drive only the renderer's completed clone from the trusted parent rather
+    // than enabling scripts in the imported document.
+    const poll = setInterval(() => {
+        for (const frame of page.element.ownerDocument.querySelectorAll<HTMLIFrameElement>('iframe.html2canvas-container')) {
+            const clone = frame.contentDocument;
+            const onload = frame.onload;
+            if (clone?.readyState === 'complete' && clone.body?.childNodes.length && typeof onload === 'function') {
+                onload.call(frame, new Event('load'));
+            }
+        }
+    }, 50);
+    let deadline: ReturnType<typeof setTimeout> | undefined;
+    try {
+        return await Promise.race([
+            pending,
+            new Promise<never>((_resolve, reject) => {
+                deadline = setTimeout(() => reject(new Error('Office page rendering timed out.')), 45_000);
+            }),
+        ]);
+    } finally {
+        clearInterval(poll);
+        clearTimeout(deadline);
+    }
 };
 
 const releaseCanvas = (canvas: HTMLCanvasElement) => {
@@ -141,7 +166,9 @@ export const renderPagesToPdf = async (pages: PageElement[], options: RenderPage
         }
 
         // Short documents are captured once and sliced; long ones a page window at a time.
-        const whole = totalHeight * scale <= MAX_CAPTURE_HEIGHT ? await capture(page, scale, 0, totalHeight) : null;
+        const wholeFitsBudget = totalHeight * scale <= MAX_CAPTURE_HEIGHT &&
+            Math.ceil(page.width * scale) * Math.ceil(totalHeight * scale) <= MAX_RENDER_PIXELS;
+        const whole = wholeFitsBudget ? await capture(page, scale, 0, totalHeight) : null;
         const totalRows = whole ? whole.height : Math.ceil(totalHeight * scale);
         let start = 0;
         let offset = 0;
@@ -168,31 +195,48 @@ export const renderPagesToPdf = async (pages: PageElement[], options: RenderPage
     return pdf.save();
 };
 
-/** Mounts a hidden, laid-out host for document rendering and removes it afterwards. */
+/** Isolates document styles and prevents active content or network access while rendering. */
 export const withRenderHost = async <T,>(render: (host: HTMLDivElement) => Promise<T>) => {
-    const host = document.createElement('div');
-    host.setAttribute('aria-hidden', 'true');
-    Object.assign(host.style, {
+    const frame = document.createElement('iframe');
+    frame.setAttribute('sandbox', 'allow-same-origin');
+    frame.setAttribute('aria-hidden', 'true');
+    frame.tabIndex = -1;
+    frame.title = 'Office document renderer';
+    Object.assign(frame.style, {
         position: 'fixed',
         left: '0',
         top: '0',
+        width: '1280px',
+        height: '900px',
+        border: '0',
         zIndex: '-9999',
         pointerEvents: 'none',
-        backgroundColor: '#ffffff',
-        color: '#000000',
     });
-    document.body.appendChild(host);
+    let timer: ReturnType<typeof setTimeout> | undefined;
     try {
+        await new Promise<void>((resolve, reject) => {
+            frame.onload = () => resolve();
+            frame.onerror = () => reject(new Error('Office rendering frame could not load.'));
+            timer = setTimeout(() => reject(new Error('Office rendering frame timed out.')), 30_000);
+            frame.srcdoc = `<!doctype html><html><head><meta charset="utf-8"><meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'none'; style-src 'unsafe-inline'; img-src data: blob:; font-src data:; connect-src 'none'; frame-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none'"><style>html,body{margin:0;background:#fff;color:#000}</style></head><body></body></html>`;
+            document.body.appendChild(frame);
+        });
+        clearTimeout(timer);
+        const renderDocument = frame.contentDocument;
+        if (!renderDocument) throw new Error('Office rendering frame is unavailable.');
+        const host = renderDocument.createElement('div');
+        renderDocument.body.appendChild(host);
         return await render(host);
     } finally {
-        host.remove();
+        clearTimeout(timer);
+        frame.remove();
     }
 };
 
 /** Waits for web fonts and two frames so measurements reflect the final layout. */
-export const settleLayout = async () => {
+export const settleLayout = async (renderDocument: Document = document) => {
     try {
-        await document.fonts?.ready;
+        await renderDocument.fonts?.ready;
     } catch {
         // Font loading failures leave fallback fonts in place.
     }

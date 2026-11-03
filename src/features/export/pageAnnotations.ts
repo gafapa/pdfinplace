@@ -1,5 +1,6 @@
 import type { PDFDict, PDFDocument, PDFObjectCopier, PDFOperator, PDFPage, PDFRef, PDFStream } from 'pdf-lib';
 import { loadPdfLib } from '../../hooks/editorResources';
+import { isSafeLinkUri } from './sanitizeActions';
 
 /** PDF matrix [a b c d e f]: (x, y) → (a·x + c·y + e, b·x + d·y + f). */
 export type Matrix = [number, number, number, number, number, number];
@@ -186,7 +187,7 @@ export const createPendingLinks = async (
         if (sourceAction && kind === 'URI') {
             const uri = sourceAction.lookupMaybe(PDFName.of('URI'), PDFString, PDFHexString);
             // Keep the string object as written; it is already escaped.
-            if (uri) action = output.context.obj({ S: 'URI', URI: uri.clone() });
+            if (uri && isSafeLinkUri(uri.decodeText())) action = output.context.obj({ S: 'URI', URI: uri.clone() });
         } else if (sourceAction && kind === 'GoTo') {
             const destination = toPageDestination(sourceDocument.context.lookup(sourceAction.get(PDFName.of('D'))));
             if (destination) action = output.context.obj({ S: 'GoTo', D: destination });

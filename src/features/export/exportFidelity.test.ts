@@ -4,6 +4,7 @@ import { decodePDFRawStream, PDFArray, PDFDict, PDFDocument, PDFName, PDFRawStre
 import type { EditorFile, EditorPage, PageSize, PrintOverlayOptions } from '../../hooks/editorTypes';
 import type { Annotation } from '../../types/annotations';
 import { buildPdfDocument } from './buildPdfDocument';
+import { getDocument } from '../../test/pdfjs';
 import type { PageRasterizer } from './redaction';
 
 const noOverlays: PrintOverlayOptions = { watermarkText: '', includePageNumbers: false, headerText: '', footerText: '', cropPercent: 0, marginPercent: 0 };
@@ -36,7 +37,6 @@ const build = (pages: EditorPage[], files: EditorFile[], pageSize: PageSize = 'O
     });
 
 const renderedText = async (bytes: Uint8Array, pageNumber = 1) => {
-    const { getDocument } = await import('pdfjs-dist/legacy/build/pdf.mjs');
     const task = getDocument({ data: bytes.slice(), useWorkerFetch: false, verbosity: 0 });
     const pdf = await task.promise;
     const pdfPage = await pdf.getPage(pageNumber);
@@ -105,6 +105,33 @@ const redactionBox = (x: number, y: number, width: number, height: number): Anno
 });
 
 describe('export fidelity', () => {
+    it('removes scripts, automatic actions and unsafe URI links while keeping web links', async () => {
+        const source = await PDFDocument.create();
+        const sourcePage = source.addPage([300, 300]);
+        const script = source.context.register(source.context.obj({ S: 'JavaScript', JS: PDFString.of('app.alert("unsafe")') }));
+        const annotations = [
+            source.context.obj({ Type: 'Annot', Subtype: 'Link', Rect: [0, 0, 10, 10], A: script }),
+            source.context.obj({ Type: 'Annot', Subtype: 'Link', Rect: [10, 10, 20, 20], A: { S: 'URI', URI: PDFString.of('javascript:alert(1)') } }),
+            source.context.obj({ Type: 'Annot', Subtype: 'Link', Rect: [20, 20, 30, 30], A: { S: 'URI', URI: PDFString.of('https://example.com'), Next: script }, AA: { E: script } }),
+        ];
+        sourcePage.node.set(PDFName.of('Annots'), source.context.obj(annotations.map(annot => source.context.register(annot))));
+        sourcePage.node.set(PDFName.of('AA'), source.context.obj({ O: script }));
+        const file = asEditorFile('active', await source.save());
+        for (const pageSize of ['Original', 'A4'] as const) {
+            const output = await PDFDocument.load(await build([page('active', 1)], [file], pageSize));
+            const dictionaries = output.context.enumerateIndirectObjects().flatMap(([, value]) => value instanceof PDFDict ? [value] : []);
+            expect(dictionaries.some(value => value.has(PDFName.of('AA')))).toBe(false);
+            expect(dictionaries.some(value => value.lookupMaybe(PDFName.of('S'), PDFName)?.decodeText() === 'JavaScript')).toBe(false);
+            const links = output.getPage(0).node.Annots()!;
+            const actions = links.asArray().flatMap(ref => {
+                const action = output.context.lookup(ref, PDFDict).lookupMaybe(PDFName.of('A'), PDFDict);
+                return action ? [action] : [];
+            });
+            expect(actions).toHaveLength(1);
+            expect(actions[0].lookup(PDFName.of('URI'), PDFString).decodeText()).toBe('https://example.com');
+            expect(actions[0].has(PDFName.of('Next'))).toBe(false);
+        }
+    });
     it('keeps web and internal links when pages are resized', async () => {
         const file = asEditorFile('linked', await linkedSource());
         const bytes = await build([page('linked', 1), page('linked', 2)], [file], 'Letter');

@@ -62,6 +62,7 @@ const inspect = async bytes => {
 };
 
 const failures = [];
+const consoleErrors = [];
 try {
     const context = await browser.newContext({ locale: 'es-ES', viewport: { width: 1280, height: 900 }, acceptDownloads: true });
     await context.addInitScript(() => {
@@ -70,6 +71,7 @@ try {
     });
     const page = await context.newPage();
     page.on('pageerror', error => failures.push(error.message));
+    page.on('console', message => { if (message.type() === 'error') consoleErrors.push(message.text()); });
     await page.goto(server.url);
     // Imports are accepted once the session has finished loading.
     await page.waitForFunction(() => {
@@ -80,7 +82,11 @@ try {
     const results = {};
     for (const fixture of [await makeDocx(), await makeOdt()]) {
         await page.locator('input[type=file]').first().setInputFiles(fixture);
-        await page.waitForFunction(() => document.querySelectorAll('.document-card').length > 0 && !document.querySelector('[data-operation-status]'), undefined, { timeout: 60000 });
+        try {
+            await page.waitForFunction(() => document.querySelectorAll('.document-card').length > 0 && !document.querySelector('[data-operation-status]'), undefined, { timeout: 60000 });
+        } catch {
+            throw new Error(`Office import failed for ${fixture.name}: ${JSON.stringify({ failures, consoleErrors, alerts: await page.getByRole('alert').allTextContents() })}`);
+        }
         await page.getByRole('button', { name: 'Exportar', exact: true }).click();
         const pending = page.waitForEvent('download');
         await page.getByRole('button', { name: 'Exportar todo', exact: true }).click();

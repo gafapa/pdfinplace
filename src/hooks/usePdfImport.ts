@@ -64,11 +64,11 @@ export const usePdfImport = ({ filesRef, pages, isSessionReady, setFiles, setPag
 
             const storeImportedFile = (fileId: string, fileData: EditorFile) => {
                 if (existingFiles.length + Object.keys(newFilesMap).length >= MAX_IMPORT_FILES) {
-                    releasePdfDocument(fileData.pdfDoc);
+                    releasePdfDocument(fileData);
                     throw new ImportLimitError(labels.fileCount);
                 }
                 if (importedFileBytes + fileData.file.size > MAX_IMPORT_TOTAL_SIZE_BYTES) {
-                    releasePdfDocument(fileData.pdfDoc);
+                    releasePdfDocument(fileData);
                     throw new ImportLimitError(labels.batchSize);
                 }
 
@@ -155,7 +155,7 @@ export const usePdfImport = ({ filesRef, pages, isSessionReady, setFiles, setPag
                         checkpoint: () => task.checkpoint(),
                     });
                     arrayBuffer = toArrayBuffer(pdfBytes);
-                    const newFile = new File([arrayBuffer], file.name.replace(/.(docx|odt)$/i, '.pdf'), { type: 'application/pdf' });
+                    const newFile = new File([arrayBuffer], file.name.replace(/\.(docx|odt)$/i, '.pdf'), { type: 'application/pdf' });
                     const { pdfDoc: officePdf, loadingTask: officeTask } = await loadPdfDocumentWithTask({ data: cloneArrayBuffer(arrayBuffer) });
                     storeImportedFile(fileId, {
                         id: fileId,
@@ -185,7 +185,7 @@ export const usePdfImport = ({ filesRef, pages, isSessionReady, setFiles, setPag
                 const failedFileData = newFilesMap[fileId];
                 if (failedFileData) {
                     importedFileBytes -= failedFileData.file.size;
-                    releasePdfDocument(failedFileData.pdfDoc);
+                    releasePdfDocument(failedFileData);
                 }
                 delete newFilesMap[fileId];
                 const isPasswordProtectedPdf = getImportFileKind(file) === 'pdf' &&

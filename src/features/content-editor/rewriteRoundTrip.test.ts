@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { PDFDocument, PDFName, StandardFonts, rgb } from 'pdf-lib';
-import { getDocument } from 'pdfjs-dist/legacy/build/pdf.mjs';
+import { getDocument } from '../../test/pdfjs';
 import { readFileSync } from 'node:fs';
 import { createCanvas } from '@napi-rs/canvas';
 import { applyContentEditsToPdfPage } from './applyContentEdits';

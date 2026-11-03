@@ -1,254 +1,123 @@
 param(
     [Parameter(Mandatory = $true)]
-    [ValidateSet("production", "test")]
+    [ValidateSet("production")]
     [string]$Environment,
-
     [switch]$AllowProduction,
-
     [switch]$SkipBuild
 )
 
 Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
+if (-not $AllowProduction) { throw "Production publishing requires -AllowProduction." }
 
-if ($Environment -eq "production" -and -not $AllowProduction) {
-    throw "Production publishing requires -AllowProduction."
-}
-
-$deployment = switch ($Environment) {
-    "production" {
-        @{
-            Domain = "pdfinplace.com"
-        }
-    }
-    "test" {
-        @{
-            Domain = "test.pdfinplace.com"
-        }
-    }
-}
-
+$domain = "pdfinplace.com"
 $projectRoot = [System.IO.Path]::GetFullPath((Join-Path $PSScriptRoot ".."))
-$serverHub = if ($env:GALLEGOTOP_SERVER_HUB) {
-    $env:GALLEGOTOP_SERVER_HUB
-} else {
-    "D:\gallego.top"
-}
+$serverHub = if ($env:GALLEGOTOP_SERVER_HUB) { $env:GALLEGOTOP_SERVER_HUB } else { "D:\gallego.top" }
 $managementRoot = if ($env:GALLEGOTOP_MANAGEMENT_ROOT) {
     $env:GALLEGOTOP_MANAGEMENT_ROOT
 } else {
-    "D:\Otros IA\gestion_gallego_top"
+    Join-Path $projectRoot ".codex\deployment"
 }
 
-$ageCommand = Get-Command age -ErrorAction SilentlyContinue
-$ageExecutable = if ($ageCommand) {
-    $ageCommand.Source
-} else {
-    Join-Path $env:LOCALAPPDATA "Microsoft\WinGet\Links\age.exe"
-}
-
-$identityPath = if ($env:GALLEGOTOP_AGE_IDENTITY) {
-    $env:GALLEGOTOP_AGE_IDENTITY
-} else {
-    [Environment]::GetEnvironmentVariable("GALLEGOTOP_AGE_IDENTITY", "User")
-}
-
-$encryptedKeyPath = Join-Path $serverHub (
-    "secrets\encrypted\ssh\primary-server-huerta-20260725.age"
-)
-$siteParent = Join-Path $managementRoot "static-sites\sites"
-$sitePath = Join-Path $siteParent $deployment.Domain
-$syncScriptPath = Join-Path $managementRoot (
-    "static-sites\sync-content-on-server.sh"
-)
-$stageScript = Join-Path $PSScriptRoot "stage-static-site.ps1"
-
-if (-not (Test-Path -LiteralPath $ageExecutable -PathType Leaf)) {
-    throw "The age executable is unavailable."
-}
-if (-not $identityPath -or -not (Test-Path -LiteralPath $identityPath -PathType Leaf)) {
-    throw "The configured age identity is unavailable."
-}
-if (-not (Test-Path -LiteralPath $encryptedKeyPath -PathType Leaf)) {
-    throw "The encrypted deployment credential is unavailable."
-}
-if (-not (Test-Path -LiteralPath $stageScript -PathType Leaf)) {
-    throw "The local staging script is unavailable."
-}
-if (-not (Test-Path -LiteralPath $syncScriptPath -PathType Leaf)) {
-    throw "The canonical content synchronization script is unavailable."
-}
+. (Join-Path $serverHub "scripts\lib\server_hub.ps1")
+$configuration = Get-ServerHubConfiguration -HubRoot $serverHub
+Assert-RegisteredDomain -Domain $domain -HubRoot $serverHub
+$ageExecutable = Resolve-AgeExecutable
+$identityPath = Resolve-VaultIdentityPath -HubRoot $serverHub
+$encryptedKeyPath = Resolve-CredentialEncryptedPath -CredentialId $configuration.CredentialId -HubRoot $serverHub
 
 if (-not $SkipBuild) {
-    & $stageScript -Environment $Environment
+    & (Join-Path $PSScriptRoot "stage-static-site.ps1") -Environment $Environment
 }
-
+$sitesRoot = [System.IO.Path]::GetFullPath((Join-Path $managementRoot "static-sites\sites"))
+$sitePath = Assert-PathWithinRoot -Path (Join-Path $sitesRoot $domain) -Root $sitesRoot
 if (-not (Test-Path -LiteralPath (Join-Path $sitePath "index.html") -PathType Leaf)) {
     throw "The staged site is missing index.html."
 }
+Test-StaticSiteContent -SiteRoot $sitePath | Out-Null
 
-$resolvedSiteParent = (Resolve-Path -LiteralPath $siteParent).Path.TrimEnd("\")
-$resolvedSitePath = (Resolve-Path -LiteralPath $sitePath).Path.TrimEnd("\")
-if ((Split-Path -Parent $resolvedSitePath) -ne $resolvedSiteParent) {
-    throw "Refusing to publish outside the registered static sites root."
-}
-
-$reparsePoints = Get-ChildItem -LiteralPath $resolvedSitePath -Recurse -Force |
-    Where-Object { $_.Attributes -band [System.IO.FileAttributes]::ReparsePoint }
-if ($reparsePoints) {
-    throw "The staged site contains reparse points or symbolic links."
-}
-
-$tempBase = [System.IO.Path]::GetFullPath(
-    [System.IO.Path]::GetTempPath()
-).TrimEnd("\")
-$tempRoot = Join-Path $tempBase (
-    "pdfinplace-deploy-" + [guid]::NewGuid().ToString("N")
-)
-$keyPath = Join-Path $tempRoot "deployment-key"
-$remoteStage = "/tmp/gallegotop-content-$([guid]::NewGuid().ToString("N"))"
-$remoteStageCreated = $false
-$currentUser = [System.Security.Principal.WindowsIdentity]::GetCurrent().Name
-
-if (
-    -not [System.IO.Path]::GetFullPath($tempRoot).StartsWith(
-        "$tempBase\pdfinplace-deploy-",
-        [System.StringComparison]::OrdinalIgnoreCase
-    )
-) {
-    throw "Unsafe local temporary directory."
-}
-if ($remoteStage -notmatch "^/tmp/gallegotop-content-[0-9a-f]{32}$") {
-    throw "Unsafe remote staging directory."
-}
-
-New-Item -ItemType Directory -Path $tempRoot | Out-Null
-& icacls.exe $tempRoot /inheritance:r /grant:r "${currentUser}:(OI)(CI)F" |
-    Out-Null
-if ($LASTEXITCODE -ne 0) {
-    throw "Unable to restrict the temporary directory ACL."
-}
-
-$sshOptions = @(
-    "-o", "BatchMode=yes",
-    "-o", "IdentitiesOnly=yes",
-    "-o", "StrictHostKeyChecking=yes",
-    "-p", "2276",
-    "-i", $keyPath
-)
+$temporaryRoot = $null
+$keyPath = $null
+$sshOptions = @()
+$remoteStage = "/tmp/gallegotop-content-$([guid]::NewGuid().ToString('N'))"
+$remoteEndpoint = "$($configuration.User)@$($configuration.Host)"
 
 try {
-    & $ageExecutable --decrypt `
-        --identity $identityPath `
-        --output $keyPath `
-        $encryptedKeyPath
-    if (
-        $LASTEXITCODE -ne 0 -or
-        -not (Test-Path -LiteralPath $keyPath -PathType Leaf)
-    ) {
-        throw "Deployment credential decryption failed."
+    $temporaryRoot = New-SecuredTemporaryDirectory -Prefix "pdfinplace-deploy"
+    $manifestPath = Join-Path $temporaryRoot "release.sha256"
+    $manifest = foreach ($file in Get-ChildItem -LiteralPath $sitePath -Recurse -Force -File | Sort-Object FullName) {
+        $relativePath = $file.FullName.Substring($sitePath.Length + 1).Replace('\', '/')
+        if ($relativePath -match '[\r\n\\]') { throw "Unsafe release filename." }
+        "{0}  {1}" -f (Get-FileHash -LiteralPath $file.FullName -Algorithm SHA256).Hash.ToLowerInvariant(), $relativePath
     }
+    [System.IO.File]::WriteAllText($manifestPath, ($manifest -join "`n") + "`n", (New-Object System.Text.UTF8Encoding($false)))
 
-    & icacls.exe $keyPath /inheritance:r /grant:r "${currentUser}:F" |
-        Out-Null
-    if ($LASTEXITCODE -ne 0) {
-        throw "Unable to restrict the temporary key ACL."
-    }
+    # Credential access requires explicit user authorization under the server hub's AGENTS.md.
+    $keyPath = New-TemporarySshKey -Directory $temporaryRoot -AgeExecutable $ageExecutable -IdentityPath $identityPath -EncryptedKeyPath $encryptedKeyPath
+    $sshOptions = Get-SshOptions -Configuration $configuration -PrivateKeyPath $keyPath
+    $scpOptions = Get-ScpOptions -Configuration $configuration -PrivateKeyPath $keyPath
 
-    & ssh @sshOptions ubuntu@test.gallego.top "printf connected"
-    if ($LASTEXITCODE -ne 0) {
-        throw "SSH connection preflight failed."
-    }
-
-    & ssh @sshOptions ubuntu@test.gallego.top (
-        "sudo -n test -d " +
-        "/opt/docker/stacks/static-sites/sites/$($deployment.Domain)"
+    $preflight = & ssh @sshOptions $remoteEndpoint (
+        "sudo -n test -d /opt/docker/stacks/static-sites/sites/$domain && " +
+        "sudo -n test -f /opt/docker/stacks/static-sites/sync-content-on-server.sh && " +
+        "sudo -n docker inspect static-sites --format '{{.Id}} {{.State.Status}} {{if .State.Health}}{{.State.Health.Status}}{{end}}'"
     )
-    if ($LASTEXITCODE -ne 0) {
-        throw "The remote site directory is unavailable."
-    }
-
-    $preflight = & ssh @sshOptions ubuntu@test.gallego.top (
-        "sudo -n docker inspect static-sites --format " +
-        "'{{.Id}} {{.State.Status}} " +
-        "{{if .State.Health}}{{.State.Health.Status}}{{end}}'"
-    )
-    if ($LASTEXITCODE -ne 0) {
-        throw "The remote static-sites container is unavailable."
+    if ($LASTEXITCODE -ne 0 -or $preflight -notmatch ' running(?: healthy)?\s*$') {
+        throw "Authenticated production preflight failed."
     }
     Write-Output "preflight=$preflight"
 
-    & ssh @sshOptions ubuntu@test.gallego.top (
-        "install -d -m 700 '$remoteStage'"
+    & ssh @sshOptions $remoteEndpoint "install -d -m 700 '$remoteStage'"
+    if ($LASTEXITCODE -ne 0) { throw "Unable to create remote staging." }
+    & scp @scpOptions -q -r $sitePath "${remoteEndpoint}:$remoteStage/"
+    if ($LASTEXITCODE -ne 0) { throw "Static site upload failed." }
+    & scp @scpOptions -q $manifestPath "${remoteEndpoint}:$remoteStage/release.sha256"
+    if ($LASTEXITCODE -ne 0) { throw "Release checksum upload failed." }
+    $verification = & ssh @sshOptions $remoteEndpoint (
+        "cd '$remoteStage/$domain' && sha256sum --quiet -c '../release.sha256' && printf 'upload_verified=true\n'"
     )
-    if ($LASTEXITCODE -ne 0) {
-        throw "Unable to create the remote staging directory."
-    }
-    $remoteStageCreated = $true
+    if ($LASTEXITCODE -ne 0) { throw "Uploaded content failed SHA-256 verification." }
+    Write-Output $verification
 
-    $scpOptions = @(
-        "-q",
-        "-o", "BatchMode=yes",
-        "-o", "IdentitiesOnly=yes",
-        "-o", "StrictHostKeyChecking=yes",
-        "-P", "2276",
-        "-i", $keyPath
+    # Verify a dedicated rollback archive before the installed atomic sync mutates live content.
+    $backupName = "pdfinplace-release-$([DateTime]::UtcNow.ToString('yyyyMMddTHHmmssZ'))-$([guid]::NewGuid().ToString('N')).tar.gz"
+    $backupPath = "/opt/docker/backups/static-sites/$backupName"
+    $backupScript = @"
+set -eu
+umask 077
+mkdir -p /opt/docker/backups/static-sites
+ tar -czf '$backupPath' -C /opt/docker/stacks/static-sites/sites '$domain'
+sha256sum '$backupPath' > '$backupPath.sha256'
+sha256sum --quiet -c '$backupPath.sha256'
+tar -tzf '$backupPath' >/dev/null
+printf 'rollback_backup=$backupPath\nrollback_verified=true\n'
+"@
+    $backupScript.Replace("`r`n", "`n") | & ssh @sshOptions $remoteEndpoint "sudo -n sh -s"
+    if ($LASTEXITCODE -ne 0) { throw "Rollback backup verification failed; production was not replaced." }
+
+    & ssh @sshOptions $remoteEndpoint (
+        "sudo -n sh /opt/docker/stacks/static-sites/sync-content-on-server.sh '$remoteStage' '$domain'"
     )
+    if ($LASTEXITCODE -ne 0) { throw "Remote atomic content synchronization failed." }
 
-    Push-Location $resolvedSiteParent
-    try {
-        & scp @scpOptions -r $deployment.Domain (
-            "ubuntu@test.gallego.top:$remoteStage/"
-        )
-        if ($LASTEXITCODE -ne 0) {
-            throw "Static site upload failed."
-        }
-    } finally {
-        Pop-Location
-    }
-
-    Push-Location (Split-Path -Parent $syncScriptPath)
-    try {
-        & scp @scpOptions (Split-Path -Leaf $syncScriptPath) (
-            "ubuntu@test.gallego.top:$remoteStage/"
-        )
-        if ($LASTEXITCODE -ne 0) {
-            throw "Content synchronization script upload failed."
-        }
-    } finally {
-        Pop-Location
-    }
-
-    $syncOutput = & ssh @sshOptions ubuntu@test.gallego.top (
-        "sh '$remoteStage/sync-content-on-server.sh' " +
-        "'$remoteStage' '$($deployment.Domain)'"
-    )
-    if ($LASTEXITCODE -ne 0) {
-        throw "Remote atomic content synchronization failed."
-    }
-
-    $remoteStageCreated = $false
-    Write-Output $syncOutput
+    # The installed sync may remove staging, so upload a separate verification manifest.
+    & scp @scpOptions -q $manifestPath "${remoteEndpoint}:$remoteStage.sha256"
+    if ($LASTEXITCODE -ne 0) { throw "Live checksum manifest upload failed." }
+    $remoteVerification = @"
+set -eu
+cd '/opt/docker/stacks/static-sites/sites/$domain'
+sha256sum --quiet -c '$remoteStage.sha256'
+printf 'live_content_verified=true\n'
+docker inspect static-sites --format 'container_after={{.Id}} {{.State.Status}}'
+"@
+    $remoteVerification.Replace("`r`n", "`n") | & ssh @sshOptions $remoteEndpoint "sudo -n sh -s"
+    if ($LASTEXITCODE -ne 0) { throw "Live content failed SHA-256 verification." }
 } finally {
-    if (
-        $remoteStageCreated -and
-        $remoteStage -match "^/tmp/gallegotop-content-[0-9a-f]{32}$" -and
-        (Test-Path -LiteralPath $keyPath -PathType Leaf)
-    ) {
-        & ssh @sshOptions ubuntu@test.gallego.top (
-            "if [ -d '$remoteStage' ]; then rm -rf -- '$remoteStage'; fi"
-        ) | Out-Null
+    if ($keyPath -and (Test-Path -LiteralPath $keyPath) -and $remoteStage -match '^/tmp/gallegotop-content-[0-9a-f]{32}$') {
+        & ssh @sshOptions $remoteEndpoint "rm -f -- '$remoteStage.sha256'; if [ -d '$remoteStage' ]; then rm -rf -- '$remoteStage'; fi" | Out-Null
     }
-
-    if (Test-Path -LiteralPath $tempRoot) {
-        $resolvedTempRoot = (Resolve-Path -LiteralPath $tempRoot).Path
-        if (
-            $resolvedTempRoot.StartsWith(
-                "$tempBase\pdfinplace-deploy-",
-                [System.StringComparison]::OrdinalIgnoreCase
-            )
-        ) {
-            [System.IO.Directory]::Delete($resolvedTempRoot, $true)
-        }
+    if ($temporaryRoot -and (Test-Path -LiteralPath $temporaryRoot)) {
+        $safeRoot = Assert-PathWithinRoot -Path $temporaryRoot -Root ([System.IO.Path]::GetTempPath())
+        Remove-Item -LiteralPath $safeRoot -Recurse -Force
     }
 }

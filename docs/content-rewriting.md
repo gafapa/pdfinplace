@@ -101,6 +101,9 @@ incremental-save history, and other resources can still contain prior informatio
 Use a dedicated redaction workflow when permanent removal from every part of a PDF is
 required.
 
+Editing a digitally signed PDF invalidates its original signature. Printed
+verification codes do not certify an edited copy.
+
 Arbitrary CMaps, inline images, marked-content dictionaries, and text used as a
 clipping path are not supported. Nesting, stream sizes, and operation counts have
 bounded limits. Unrelated graphics
@@ -117,9 +120,12 @@ The resource URL includes a fingerprint of both the worker and resource families
 that drift is detected. WASM link tests using stub imports are not a substitute for
 rendering with the real worker; the browser integration check performs that render.
 
-Optional local browser checks require a running Vite server, Playwright Core, and
-Chrome. Set `PLAYWRIGHT_MODULE_PATH` and `CHROME_EXECUTABLE_PATH` when they are not
-available through the default installation, then run:
+Optional local browser checks require a running Vite server and an installed
+Playwright browser (`npx playwright install chromium` for the default engine).
+The project's Playwright dependency supplies Playwright Core. Set
+`PLAYWRIGHT_MODULE_PATH` or `CHROME_EXECUTABLE_PATH` only when using a custom
+installation. `CONTENT_TEST_URL` overrides the default `http://127.0.0.1:5173`.
+Then run:
 
 ```text
 node scripts/verify-content-rewriting.mjs <local-private-fixture.pdf>
@@ -133,3 +139,20 @@ unsupported-input recovery, saving/reopening, actual export, and another edit of
 that exported file, at desktop and mobile sizes. They refuse non-localhost servers,
 block upload/external requests, and report aggregates without document text.
 Only the synthetic UI fixture permits screenshots through `CONTENT_SCREENSHOT_DIR`.
+
+## Historical Hardening Evidence
+
+The completed September 2026 hardening work replaced visual matching failures,
+isolated shared Form/image occurrences, fixed preview worker ownership and pending
+page-load cleanup, and introduced fingerprinted PDF.js resource verification.
+The retired work plan recorded 61 passing tests across 12 suites and 159 individual
+delete/replace/move operations on a private two-page fixture (51 text items and three
+images). It also recorded batch deletion, desktop/mobile save/export/reopen checks,
+and no upload or WASM linkage errors in those runs.
+
+These are historical results for that fixture, not a current test count or a claim
+of universal PDF support. The private source was unchanged and was never committed.
+Use the maintained tests and commands above for current verification; keep private
+documents and their screenshots outside the repository. The completed plan's task
+assignments and reproduction-stage findings are superseded by this implementation
+reference.

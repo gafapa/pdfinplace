@@ -398,6 +398,12 @@ export const usePdfExport = ({ files, pages, pageSize, printOverlayOptions, imag
             const { PDF: SecurePDF } = await import('@libpdf/core');
             const securePdf = await SecurePDF.load(bytes, { credentials: password });
 
+            // This library returns a locked document instead of throwing when
+            // authentication fails. Never treat a successful load as approval.
+            if (securePdf.isEncrypted && !securePdf.isAuthenticated) {
+                throw new Error('PDF password authentication failed.');
+            }
+
             if (securePdf.isEncrypted) {
                 securePdf.removeProtection();
             }

@@ -170,6 +170,7 @@ export const PageEditorModal = ({
     const canvasBoundsRef = useRef<DOMRect | null>(null);
     const pointerMoveFrameRef = useRef<number | null>(null);
     const pendingPointerCoordsRef = useRef<{ x: number; y: number } | null>(null);
+    const drawingStartRef = useRef<{ x: number; y: number } | null>(null);
     const annotationsInitializedRef = useRef(false);
     const initialSnapshotRef = useRef<Annotation[] | null>(null);
     // Annotations when a move/resize gesture started, restored if it ends without moving.
@@ -864,6 +865,7 @@ export const PageEditorModal = ({
             editingTextIdRef.current = id;
         } else if (activeTool === 'draw' || isShapeTool(activeTool)) {
             startPointerInteraction();
+            drawingStartRef.current = coords;
             setInteractionMode('drawing');
             setCurrentDrawing([coords]);
         }
@@ -894,21 +896,24 @@ export const PageEditorModal = ({
 
         const gestureStart = gestureAnnotationsRef.current;
         gestureAnnotationsRef.current = null;
-        const endCoords = e ? getCanvasCoords(e) : pendingCoords;
+        const endCoords = e?.type === 'pointerup' ? getCanvasCoords(e) : pendingCoords;
         const isClickWithoutMove = gestureStart !== null && endCoords !== null
             && Math.abs(endCoords.x - dragStart.x) < 0.5 && Math.abs(endCoords.y - dragStart.y) < 0.5;
         if (isClickWithoutMove) {
             // Selecting by clicking must not leave an empty undo step behind.
             setAnnotations(gestureStart);
-        } else if (pendingCoords && interactionMode !== 'drawing') {
-            updatePointerInteraction(pendingCoords);
+        } else if (endCoords && interactionMode !== 'drawing') {
+            updatePointerInteraction(endCoords);
         }
 
-        const finalizedDrawing = pendingCoords && interactionMode === 'drawing'
-            ? [...currentDrawing, pendingCoords]
-            : currentDrawing;
+        // A release can arrive before the last animation-frame update commits.
+        // Keep the synchronous gesture start and always use the release position.
+        const drawingStart = drawingStartRef.current;
+        drawingStartRef.current = null;
+        const drawingPoints = drawingStart && currentDrawing[0] !== drawingStart ? [drawingStart] : currentDrawing;
+        const finalizedDrawing = drawingStart && endCoords ? [...drawingPoints, endCoords] : drawingPoints;
 
-        if (interactionMode === 'drawing' && finalizedDrawing.length > 0) {
+        if (drawingStart && finalizedDrawing.length > 0) {
             const start = finalizedDrawing[0];
             const end = finalizedDrawing[finalizedDrawing.length - 1];
 

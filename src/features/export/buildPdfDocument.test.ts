@@ -5,6 +5,7 @@ import fontkit from '@pdf-lib/fontkit';
 import type { EditorFile, EditorPage, PageSize, PrintOverlayOptions } from '../../hooks/editorTypes';
 import type { Annotation, ShapeAnnotationData } from '../../types/annotations';
 import { buildPdfDocument } from './buildPdfDocument';
+import { getDocument } from '../../test/pdfjs';
 
 const noOverlays: PrintOverlayOptions = {
     watermarkText: '',
@@ -41,7 +42,6 @@ const build = (pages: EditorPage[], files: EditorFile[], pageSize: PageSize = 'O
 
 /** Text items with their position from the top-left of the rendered page, as fractions of its size. */
 const renderedText = async (bytes: Uint8Array, pageNumber = 1) => {
-    const { getDocument } = await import('pdfjs-dist/legacy/build/pdf.mjs');
     const task = getDocument({ data: bytes.slice(), useWorkerFetch: false, verbosity: 0 });
     const pdf = await task.promise;
     const pdfPage = await pdf.getPage(pageNumber);

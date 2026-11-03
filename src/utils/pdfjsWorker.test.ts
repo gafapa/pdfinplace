@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 
-const tracking = vi.hoisted(() => ({ workerCount: 0, options: [] as Record<string, unknown>[] }));
+const tracking = vi.hoisted(() => ({ workerCount: 0, destroyedLoads: 0, options: [] as Record<string, unknown>[] }));
 vi.mock('pdfjs-dist/build/pdf.worker.min.mjs?worker', () => ({ default: class WorkerPort {} }));
 vi.mock('pdfjs-dist/build/pdf.min.mjs', () => ({
     GlobalWorkerOptions: { workerPort: null },
@@ -12,7 +12,10 @@ vi.mock('pdfjs-dist/build/pdf.min.mjs', () => ({
     },
     getDocument: (options: Record<string, unknown>) => {
         tracking.options.push(options);
-        return { destroy: async () => {}, promise: Promise.resolve({}) };
+        return {
+            destroy: async () => { tracking.destroyedLoads++; },
+            promise: (options.data as Uint8Array)?.[0] === 255 ? Promise.reject(new Error('Invalid PDF')) : Promise.resolve({}),
+        };
     },
 }));
 
@@ -31,5 +34,13 @@ describe('PDF.js shared worker ownership', () => {
         expect(tracking.options.every(options => options.worker === worker)).toBe(true);
         expect(worker).toMatchObject({ destroyed: false });
         await second.destroy();
+    });
+
+    it('destroys a failed loading task without destroying the shared worker', async () => {
+        const { loadPdfDocumentWithTask } = await import('./pdfjs');
+        const previousDestroyed = tracking.destroyedLoads;
+        await expect(loadPdfDocumentWithTask({ data: new Uint8Array([255]) })).rejects.toThrow('Invalid PDF');
+        expect(tracking.destroyedLoads).toBe(previousDestroyed + 1);
+        expect(tracking.options.at(-1)?.worker).toMatchObject({ destroyed: false });
     });
 });

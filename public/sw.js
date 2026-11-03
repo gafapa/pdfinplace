@@ -1,5 +1,5 @@
 const CACHE_PREFIX = 'pageforge-cache-';
-const CACHE_NAME = `${CACHE_PREFIX}v9`;
+const CACHE_NAME = `${CACHE_PREFIX}v10`;
 const PDFJS_CACHE_PREFIX = 'pageforge-pdfjs-';
 const MAX_PDFJS_CACHE_VERSIONS = 3;
 const BASE_PATH = new URL(self.registration.scope).pathname;
@@ -10,6 +10,9 @@ const MAX_CACHEABLE_FONT_BYTES = 20 * 1024 * 1024;
 const SHARE_TARGET_CACHE = 'pageforge-share-target';
 const SHARE_TARGET_PATH = `${BASE_PATH}share-target`;
 const MAX_SHARED_FILES = 20;
+const MAX_SHARED_FILE_BYTES = 75 * 1024 * 1024;
+const MAX_SHARED_TOTAL_BYTES = 250 * 1024 * 1024;
+const SHARED_FILE_TTL_MS = 60 * 60 * 1000;
 const APP_SHELL = [
   BASE_PATH,
   `${BASE_PATH}index.html`,
@@ -66,9 +69,13 @@ const fetchAndCache = async (request, url) => {
     : MAX_CACHEABLE_RESPONSE_BYTES;
   if (!await shouldCacheResponse(response, maxBytes)) return response;
 
-  const cache = await caches.open(CACHE_NAME);
-  await cache.put(request, response.clone());
-  await trimCache(cache);
+  try {
+    const cache = await caches.open(CACHE_NAME);
+    await cache.put(request, response.clone());
+    await trimCache(cache);
+  } catch {
+    // A full/denied cache must not hide a successful network response.
+  }
   return response;
 };
 
@@ -79,9 +86,13 @@ const fetchAndCachePdfJs = async (request, url) => {
   // The versioned URL is immutable. Keeping previous version caches lets an
   // already-open application continue using the worker/resources it loaded.
   const version = url.pathname.slice(`${BASE_PATH}pdfjs/`.length).split('/')[0];
-  const cache = await caches.open(`${PDFJS_CACHE_PREFIX}${version}`);
-  await cache.put(request, response.clone());
-  await trimPdfJsCaches();
+  try {
+    const cache = await caches.open(`${PDFJS_CACHE_PREFIX}${version}`);
+    await cache.put(request, response.clone());
+    await trimPdfJsCaches();
+  } catch {
+    // Resource caching is optional while the network is available.
+  }
   return response;
 };
 
@@ -123,24 +134,43 @@ self.addEventListener('activate', (event) => {
 });
 
 const receiveSharedFiles = async (request) => {
+  let cache;
+  const stagedRequests = [];
   try {
     const form = await request.formData();
-    const files = form.getAll('files').filter((value) => typeof value !== 'string').slice(0, MAX_SHARED_FILES);
-    const cache = await caches.open(SHARE_TARGET_CACHE);
-    await Promise.all((await cache.keys()).map((key) => cache.delete(key)));
-    await Promise.all(files.map((file, index) => cache.put(
-      new Request(`${BASE_PATH}__shared-files/${index}`),
-      new Response(file, {
+    const files = form.getAll('files').filter((value) => typeof value !== 'string');
+    const totalBytes = files.reduce((total, file) => total + file.size, 0);
+    if (!files.length || files.length > MAX_SHARED_FILES ||
+        files.some((file) => file.size > MAX_SHARED_FILE_BYTES) || totalBytes > MAX_SHARED_TOTAL_BYTES) {
+      return new Response('Shared files exceed the supported file count or size limits.', { status: 413 });
+    }
+    cache = await caches.open(SHARE_TARGET_CACHE);
+    const receivedAt = Date.now();
+    for (const key of await cache.keys()) {
+      const stored = await cache.match(key);
+      const timestamp = Number(stored?.headers.get('x-shared-at'));
+      if (timestamp > 0 && receivedAt - timestamp > SHARED_FILE_TTL_MS) await cache.delete(key);
+    }
+    const batchId = crypto.randomUUID();
+    for (const [index, file] of files.entries()) {
+      const key = new Request(new URL(`${BASE_PATH}__shared-files/${batchId}/${index}`, self.location.origin));
+      stagedRequests.push(key);
+      await cache.put(key, new Response(file, {
         headers: {
           'content-type': file.type || 'application/octet-stream',
           'x-file-name': encodeURIComponent(file.name),
+          'x-shared-at': String(receivedAt),
         },
-      }),
-    )));
+      }));
+    }
+    const destination = new URL(BASE_PATH, self.location.origin);
+    destination.searchParams.set('shared-files', batchId);
+    return Response.redirect(destination.href, 303);
   } catch (error) {
+    if (cache) await Promise.all(stagedRequests.map((key) => cache.delete(key).catch(() => false)));
     console.error('Could not receive the shared files:', error);
+    return new Response('Shared files could not be received. Please open the app and import them again.', { status: 503 });
   }
-  return Response.redirect(`${BASE_PATH}?shared-files=1`, 303);
 };
 
 self.addEventListener('fetch', (event) => {
@@ -163,9 +193,12 @@ self.addEventListener('fetch', (event) => {
             url.pathname === `${BASE_PATH}index.html`;
           const isHtml = response.headers.get('content-type')?.toLowerCase().includes('text/html');
           if (isAppShellNavigation && isHtml && await shouldCacheResponse(response)) {
-            const responseClone = response.clone();
-            const cache = await caches.open(CACHE_NAME);
-            await cache.put(`${BASE_PATH}index.html`, responseClone);
+            try {
+              const cache = await caches.open(CACHE_NAME);
+              await cache.put(`${BASE_PATH}index.html`, response.clone());
+            } catch {
+              // Keep returning fresh HTML when optional offline storage fails.
+            }
           }
           return response;
         })

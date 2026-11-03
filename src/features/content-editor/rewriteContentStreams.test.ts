@@ -13,6 +13,7 @@ import {
 } from 'pdf-lib';
 import { applyContentEditsToPdfPage, ContentRewriteError } from './applyContentEdits';
 import { rewriteContentSource } from './rewriteContentStreams';
+import { getDocument } from '../../test/pdfjs';
 import type { ContentEdit, TextContentBlock } from './types';
 
 const encoder = new TextEncoder();
@@ -135,7 +136,6 @@ const appendStream = (pdfDocument: PDFDocument, page: PDFPage, source: string | 
 };
 
 const extractTextItems = async (pdfDocument: PDFDocument) => {
-    const { getDocument } = await import('pdfjs-dist/legacy/build/pdf.mjs');
     const loadingTask = getDocument({
         data: (await pdfDocument.save()).slice(),
         useWorkerFetch: false,

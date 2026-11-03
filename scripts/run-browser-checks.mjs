@@ -17,6 +17,8 @@ try {
         await run(['scripts/verify-editor-ui.mjs'], { BROWSER_KIND: browserKind, CONTENT_TEST_URL: server.url });
         await run(['scripts/verify-workbench.mjs'], { BROWSER_KIND: browserKind });
         await run(['scripts/verify-office-import.mjs'], { BROWSER_KIND: browserKind });
+        await run(['scripts/verify-import-security.mjs'], { BROWSER_KIND: browserKind });
+        await run(['scripts/verify-share-target.mjs'], { BROWSER_KIND: browserKind });
         await run(['scripts/verify-pdf-tools.mjs'], { BROWSER_KIND: browserKind });
     }
 } finally {

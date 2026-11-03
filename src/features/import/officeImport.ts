@@ -35,7 +35,12 @@ export const convertDocxToPdf = async (bytes: ArrayBuffer, options: RenderPagesO
     const archive = await loadArchive(bytes);
     const documentXml = await archive.file('word/document.xml')?.async('string');
     if (!documentXml) throw new Error('DOCX document.xml is missing.');
-    validateOfficeXmlComplexity(documentXml);
+    // Styles, relationships, headers and notes are parsed too, not just the body.
+    for (const entry of Object.values(archive.files)) {
+        if (!entry.dir && /\.(?:xml|rels)$/i.test(entry.name)) {
+            validateOfficeXmlComplexity(await entry.async('string'));
+        }
+    }
     const docxPreview = await import('docx-preview');
 
     return withRenderHost(async (host) => {
@@ -54,14 +59,16 @@ export const convertDocxToPdf = async (bytes: ArrayBuffer, options: RenderPagesO
             renderFooters: true,
             renderFootnotes: true,
             renderEndnotes: true,
+            // Embedded HTML must never become a live iframe before sanitization.
+            renderAltChunks: false,
         });
         neutralizeMarkup(host);
-        await settleLayout();
+        await settleLayout(host.ownerDocument);
 
         const sections = [...host.querySelectorAll<HTMLElement>(':scope > section.docx-preview')];
         if (!sections.length) throw new Error('The DOCX produced no pages.');
         const pages: PageElement[] = sections.map(element => {
-            const style = getComputedStyle(element);
+            const style = host.ownerDocument.defaultView!.getComputedStyle(element);
             const width = element.offsetWidth || 794;
             return {
                 element,
@@ -384,7 +391,7 @@ export const convertOdtToPdf = async (bytes: ArrayBuffer, options: RenderPagesOp
         const body = content.getElementsByTagNameNS(NS.office, 'text')[0];
         if (body) convert(body, page, 0);
         await Promise.all(images);
-        await settleLayout();
+        await settleLayout(host.ownerDocument);
         return renderPagesToPdf([{
             element: page,
             width: layout.width,

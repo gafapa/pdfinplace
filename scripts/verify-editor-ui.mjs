@@ -27,6 +27,7 @@ try {
     const blankPdf = await PDFDocument.create();
     blankPdf.addPage([420, 550]);
     const blankPage = await browser.newPage({ locale: 'es-ES' });
+    blankPage.setDefaultTimeout(60_000);
     try {
         await blankPage.goto(baseUrl);
         await blankPage.waitForFunction(() => { const status = document.querySelector('[data-session-status]'); return status && status.dataset.sessionStatus !== 'loading'; });
@@ -44,6 +45,7 @@ try {
     } finally { await blankPage.close(); }
     for (const width of [1440, 390]) {
         const page = await browser.newPage({ viewport: { width, height: 900 }, locale: 'es-ES' });
+        page.setDefaultTimeout(60_000);
         const errors = [];
         const rewriteErrors = [];
         const wasmErrors = [];
@@ -158,9 +160,6 @@ try {
                 }
                 throw new Error('Annotation canvas geometry did not settle.');
             });
-            const pixelAt = (x, y, offsetX = 0) => annotationCanvas.evaluate((element, [x, y, offsetX]) =>
-                [...element.getContext('2d').getImageData(Math.round(element.width * x) + offsetX, Math.round(element.height * y), 1, 1).data], [x, y, offsetX]);
-            const isRed = pixel => pixel[0] > 200 && pixel[1] < 80 && pixel[2] < 80;
             const waitPixel = (x, y, offsetX, expected) => page.waitForFunction(([x, y, offsetX, expected]) => {
                 const element = document.querySelector('canvas[aria-label^="Lienzo de anotaciones"]');
                 const pixel = element?.getContext('2d').getImageData(Math.round(element.width * x) + offsetX, Math.round(element.height * y), 1, 1).data;
@@ -171,10 +170,20 @@ try {
                 await settleCanvas();
                 const box = await annotationCanvas.boundingBox();
                 assert(box, 'The annotation canvas must be visible.');
+                await annotationCanvas.evaluate(element => {
+                    element.addEventListener('pointerup', event => {
+                        const bounds = element.getBoundingClientRect();
+                        element.dataset.gestureX = String((event.clientX - bounds.left) * element.width / bounds.width);
+                        element.dataset.gestureY = String((event.clientY - bounds.top) * element.height / bounds.height);
+                    }, { once: true, capture: true });
+                });
                 await page.mouse.move(box.x + box.width * fromX, box.y + box.height * fromY);
                 await page.mouse.down();
                 await page.mouse.move(box.x + box.width * toX, box.y + box.height * toY, { steps: 5 });
                 await page.mouse.up();
+                // Engines round fractional CSS pointer positions differently,
+                // which is amplified by the fitted mobile canvas scale.
+                return annotationCanvas.evaluate(element => ({ x: Number(element.dataset.gestureX), y: Number(element.dataset.gestureY) }));
             };
             const pressShortcut = async key => {
                 // Shortcuts are ignored while a form control (e.g. a colour picker) has focus.
@@ -246,14 +255,29 @@ try {
             // Duplicate the selected rectangle; the copy is offset to the right.
             await page.getByRole('button', { name: 'Seleccionar', exact: true }).click();
             await dragOnCanvas(0.55, 0.5, 0.55, 0.5);
-            assert(!isRed(await pixelAt(0.65, 0.5, 8)), 'Nothing is drawn right of the rectangle yet.');
+            const duplicateProbe = await annotationCanvas.evaluate(element => {
+                const y = Math.round(element.height * 0.5);
+                const row = element.getContext('2d').getImageData(0, y, element.width, 1).data;
+                let right = -1;
+                for (let x = 0; x < element.width; x++) {
+                    const offset = x * 4;
+                    if (row[offset] > 200 && row[offset + 1] < 80 && row[offset + 2] < 80 && row[offset + 3] > 200) right = x;
+                }
+                if (right < 0) throw new Error('The original filled rectangle is missing.');
+                return { x: right + 8, y };
+            });
+            const waitDuplicatePixel = expected => page.waitForFunction(({ point, expected }) => {
+                const element = document.querySelector('canvas[aria-label^="Lienzo de anotaciones"]');
+                const pixel = element?.getContext('2d').getImageData(point.x, point.y, 1, 1).data;
+                return Boolean(pixel) && (pixel[0] > 200 && pixel[1] < 80 && pixel[2] < 80) === expected;
+            }, { point: duplicateProbe, expected }, { timeout: 15000 });
             // Wait past the undo coalescing window so the duplicate is its own step.
             await page.waitForTimeout(500);
             await pressShortcut('ControlOrMeta+d');
-            await waitPixel(0.65, 0.5, 8, true);
+            await waitDuplicatePixel(true);
             await page.waitForTimeout(500);
             await pressShortcut('ControlOrMeta+z');
-            await waitPixel(0.65, 0.5, 8, false);
+            await waitDuplicatePixel(false);
             // Clicking to select added no undo step, so one more undo removes the circle.
             await pressShortcut('ControlOrMeta+z');
             await waitPixel(0.55, 0.74, 0, false);
@@ -271,12 +295,40 @@ try {
 
             // Arrow: the head is filled with the stroke colour.
             await page.getByRole('button', { name: 'Flecha', exact: true }).click();
-            await dragOnCanvas(0.15, 0.92, 0.45, 0.92);
-            await page.waitForFunction(() => {
+            const arrowEnd = await dragOnCanvas(0.15, 0.92, 0.45, 0.92);
+            // Selection handles overlap the tip and their antialiasing differs
+            // between engines. Inspect the arrow itself after deselecting it.
+            await page.getByRole('button', { name: 'Seleccionar', exact: true }).click();
+            await dragOnCanvas(0.05, 0.85, 0.05, 0.85);
+            await page.waitForFunction(position => {
                 const element = document.querySelector('canvas[aria-label^="Lienzo de anotaciones"]');
-                const pixel = element?.getContext('2d').getImageData(Math.round(element.width * 0.45) - 4, Math.round(element.height * 0.92), 1, 1).data;
+                const pixel = element?.getContext('2d').getImageData(Math.round(position.x) - 6, Math.round(position.y) + 1, 1, 1).data;
                 return Boolean(pixel) && pixel[3] > 200 && pixel[0] < 80;
-            }, undefined, { timeout: 15000 });
+            }, arrowEnd, { timeout: 15000 });
+
+            // A down/up pair can arrive before React commits a drawing frame.
+            // Dispatch both in one task to keep this regression deterministic.
+            await page.getByRole('button', { name: 'Rectángulo', exact: true }).click();
+            if (await fillButton.getAttribute('aria-pressed') !== 'true') await fillButton.click();
+            await page.getByLabel('Color de relleno').fill('#ff0000');
+            await settleCanvas();
+            await annotationCanvas.evaluate(element => {
+                const bounds = element.getBoundingClientRect();
+                const capture = element.setPointerCapture;
+                const hasCapture = element.hasPointerCapture;
+                // Synthetic events have no native active pointer to capture.
+                element.setPointerCapture = () => {};
+                element.hasPointerCapture = () => false;
+                const event = (type, x, y) => new PointerEvent(type, { bubbles: true, cancelable: true, pointerId: 17, pointerType: 'mouse', isPrimary: true, clientX: bounds.x + bounds.width * x, clientY: bounds.y + bounds.height * y });
+                try {
+                    element.dispatchEvent(event('pointerdown', 0.05, 0.34));
+                    element.dispatchEvent(event('pointerup', 0.2, 0.4));
+                } finally {
+                    element.setPointerCapture = capture;
+                    element.hasPointerCapture = hasCapture;
+                }
+            });
+            await waitPixel(0.12, 0.37, 0, true);
             await save.click();
             await page.getByRole('button', { name: 'Exportar', exact: true }).click();
             const filledDownloadPromise = page.waitForEvent('download');

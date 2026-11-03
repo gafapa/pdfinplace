@@ -47,20 +47,20 @@ const crawlerFiles = (): Plugin => {
 export default defineConfig({
   base: './',
   test: {
+    // Bound native PDF/canvas workers to avoid memory and startup contention.
+    maxWorkers: 2,
     // The first pdf.js import in a worker takes several seconds on cold caches.
     testTimeout: 20_000,
   },
   server: {
     allowedHosts: [
       'pdfinplace.com',
-      'test.pdfinplace.com',
     ],
   },
   preview: {
-    host: '0.0.0.0',
+    host: '127.0.0.1',
     allowedHosts: [
       'pdfinplace.com',
-      'test.pdfinplace.com',
     ],
   },
   plugins: [

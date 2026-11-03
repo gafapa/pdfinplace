@@ -54,6 +54,9 @@ export const loadPdfJs = async (): Promise<PdfJsModule> => {
             sharedPdfWorker = module.PDFWorker.create({ port: module.GlobalWorkerOptions.workerPort });
 
             return module;
+        }).catch((error) => {
+            pdfJsPromise = null;
+            throw error;
         });
     }
 
@@ -70,8 +73,7 @@ export const getPdfDocument = async (source: PdfDocumentInitParameters): Promise
 };
 
 export const loadPdfDocument = async (source: PdfDocumentInitParameters): Promise<PdfDocumentProxy> => {
-    const loadingTask = await getPdfDocument(source);
-    return loadingTask.promise;
+    return (await loadPdfDocumentWithTask(source)).pdfDoc;
 };
 
 export interface LoadedPdfDocument {
@@ -81,6 +83,11 @@ export interface LoadedPdfDocument {
 
 export const loadPdfDocumentWithTask = async (source: PdfDocumentInitParameters): Promise<LoadedPdfDocument> => {
     const loadingTask = await getPdfDocument(source);
-    const pdfDoc = await loadingTask.promise;
-    return { pdfDoc, loadingTask };
+    try {
+        const pdfDoc = await loadingTask.promise;
+        return { pdfDoc, loadingTask };
+    } catch (error) {
+        await loadingTask.destroy().catch(() => {});
+        throw error;
+    }
 };

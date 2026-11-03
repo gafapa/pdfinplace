@@ -10,6 +10,7 @@ import { compressPdfImages, type ImageCodec, type ImageCompressionResult, type I
 import { createAnnotationFonts, drawAnnotations, drawPrintOverlays, type FontBytesLoader, type Size } from './pageDecorations';
 import { createPendingLinks, flattenPageAnnotations, multiplyMatrices, rotationMatrix, scaleMatrix, translationMatrix, type Box, type PendingLink } from './pageAnnotations';
 import { pruneUnreachableObjects } from './pruneObjects';
+import { sanitizeDocumentActions } from './sanitizeActions';
 import { getRedactionRects, isRedaction, type PageRasterizer, type RedactionRect } from './redaction';
 
 export interface BuildPdfOptions {
@@ -414,6 +415,7 @@ export const buildPdfDocument = async ({
     }
 
     await output.flush();
+    await sanitizeDocumentActions(output);
     await pruneUnreachableObjects(output);
     if (imageCompression) {
         const result = await compressPdfImages(output, imageCompression.settings, imageCompression.codec, () => checkpoint());

@@ -1,4 +1,5 @@
 import { deflateSync } from 'node:zlib';
+import { createCanvas, loadImage } from '@napi-rs/canvas';
 import { describe, expect, it } from 'vitest';
 import { PDFDocument, PDFName, PDFNumber, PDFRawStream, type PDFRef } from 'pdf-lib';
 import { compressPdfImages, IMAGE_COMPRESSION_SETTINGS, undoPngPredictor, type ImageCodec } from './compressImages';
@@ -6,7 +7,6 @@ import { compressPdfImages, IMAGE_COMPRESSION_SETTINGS, undoPngPredictor, type I
 /** Real JPEG encoder for tests, so decoding and re-encoding are exercised end to end. */
 const napiCodec: ImageCodec = {
     encodeJpeg: async (image, width, height, quality) => {
-        const { createCanvas, loadImage } = await import('@napi-rs/canvas');
         let source: Parameters<ReturnType<ReturnType<typeof createCanvas>['getContext']>['drawImage']>[0];
         if (image.kind === 'jpeg') {
             source = await loadImage(Buffer.from(image.bytes));
