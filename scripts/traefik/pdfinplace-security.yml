@@ -1,0 +1,15 @@
+http:
+  middlewares:
+    pdfinplace-security:
+      headers:
+        referrerPolicy: no-referrer
+        contentTypeNosniff: true
+        frameDeny: true
+        stsSeconds: 31536000
+        stsIncludeSubdomains: true
+        stsPreload: true
+        permissionsPolicy: camera=(), microphone=(), geolocation=(), payment=(), usb=()
+        customResponseHeaders:
+          X-XSS-Protection: "0"
+          Cross-Origin-Opener-Policy: same-origin
+          Cross-Origin-Resource-Policy: same-origin

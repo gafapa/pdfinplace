@@ -8,7 +8,10 @@ PDF in Place is deployed as a static single-page application.
 | --- | --- | --- | --- |
 | Production | `https://pdfinplace.com` | `npm ci && npm run build` | Enabled |
 
-The build emits the complete static application to `dist/`. Deploy only the contents of that directory. There is no public test environment; `www.pdfinplace.com` only redirects to the main domain.
+The build emits the complete static application to `dist/`. Deploy only the contents
+of that directory. There is no public test environment. The server has an optional
+`www.pdfinplace.com` redirect configured; public DNS for that alias is still absent
+as of the [2026-11-03 publication](docs/releases/2026-11-03.md).
 
 ## Local Release Staging
 
@@ -54,10 +57,16 @@ Publication is intentionally not exposed as an npm command.
 ## Static Server Requirements
 
 `scripts/nginx/pdfinplace.com.conf` is the domain-specific configuration for the
-current Nginx service (requires Nginx 1.29.3+). It applies response security headers,
+current Nginx service (requires Nginx 1.29.3+ for
+[`add_header_inherit merge`](https://nginx.org/en/docs/http/ngx_http_headers_module.html#add_header_inherit)). It applies response security headers,
 keeps them on cache-specific locations, and uses the cache policies below. Back up
 the live configuration, validate with `nginx -t`, and reload gracefully when changing
 this file; content publication alone does not install server configuration.
+The `static-pdfinplace` Traefik router uses the domain-specific
+`pdfinplace-security` middleware in `scripts/traefik/pdfinplace-security.yml`.
+It preserves HTTPS protections and prevents the shared proxy policy from replacing
+the application's `no-referrer` policy. Merge only this middleware and this router's
+middleware reference into the watched dynamic configuration; preserve other routes.
 
 - Serve the domain only over HTTPS.
 - Redirect HTTP to HTTPS.
@@ -116,5 +125,5 @@ After each deployment:
 4. Import a PDF, edit existing text, duplicate the page, and confirm that edits remain isolated.
 5. Export the PDF and reopen it.
 6. Verify the service worker and offline shell after one successful online load.
-7. Confirm that `/robots.txt` and `/sitemap.xml` are served and that `https://www.pdfinplace.com/` redirects permanently to `https://pdfinplace.com/`.
+7. Confirm that `/robots.txt` and `/sitemap.xml` are served. Check the optional `www` alias separately: its permanent redirect also requires a public DNS record and a valid certificate.
 8. Confirm that the HTTP response includes the CSP, COOP, CORP, permissions, referrer, HSTS, and MIME-sniffing headers listed above; the HTML meta policy is only a fallback.
