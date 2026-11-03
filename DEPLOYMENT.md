@@ -44,11 +44,20 @@ scans the exact public files, and uses the registered SSH host key. It uploads o
 `pdfinplace.com`, verifies every uploaded file with SHA-256, creates and verifies
 a rollback archive before replacing content, and invokes the server's installed
 atomic content synchronization script. It verifies the live file hashes afterward.
+The immediately previous release's hashed chunks and fingerprinted PDF.js files
+remain available for open clients. A private server-side checksum manifest tracks
+the current release, so older retained generations disappear on the next publish.
 Explicit authorization to decrypt the deployment credential is required by the
 server hub's `AGENTS.md`; `-AllowProduction` does not replace that authorization.
 Publication is intentionally not exposed as an npm command.
 
 ## Static Server Requirements
+
+`scripts/nginx/pdfinplace.com.conf` is the domain-specific configuration for the
+current Nginx service (requires Nginx 1.29.3+). It applies response security headers,
+keeps them on cache-specific locations, and uses the cache policies below. Back up
+the live configuration, validate with `nginx -t`, and reload gracefully when changing
+this file; content publication alone does not install server configuration.
 
 - Serve the domain only over HTTPS.
 - Redirect HTTP to HTTPS.

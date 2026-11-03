@@ -95,6 +95,11 @@ printf 'rollback_backup=$backupPath\nrollback_verified=true\n'
     $backupScript.Replace("`r`n", "`n") | & ssh @sshOptions $remoteEndpoint "sudo -n sh -s"
     if ($LASTEXITCODE -ne 0) { throw "Rollback backup verification failed; production was not replaced." }
 
+    & scp @scpOptions -q (Join-Path $PSScriptRoot "retain-previous-release.sh") "${remoteEndpoint}:$remoteStage/retain-previous-release.sh"
+    if ($LASTEXITCODE -ne 0) { throw "Previous-release retention script upload failed." }
+    & ssh @sshOptions $remoteEndpoint "sudo -n sh '$remoteStage/retain-previous-release.sh' '$remoteStage'"
+    if ($LASTEXITCODE -ne 0) { throw "Previous-release retention failed; production was not replaced." }
+
     & ssh @sshOptions $remoteEndpoint (
         "sudo -n sh /opt/docker/stacks/static-sites/sync-content-on-server.sh '$remoteStage' '$domain'"
     )
@@ -107,6 +112,8 @@ printf 'rollback_backup=$backupPath\nrollback_verified=true\n'
 set -eu
 cd '/opt/docker/stacks/static-sites/sites/$domain'
 sha256sum --quiet -c '$remoteStage.sha256'
+install -m 0600 '$remoteStage.sha256' '/opt/docker/backups/static-sites/$domain-current-release.sha256.next'
+mv '/opt/docker/backups/static-sites/$domain-current-release.sha256.next' '/opt/docker/backups/static-sites/$domain-current-release.sha256'
 printf 'live_content_verified=true\n'
 docker inspect static-sites --format 'container_after={{.Id}} {{.State.Status}}'
 "@
